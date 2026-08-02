@@ -86,7 +86,7 @@ public class Java261Level extends JavaLevel {
         try (NBTInputStream in = new NBTInputStream(new GZIPInputStream(new FileInputStream(new File(worldDir, "data/minecraft/world_gen_settings.dat"))))) {
             compoundTag = (CompoundTag) in.readTag();
         }
-        final Map<String, Tag> worldGenSettings = ((CompoundTag) compoundTag.getTag("data")).getValue();
+        worldGenSettings = ((CompoundTag) compoundTag.getTag("data")).getValue();
         mapFeatures = ((ByteTag) worldGenSettings.get(TAG_GENERATE_STRUCTURES_)).getValue() == (byte) 1;
         seed = ((LongTag) worldGenSettings.get(TAG_SEED_)).getValue();
         final CompoundTag dimensionsTag = (CompoundTag) worldGenSettings.get(TAG_DIMENSIONS_);
@@ -140,7 +140,6 @@ public class Java261Level extends JavaLevel {
     }
 
     private CompoundTag getOrCreateWorldGenSettings() {
-        Map<String, Tag> worldGenSettings = getMap(TAG_WORLD_GEN_SETTINGS);
         if (worldGenSettings == null) {
             worldGenSettings = new HashMap<>();
             worldGenSettings.put(TAG_GENERATE_STRUCTURES_, new ByteTag(TAG_GENERATE_STRUCTURES_, mapFeatures ? (byte) 1 : (byte) 0));
@@ -270,6 +269,7 @@ public class Java261Level extends JavaLevel {
     private final Map<Integer, MapGenerator> generators = new HashMap<>();
     private long seed;
     private boolean mapFeatures;
+    private Map<String, Tag> worldGenSettings;
 
     private static final Logger logger = LoggerFactory.getLogger(Java261Level.class);
 }
