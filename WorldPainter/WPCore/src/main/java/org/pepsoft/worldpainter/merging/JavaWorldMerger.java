@@ -294,6 +294,7 @@ public class JavaWorldMerger extends JavaWorldExporter { // TODO can this be mad
                     level.setSpawnY(Math.max(getIntHeightAt(DIM_NORMAL, spawnPoint.x, spawnPoint.y), getWaterLevelAt(DIM_NORMAL, spawnPoint.x, spawnPoint.y)) + 1);
                 }
                 level.setSpawnZ(spawnPoint.y);
+                level.setSpawnDimension(MC_OVERWORLD);
             }
 
             // TODO: copy EVERYTHING and then operate solely on the copied map? No need to copy things from the backup
@@ -349,17 +350,11 @@ public class JavaWorldMerger extends JavaWorldExporter { // TODO can this be mad
             if (selectedDimensions == null) {
                 world.addHistoryEntry(HistoryEntry.WORLD_MERGED_FULL, level.getName(), worldDir);
             } else {
-                String dimNames = selectedDimensions.stream().map(dim -> {
-                    switch (dim) {
-                        case DIM_NORMAL:
-                            return "Surface";
-                        case DIM_NETHER:
-                            return "Nether";
-                        case DIM_END:
-                            return "End";
-                        default:
-                            return Integer.toString(dim);
-                    }
+                String dimNames = selectedDimensions.stream().map(dim -> switch (dim) {
+                    case DIM_NORMAL -> "Surface";
+                    case DIM_NETHER -> "Nether";
+                    case DIM_END -> "End";
+                    default -> Integer.toString(dim);
                 }).collect(joining(", "));
                 world.addHistoryEntry(HistoryEntry.WORLD_MERGED_PARTIAL, level.getName(), worldDir, dimNames);
             }

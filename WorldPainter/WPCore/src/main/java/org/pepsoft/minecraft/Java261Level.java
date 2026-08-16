@@ -33,6 +33,43 @@ public class Java261Level extends JavaLevel {
     }
 
     @Override
+    public int getSpawnX() {
+        return getSpawnPos(0);
+    }
+
+    @Override
+    public int getSpawnY() {
+        return getSpawnPos(1);
+    }
+
+    @Override
+    public int getSpawnZ() {
+        return getSpawnPos(2);
+    }
+
+    @Override
+    public void setSpawnX(int spawnX) {
+        setSpawnPos(0, spawnX);
+    }
+
+    @Override
+    public void setSpawnY(int spawnY) {
+        setSpawnPos(1, spawnY);
+    }
+
+    @Override
+    public void setSpawnZ(int spawnZ) {
+        setSpawnPos(2, spawnZ);
+    }
+
+    @Override
+    public void setSpawnDimension(String dimension) {
+        final Map<String, Tag> spawn = getOrCreateSpawn();
+        spawn.put(TAG_DIMENSION_, new StringTag(TAG_DIMENSION_, dimension));
+        setMap(TAG_SPAWN_, spawn);
+    }
+
+    @Override
     public void save(File worldDir) throws IOException {
         super.save(worldDir);
 
@@ -137,6 +174,33 @@ public class Java261Level extends JavaLevel {
                     break;
             }
         }
+    }
+
+    private int getSpawnPos(int index) {
+        final Map<String, Tag> spawn = getMap(TAG_SPAWN_);
+        if ((spawn == null) || (! spawn.containsKey(TAG_POS_))) {
+            return 0;
+        }
+        return ((IntArrayTag) spawn.get(TAG_POS_)).getValue()[index];
+    }
+
+    private void setSpawnPos(int index, int value) {
+        final Map<String, Tag> spawn = getOrCreateSpawn();
+        final int[] pos = spawn.containsKey(TAG_POS_) ? ((IntArrayTag) spawn.get(TAG_POS_)).getValue().clone() : new int[3];
+        pos[index] = value;
+        spawn.put(TAG_POS_, new IntArrayTag(TAG_POS_, pos));
+        setMap(TAG_SPAWN_, spawn);
+    }
+
+    private Map<String, Tag> getOrCreateSpawn() {
+        final Map<String, Tag> spawn = getMap(TAG_SPAWN_);
+        if (spawn != null) {
+            return spawn;
+        }
+        final Map<String, Tag> newSpawn = new HashMap<>();
+        newSpawn.put(TAG_YAW_, new IntTag(TAG_YAW_, 0));
+        newSpawn.put(TAG_PITCH_, new IntTag(TAG_PITCH_, 0));
+        return newSpawn;
     }
 
     private CompoundTag getOrCreateWorldGenSettings() {
