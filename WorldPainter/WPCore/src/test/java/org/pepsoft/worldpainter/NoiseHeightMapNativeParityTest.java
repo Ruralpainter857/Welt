@@ -50,4 +50,49 @@ public final class NoiseHeightMapNativeParityTest {
             }
         }
     }
+
+    @Test
+    public void nativeRectanglesMatchJavaAtIntegerCoordinateBoundaries() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        Native.setGenEnabled(true);
+        try {
+            final int[][] rectangles = {
+                    {0, 0, 7, 3},
+                    {Integer.MAX_VALUE - 2, Integer.MIN_VALUE + 2, 5, 9},
+                    {Integer.MIN_VALUE + 2, Integer.MAX_VALUE - 3, 1, 17}
+            };
+            final double[][] specs = {
+                    {128.0, 0.75, 1},
+                    {375.0, 1.125, 4},
+                    {91.0, 0.0625, 10}
+            };
+            for (int caseIndex = 0; caseIndex < rectangles.length; caseIndex++) {
+                final int[] rectangle = rectangles[caseIndex];
+                final double[] spec = specs[caseIndex];
+                final NoiseHeightMap map = new NoiseHeightMap(spec[0], spec[1], (int) spec[2],
+                        0x6a09_e667L + caseIndex);
+                map.setSeed(0xbb67_ae85L - caseIndex);
+                final double[] nativeValues = map.getNativeHeights(rectangle[0], rectangle[1], rectangle[2], rectangle[3]);
+                assertNotNull("native bridge must be active for rectangle " + caseIndex, nativeValues);
+                assertEquals(rectangle[2] * rectangle[3], nativeValues.length);
+                for (int y = 0; y < rectangle[3]; y++) {
+                    for (int x = 0; x < rectangle[2]; x++) {
+                        // Java int addition intentionally wraps, matching the JNI kernel's wrapping_add.
+                        final int worldX = rectangle[0] + x;
+                        final int worldY = rectangle[1] + y;
+                        assertEquals("rectangle=" + caseIndex + " x=" + worldX + " y=" + worldY,
+                                Double.doubleToRawLongBits(map.getHeight(worldX, worldY)),
+                                Double.doubleToRawLongBits(nativeValues[y * rectangle[2] + x]));
+                    }
+                }
+            }
+        } finally {
+            if (previousFlag == null) {
+                System.clearProperty(Native.GEN_KEY);
+            } else {
+                System.setProperty(Native.GEN_KEY, previousFlag);
+            }
+        }
+    }
 }
