@@ -20,3 +20,10 @@ For a few pointers, pitfalls and gotchas about developing WorldPainter, see [thi
 
 ## More details
 For a more detailed description of the build process, see: https://www.worldpainter.net/doc/building.
+
+## Building Welt with native acceleration
+Welt adds an optional native (Rust) acceleration layer. To build with it, use the Maven profile `-Pnative`: it invokes `cargo build --release` (via exec-maven-plugin) and copies the resulting native library (e.g. `welt_core.dll`) into `WPCore/src/main/resources/natives/<os>-<arch>/`, after which the build proceeds normally.
+
+Without `-Pnative`, nothing changes: the build remains 100% Java and WorldPainter behaves exactly as before (native acceleration is opt-in at runtime via the `wp.native.gen`, `wp.native.render` and `wp.native.export` system properties, which default to `false` and fall back silently to the Java code path).
+
+For the Rust toolchain setup, exact build commands and details, see `docs/welt/` (start with `docs/welt/README.md` and `docs/welt/CHARTE-ORCHESTRATION.md`).
