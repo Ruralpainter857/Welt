@@ -55,6 +55,18 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
 
     @Override
     public void apply(Tile tile, int x, int y) {
+        apply(tile, x, y, false);
+    }
+
+    /**
+     * Apply the theme to a freshly constructed tile whose layer values have
+     * not yet been written. The caller must not use this for an existing tile.
+     */
+    public void applyToFreshTile(Tile tile, int x, int y) {
+        apply(tile, x, y, true);
+    }
+
+    private void apply(Tile tile, int x, int y, boolean freshTile) {
         // height has been observed to be far out of bounds in the wild, so restrict it to min- and maxHeight:
         // TODO: determine why this happens and fix the root cause
         final int height = clamp(minHeight, tile.getIntHeight(x, y), maxHeight - 1);
@@ -69,7 +81,8 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
         if (layerCache != null) {
             for (int i = 0; i < layerCache.length; i++) {
                 final int level = layerLevelCache[i][height - minHeight];
-                if (level != tile.getLayerValue(layerCache[i], x, y)) {
+                if (freshTile ? level != layerCache[i].getDefaultValue()
+                        : level != tile.getLayerValue(layerCache[i], x, y)) {
                     tile.setLayerValue(layerCache[i], x, y, level);
                 }
             }
@@ -78,7 +91,7 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
             for (int i = 0; i < bitLayerCache.length; i++) {
                 final int level = bitLayerLevelCache[i][height - minHeight];
                 final boolean set = (level > 0) && ((level == 15) || (random.nextInt(15) < level));
-                if (set != tile.getBitLayerValue(bitLayerCache[i], x, y)) {
+                if (freshTile ? set : set != tile.getBitLayerValue(bitLayerCache[i], x, y)) {
                     tile.setBitLayerValue(bitLayerCache[i], x, y, set);
                 }
             }

@@ -154,7 +154,11 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                     if (floodWithLava) {
                         tile.setBitLayerValue(FloodWithLava.INSTANCE, x, y, true);
                     }
-                    theme.apply(tile, x, y);
+                    if ((theme.getClass() == SimpleTheme.class) && !floodWithLava) {
+                        ((SimpleTheme) theme).applyToFreshTile(tile, x, y);
+                    } else {
+                        theme.apply(tile, x, y);
+                    }
                 }
             }
             return tile;
