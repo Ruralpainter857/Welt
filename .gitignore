@@ -7,3 +7,7 @@ target
 exports
 /welt-native/target/
 
+
+# Artefacts de build natifs (regeneres par mvn -Pnative, cf. docs/welt/)
+WorldPainter/WPCore/src/main/resources/natives/
+

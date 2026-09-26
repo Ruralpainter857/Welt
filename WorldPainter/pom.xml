@@ -311,5 +311,119 @@
                 </repository>
             </repositories>
         </profile>
+        <!-- ================================================================= -->
+        <!-- Welt (fork WorldPainter -> Java + Rust): profil natif -Pnative.    -->
+        <!--                                                                     -->
+        <!-- INERT PAR DEFAUT: ce profil ne modifie RIEN au build 100% Java     -->
+        <!-- tant qu'il n'est pas active explicitement via -Pnative. Il est     -->
+        <!-- declare dans le pom parent uniquement (aucune modification des     -->
+        <!-- pom des modules).                                                  -->
+        <!--                                                                     -->
+        <!-- Usage:      mvn -Pnative -pl WPCore -am compile                    -->
+        <!--             (construire la DLL Rust puis compiler WPCore qui       -->
+        <!--              l'embarque; utilisez -am pour que le parent soit      -->
+        <!--              bien dans le reacteur, sinon le profil ne s'execute  -->
+        <!--              pas - il vit au validate du module parent)           -->
+        <!--                                                                     -->
+        <!-- Etape 1 - exec-maven-plugin, phase validate du module parent       -->
+        <!--   (inherited=false: exactement UNE execution de cargo par build,   -->
+        <!--   avant tout module). Lance cargo build en mode release sur le     -->
+        <!--   manifest E:\mc_modding\worldpainter\welt-native\Cargo.toml avec   -->
+        <!--   RUSTUP_HOME et CARGO_HOME positionnes. Si cargo.exe est           -->
+        <!--   introuvable le build echoue immediatement avec l'erreur          -->
+        <!--   "Cannot run program ... CreateProcess error=2" (message clair,   -->
+        <!--   sans impact sur le build standard sans -Pnative).                -->
+        <!--   Note: exec-maven-plugin 1.3.2 (version existante du projet,      -->
+        <!--   deja utilisee par WPGUI) n'offre pas de parametre de timeout     -->
+        <!--   pour le goal exec; le build attend donc simplement la fin de     -->
+        <!--   cargo (le build Rust du workspace welt-native est rapide).       -->
+        <!--                                                                     -->
+        <!-- Etape 2 - maven-resources-plugin copy-resources, phase validate du  -->
+        <!--   module parent (apres l'etape 1, meme phase, ordre de             -->
+        <!--   declaration): copie                                             -->
+        <!--     welt-native/target/release/welt_core.dll                       -->
+        <!--   vers                                                               -->
+        <!--     WPCore/src/main/resources/natives/windows-x86_64/welt_core.dll  -->
+        <!--   Le dossier <os>-<arch> suit la convention du plan (par. 3, 0.2):  -->
+        <!--   (os.name=windows et os.arch=x86_64 donnent "windows-x86_64"); la   -->
+        <!--   Phase 0 ne couvre que windows-x86_64, machine de developpement.   -->
+        <!--   Autres cibles (linux-x86_64, macos-x86_64/aarch64, ...) : ajouter -->
+        <!--   un bloc <resource> + <outputDirectory> par cible quand le        -->
+        <!--   cross-build sera en place. La configuration <resources>          -->
+        <!--   existante de WPCore embarque natives/ sans filtering (binaire     -->
+        <!--   copie tel quel dans target/classes puis dans le jar WPCore).     -->
+        <!--   Garde-fou: si cargo echoue, le build echoue a l'etape 1 (code     -->
+        <!--   retour non nul remonte par exec:exec) AVANT la copie; si cargo    -->
+        <!--   reussit, target/release existe forcement, donc une DLL perimee   -->
+        <!--   ne peut pas etre embarquee silencieusement par ce profil.         -->
+        <!--                                                                     -->
+        <!-- ATTENTION: la DLL copiee dans src/main/resources persiste apres le  -->
+        <!-- build; le build SANS -Pnative ne la touche jamais mais l'embarque   -->
+        <!-- si elle est deja presente (comportement voulu: une fois le natif    -->
+        <!-- construit, le build Java standard reste reproductible hors ligne).  -->
+        <!-- Packaging final (install4j): le dossier natives/ doit etre          -->
+        <!-- embarque dans le distributeur (a documenter dans la config          -->
+        <!-- install4j, plan paragraphe 3, livrable 0.2).                         -->
+        <!-- ================================================================= -->
+        <profile>
+            <id>native</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>${exec-maven-plugin.version}</version>
+                        <inherited>false</inherited>
+                        <executions>
+                            <execution>
+                                <id>welt-cargo-build</id>
+                                <phase>validate</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>C:\tools\rust\cargo\bin\cargo.exe</executable>
+                                    <arguments>
+                                        <argument>build</argument>
+                                        <argument>--release</argument>
+                                        <argument>--manifest-path</argument>
+                                        <argument>E:\mc_modding\worldpainter\welt-native\Cargo.toml</argument>
+                                    </arguments>
+                                    <environmentVariables>
+                                        <RUSTUP_HOME>C:\tools\rust\rustup</RUSTUP_HOME>
+                                        <CARGO_HOME>C:\tools\rust\cargo</CARGO_HOME>
+                                    </environmentVariables>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <artifactId>maven-resources-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <inherited>false</inherited>
+                        <executions>
+                            <execution>
+                                <id>welt-copy-native-dll</id>
+                                <phase>validate</phase>
+                                <goals>
+                                    <goal>copy-resources</goal>
+                                </goals>
+                                <configuration>
+                                    <outputDirectory>${project.basedir}/WPCore/src/main/resources/natives/windows-x86_64</outputDirectory>
+                                    <resources>
+                                        <resource>
+                                            <directory>E:\mc_modding\worldpainter\welt-native\target\release</directory>
+                                            <includes>
+                                                <include>welt_core.dll</include>
+                                            </includes>
+                                        </resource>
+                                    </resources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
     </profiles>
 </project>
