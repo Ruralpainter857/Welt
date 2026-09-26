@@ -1,6 +1,9 @@
 ﻿[package]
 name = "welt-gen"
-description = "Welt volet génération (wp-gen) - squelette Phase 0"
+description = "Welt volet generation (wp-gen) - squelette Phase 0"
 license = "GPL-3.0"
 version.workspace = true
 edition.workspace = true
+
+[dependencies]
+welt-core = { path = "../welt-core" }
