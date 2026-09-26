@@ -18,14 +18,14 @@ fn bench_frost_tile(c: &mut Criterion) {
         frost_bit_count: 3,
     };
     let mut tile = vec![FrostCell::air(); COLUMNS * COLUMN_LEN];
-    for column in tile.chunks_exact_mut(COLUMN_LEN) {
+    for column in tile.as_chunks_mut::<COLUMN_LEN>().0 {
         column[80] = FrostCell::new(material_flags::CAN_SUPPORT_SNOW, 0);
     }
     let mut group = c.benchmark_group("frost_export_bulk");
     group.throughput(Throughput::Elements(COLUMNS as u64));
     group.bench_function("columns_128x128", |b| {
         b.iter(|| {
-            for column in tile.chunks_exact_mut(COLUMN_LEN) {
+            for column in tile.as_chunks_mut::<COLUMN_LEN>().0 {
                 apply_frost_column(black_box(column), MIN_Z, MAX_Z, 80, settings)
                     .expect("valid frost column");
             }

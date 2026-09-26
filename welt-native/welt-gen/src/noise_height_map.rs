@@ -118,8 +118,8 @@ impl NoiseHeightMapBulk {
                     (f64::from(grids[0].get(col, row)) + 0.5) * self.d_height
                 } else {
                     let mut noise = 0.0_f64;
-                    for octave in 0..prepared_count {
-                        noise += f64::from(grids[octave].get(col, row));
+                    for grid in &grids {
+                        noise += f64::from(grid.get(col, row));
                     }
                     noise /= f64::from(self.octaves);
                     (noise + 0.5) * self.d_height

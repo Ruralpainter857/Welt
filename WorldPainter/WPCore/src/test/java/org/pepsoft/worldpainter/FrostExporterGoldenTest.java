@@ -5,6 +5,8 @@ import org.pepsoft.minecraft.Material;
 import org.pepsoft.worldpainter.exporting.MinecraftWorld;
 import org.pepsoft.worldpainter.layers.Frost;
 import org.pepsoft.worldpainter.layers.exporters.FrostExporter;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 
 import java.awt.Rectangle;
 import java.io.BufferedWriter;
@@ -16,6 +18,7 @@ import java.util.Locale;
 import java.util.Objects;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assume.assumeTrue;
 import static org.pepsoft.minecraft.Constants.MC_AIR;
 import static org.pepsoft.minecraft.Constants.MC_ICE;
 import static org.pepsoft.minecraft.Constants.MC_SNOW;
@@ -29,6 +32,18 @@ public final class FrostExporterGoldenTest {
 
     @Test
     public void productionFrostExporterMatchesCheckedInReference() throws Exception {
+        assertProductionOutputMatchesGolden(false);
+    }
+
+    @Test
+    public void nativeProductionFrostExporterMatchesCheckedInReference() throws Exception {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        assertProductionOutputMatchesGolden(true);
+    }
+
+    private static void assertProductionOutputMatchesGolden(boolean nativeEnabled) throws Exception {
+        final String previousFlag = System.getProperty(Native.EXPORT_KEY);
+        Native.setExportEnabled(nativeEnabled);
         final String requestedOutput = System.getProperty("welt.frost.golden.output");
         final Path generated = Files.createTempFile("welt-frost-golden-", ".txt");
         try {
@@ -43,6 +58,11 @@ public final class FrostExporterGoldenTest {
                     Files.readString(generated, StandardCharsets.UTF_8));
         } finally {
             Files.deleteIfExists(generated);
+            if (previousFlag == null) {
+                System.clearProperty(Native.EXPORT_KEY);
+            } else {
+                System.setProperty(Native.EXPORT_KEY, previousFlag);
+            }
         }
     }
 

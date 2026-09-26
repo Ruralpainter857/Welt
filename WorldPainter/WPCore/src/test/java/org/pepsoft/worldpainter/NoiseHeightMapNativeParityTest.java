@@ -1,0 +1,53 @@
+package org.pepsoft.worldpainter;
+
+import org.junit.Test;
+import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assume.assumeTrue;
+
+/** Compares the production JNI bulk path with NoiseHeightMap's Java output. */
+public final class NoiseHeightMapNativeParityTest {
+    @Test
+    public void nativeBulkMatchesJavaBitForBit() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        Native.setGenEnabled(true);
+        try {
+            final double[][] cases = {
+                    {512.0, 1.25, 1},
+                    {83.5, 0.375, 2},
+                    {240.0, 2.75, 6},
+                    {700.0, 0.03125, 10}
+            };
+            final long[] offsets = {0x1234_5678L, -0x0123_4567L, 0x3141_5926L, 0x5eed_5eedL};
+            final int[][] origins = {{-1024, -256}, {-128, 896}, {0, 0}, {12_288, -8192}};
+            for (int caseIndex = 0; caseIndex < cases.length; caseIndex++) {
+                final double[] spec = cases[caseIndex];
+                final NoiseHeightMap map = new NoiseHeightMap(spec[0], spec[1], (int) spec[2], offsets[caseIndex]);
+                map.setSeed(0x7fff_ffffL - caseIndex);
+                final int originX = origins[caseIndex][0];
+                final int originY = origins[caseIndex][1];
+                final double[] nativeValues = map.getNativeHeights(originX, originY, 128, 128);
+                assertNotNull("native bridge must be active for case " + caseIndex, nativeValues);
+                for (int y = 0; y < 128; y++) {
+                    for (int x = 0; x < 128; x++) {
+                        final double javaValue = map.getHeight(originX + x, originY + y);
+                        assertEquals("case=" + caseIndex + " x=" + (originX + x) + " y=" + (originY + y),
+                                Double.doubleToRawLongBits(javaValue),
+                                Double.doubleToRawLongBits(nativeValues[y * 128 + x]));
+                    }
+                }
+            }
+        } finally {
+            if (previousFlag == null) {
+                System.clearProperty(Native.GEN_KEY);
+            } else {
+                System.setProperty(Native.GEN_KEY, previousFlag);
+            }
+        }
+    }
+}
