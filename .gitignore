@@ -5,3 +5,5 @@ exporttimings.csv
 target
 *.code-workspace
 exports
+/welt-native/target/
+
