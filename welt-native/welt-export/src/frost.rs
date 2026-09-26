@@ -397,6 +397,6 @@ mod tests {
             case_count += 1;
         }
 
-        assert_eq!(case_count, 6, "unexpected production frost golden coverage");
+        assert_eq!(case_count, 7, "unexpected production frost golden coverage");
     }
 }

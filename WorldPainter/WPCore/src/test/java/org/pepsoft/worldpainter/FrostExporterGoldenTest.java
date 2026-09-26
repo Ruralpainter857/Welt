@@ -76,6 +76,13 @@ public final class FrostExporterGoldenTest {
                         world.setMaterialAt(0, 0, 61, AIR);
                         world.setMaterialAt(0, 0, 62, AIR);
                     });
+            writeCase(writer, "mixed-water-leaves-fallback", true, false, true,
+                    FrostExporter.FrostSettings.MODE_FLAT, 62, world -> {
+                        world.setMaterialAt(0, 0, 60, WATER);
+                        world.setMaterialAt(0, 0, 61, AIR);
+                        world.setMaterialAt(0, 0, 62, AIR);
+                        world.setMaterialAt(0, 0, 63, Material.get("minecraft:oak_leaves"));
+                    });
             writeCase(writer, "snow-flat", true, false, true,
                     FrostExporter.FrostSettings.MODE_FLAT, 62, world -> { });
             writeCase(writer, "snow-smooth-existing", true, false, true,
