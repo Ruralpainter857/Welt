@@ -221,6 +221,42 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     }
 
     /**
+     * Initialise all heights and water levels in one write transaction while
+     * a newly generated tile has its events inhibited. This preserves the
+     * normal copy-on-write buffers and coalesces the same deferred change
+     * notifications that individual setters would produce.
+     */
+    void initializeHeightAndWaterLevels(float[] heights, int waterLevel) {
+        if (eventInhibitionCounter == 0) {
+            throw new IllegalStateException("Bulk tile initialisation requires inhibited events");
+        }
+        if ((heights == null) || (heights.length != TILE_SIZE * TILE_SIZE)) {
+            throw new IllegalArgumentException("Expected one height for every tile cell");
+        }
+        synchronized (this) {
+            if (tall) {
+                ensureWriteable(TALL_HEIGHTMAP);
+                ensureWriteable(TALL_WATERLEVEL);
+                final short rawWaterLevel = (short) (waterLevel - minHeight);
+                for (int i = 0; i < heights.length; i++) {
+                    tallHeightMap[i] = (int) ((heights[i] - minHeight) * 256);
+                    tallWaterLevel[i] = rawWaterLevel;
+                }
+            } else {
+                ensureWriteable(HEIGHTMAP);
+                ensureWriteable(WATERLEVEL);
+                final byte rawWaterLevel = (byte) (waterLevel - minHeight);
+                for (int i = 0; i < heights.length; i++) {
+                    heightMap[i] = (short) ((heights[i] - minHeight) * 256);
+                    this.waterLevel[i] = rawWaterLevel;
+                }
+            }
+        }
+        heightMapChanged();
+        waterLevelChanged();
+    }
+
+    /**
      * Get the raw height value. This is the height times 256 (for added precision) and zero-based rather than adjusted
      * for {@code minHeight}.
      */

@@ -137,6 +137,25 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             final double[] nativeHeights = (nativeNoiseMap != null)
                     ? nativeNoiseMap.getNativeHeights(worldTileX, worldTileY, TILE_SIZE, TILE_SIZE)
                     : null;
+            final boolean freshSimpleTheme = (theme.getClass() == SimpleTheme.class) && !floodWithLava;
+            if ((nativeHeights != null) && freshSimpleTheme) {
+                final float[] heights = new float[TILE_SIZE * TILE_SIZE];
+                for (int x = 0; x < TILE_SIZE; x++) {
+                    for (int y = 0; y < TILE_SIZE; y++) {
+                        final double noise = nativeHeights[y * TILE_SIZE + x];
+                        final double rawHeight = (nativeNoiseMap == heightMap) ? noise
+                                : (nativeConstantFirst ? nativeConstant + noise : noise + nativeConstant);
+                        heights[x | (y << TILE_SIZE_BITS)] = clamp(minHeight, (float) rawHeight, maxZ);
+                    }
+                }
+                tile.initializeHeightAndWaterLevels(heights, myWaterHeight);
+                for (int x = 0; x < TILE_SIZE; x++) {
+                    for (int y = 0; y < TILE_SIZE; y++) {
+                        ((SimpleTheme) theme).applyToFreshTile(tile, x, y);
+                    }
+                }
+                return tile;
+            }
             for (int x = 0; x < TILE_SIZE; x++) {
                 for (int y = 0; y < TILE_SIZE; y++) {
                     final int blockX = worldTileX + x, blockY = worldTileY + y;
@@ -154,7 +173,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                     if (floodWithLava) {
                         tile.setBitLayerValue(FloodWithLava.INSTANCE, x, y, true);
                     }
-                    if ((theme.getClass() == SimpleTheme.class) && !floodWithLava) {
+                    if (freshSimpleTheme) {
                         ((SimpleTheme) theme).applyToFreshTile(tile, x, y);
                     } else {
                         theme.apply(tile, x, y);
