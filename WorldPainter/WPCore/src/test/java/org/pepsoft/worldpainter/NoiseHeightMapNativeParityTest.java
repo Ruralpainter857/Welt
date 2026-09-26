@@ -95,4 +95,33 @@ public final class NoiseHeightMapNativeParityTest {
             }
         }
     }
+
+    @Test
+    public void nativeNoisePreservesNonPositiveOctaveEdgeCases() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        Native.setGenEnabled(true);
+        try {
+            for (final int octaves : new int[] {0, -3}) {
+                final NoiseHeightMap map = new NoiseHeightMap(128.0, 0.75, octaves, 0x243f_6a88L);
+                map.setSeed(0x85a3_08d3L);
+                final double[] nativeValues = map.getNativeHeights(-19, 23, 5, 7);
+                assertNotNull("native bridge must be active for octaves=" + octaves, nativeValues);
+                for (int y = 0; y < 7; y++) {
+                    for (int x = 0; x < 5; x++) {
+                        final double javaValue = map.getHeight(-19 + x, 23 + y);
+                        assertEquals("octaves=" + octaves + " x=" + (-19 + x) + " y=" + (23 + y),
+                                Double.doubleToLongBits(javaValue),
+                                Double.doubleToLongBits(nativeValues[y * 5 + x]));
+                    }
+                }
+            }
+        } finally {
+            if (previousFlag == null) {
+                System.clearProperty(Native.GEN_KEY);
+            } else {
+                System.setProperty(Native.GEN_KEY, previousFlag);
+            }
+        }
+    }
 }
