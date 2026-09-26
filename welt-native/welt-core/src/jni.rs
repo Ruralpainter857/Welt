@@ -89,7 +89,8 @@ pub struct JNINativeInterface {
     /// Indice 13 : `jint Throw(JNIEnv *, jthrowable)`.
     throw: *mut c_void,
     /// Indice 14 : `jint ThrowNew(JNIEnv *, jclass, const char *)`.
-    throw_new: unsafe extern "system" fn(env: *mut JNIEnv, clazz: jclass, message: *const c_char) -> jint,
+    throw_new:
+        unsafe extern "system" fn(env: *mut JNIEnv, clazz: jclass, message: *const c_char) -> jint,
 }
 
 // ===== Helpers =====
@@ -132,13 +133,17 @@ pub unsafe fn throw_new(env: *mut JNIEnv, class_name: &CStr, message: &str) -> j
 ///     env: *mut JNIEnv,
 ///     _class: jclass,
 /// ) -> jint {
-///     jni_catch(env, || { /* corps, sans env dans le chemin heureux */ })
+///     unsafe { jni_catch(env, || { /* corps, sans env dans le chemin heureux */ }) }
 /// }
 /// ```
 ///
+/// # Safety
+/// `env` must be a valid JNI environment pointer from the current JVM thread.
+/// If `body` panics, this function uses that pointer to raise a Java exception.
+///
 /// [`AssertUnwindSafe`] est assumé : les corps d'export ne capturent que des
 /// pointeurs bruts/paramètres par valeur, jamais d'état exigeant UnwindSafe.
-pub fn jni_catch<F>(env: *mut JNIEnv, body: F) -> jint
+pub unsafe fn jni_catch<F>(env: *mut JNIEnv, body: F) -> jint
 where
     F: FnOnce() -> jint,
 {
@@ -163,12 +168,16 @@ pub const NATIVE_VERSION: jint = 1;
 /// `WpNative.nativeVersion()` : version du pont natif (1 en Phase 0).
 ///
 /// Retour : version ≥ 1 ; `-1` + `java.lang.RuntimeException` sur panic interne.
+///
+/// # Safety
+/// `env` must be the valid JNI environment pointer supplied by the JVM.
 #[no_mangle]
-pub extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_WpNative_nativeVersion(
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_WpNative_nativeVersion(
     env: *mut JNIEnv,
     _class: jclass,
 ) -> jint {
-    jni_catch(env, || NATIVE_VERSION)
+    // SAFETY: `env` is supplied by the JVM for this native call.
+    unsafe { jni_catch(env, || NATIVE_VERSION) }
 }
 
 /// `WpNative.nativeTileViewCheck(int heightsLen, int terrainLen, int waterLen)` :
@@ -179,19 +188,25 @@ pub extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_WpNative_nativeVe
 /// Retour : [`WeltError::Ok`] (0) si les invariants tiennent, sinon
 /// [`WeltError::IllegalArgument`] (2) — codes sans exception, l'appelant Java
 /// décide ; `-1` + `java.lang.RuntimeException` sur panic interne.
+///
+/// # Safety
+/// `env` must be the valid JNI environment pointer supplied by the JVM.
 #[no_mangle]
-pub extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_WpNative_nativeTileViewCheck(
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_WpNative_nativeTileViewCheck(
     env: *mut JNIEnv,
     _class: jclass,
     heights_len: jint,
     terrain_len: jint,
     water_len: jint,
 ) -> jint {
-    jni_catch(env, || {
-        // Corps pur (pas d'accès mémoire, pas d'env) : la validation est
-        // déléguée au module ABI, seul propriétaire des invariants.
-        abi::check_lengths(heights_len, terrain_len, water_len).code()
-    })
+    // SAFETY: `env` is supplied by the JVM for this native call.
+    unsafe {
+        jni_catch(env, || {
+            // Corps pur (pas d'accès mémoire, pas d'env) : la validation est
+            // déléguée au module ABI, seul propriétaire des invariants.
+            abi::check_lengths(heights_len, terrain_len, water_len).code()
+        })
+    }
 }
 
 #[cfg(test)]
@@ -217,17 +232,26 @@ mod tests {
     fn exports_run_pure_bodies_without_env() {
         let null_env = std::ptr::null_mut();
         let null_class = std::ptr::null_mut();
-        assert_eq!(Java_org_pepsoft_worldpainter_nativeapi_WpNative_nativeVersion(null_env, null_class), 1);
         assert_eq!(
-            Java_org_pepsoft_worldpainter_nativeapi_WpNative_nativeTileViewCheck(
-                null_env, null_class, 16384, 16384, 16384
-            ),
+            unsafe {
+                Java_org_pepsoft_worldpainter_nativeapi_WpNative_nativeVersion(null_env, null_class)
+            },
+            1
+        );
+        assert_eq!(
+            unsafe {
+                Java_org_pepsoft_worldpainter_nativeapi_WpNative_nativeTileViewCheck(
+                    null_env, null_class, 16384, 16384, 16384,
+                )
+            },
             0
         );
         assert_eq!(
-            Java_org_pepsoft_worldpainter_nativeapi_WpNative_nativeTileViewCheck(
-                null_env, null_class, 16384, 16385, 0
-            ),
+            unsafe {
+                Java_org_pepsoft_worldpainter_nativeapi_WpNative_nativeTileViewCheck(
+                    null_env, null_class, 16384, 16385, 0,
+                )
+            },
             2
         );
     }
@@ -235,7 +259,8 @@ mod tests {
     /// Le helper central propage le résultat du corps sans toucher `env`.
     #[test]
     fn jni_catch_returns_body_result_on_happy_path() {
-        assert_eq!(jni_catch(std::ptr::null_mut(), || 7), 7);
+        // SAFETY: the closure cannot panic, so the helper does not dereference env.
+        assert_eq!(unsafe { jni_catch(std::ptr::null_mut(), || 7) }, 7);
     }
 
     #[test]

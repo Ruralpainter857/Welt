@@ -328,8 +328,8 @@
         <!-- Etape 1 - exec-maven-plugin, phase validate du module parent       -->
         <!--   (inherited=false: exactement UNE execution de cargo par build,   -->
         <!--   avant tout module). Lance cargo build en mode release sur le     -->
-        <!--   manifest E:\mc_modding\worldpainter\welt-native\Cargo.toml avec   -->
-        <!--   RUSTUP_HOME et CARGO_HOME positionnes. Si cargo.exe est           -->
+        <!--   manifest ../welt-native/Cargo.toml. Cargo must be on PATH;       -->
+        <!--   RUSTUP_HOME/CARGO_HOME are inherited from the invoking process.  -->
         <!--   introuvable le build echoue immediatement avec l'erreur          -->
         <!--   "Cannot run program ... CreateProcess error=2" (message clair,   -->
         <!--   sans impact sur le build standard sans -Pnative).                -->
@@ -344,12 +344,8 @@
         <!--     welt-native/target/release/welt_core.dll                       -->
         <!--   vers                                                               -->
         <!--     WPCore/src/main/resources/natives/windows-x86_64/welt_core.dll  -->
-        <!--   Le dossier <os>-<arch> suit la convention du plan (par. 3, 0.2):  -->
-        <!--   (os.name=windows et os.arch=x86_64 donnent "windows-x86_64"); la   -->
-        <!--   Phase 0 ne couvre que windows-x86_64, machine de developpement.   -->
-        <!--   Autres cibles (linux-x86_64, macos-x86_64/aarch64, ...) : ajouter -->
-        <!--   un bloc <resource> + <outputDirectory> par cible quand le        -->
-        <!--   cross-build sera en place. La configuration <resources>          -->
+        <!--   Le dossier <os>-<arch> est derive des profils OS/architecture     -->
+        <!--   ci-dessous. La configuration <resources>                         -->
         <!--   existante de WPCore embarque natives/ sans filtering (binaire     -->
         <!--   copie tel quel dans target/classes puis dans le jar WPCore).     -->
         <!--   Garde-fou: si cargo echoue, le build echoue a l'etape 1 (code     -->
@@ -382,17 +378,13 @@
                                     <goal>exec</goal>
                                 </goals>
                                 <configuration>
-                                    <executable>C:\tools\rust\cargo\bin\cargo.exe</executable>
+                                    <executable>cargo</executable>
                                     <arguments>
                                         <argument>build</argument>
                                         <argument>--release</argument>
                                         <argument>--manifest-path</argument>
-                                        <argument>E:\mc_modding\worldpainter\welt-native\Cargo.toml</argument>
+                                        <argument>${project.basedir}/../welt-native/Cargo.toml</argument>
                                     </arguments>
-                                    <environmentVariables>
-                                        <RUSTUP_HOME>C:\tools\rust\rustup</RUSTUP_HOME>
-                                        <CARGO_HOME>C:\tools\rust\cargo</CARGO_HOME>
-                                    </environmentVariables>
                                 </configuration>
                             </execution>
                         </executions>
@@ -409,12 +401,13 @@
                                     <goal>copy-resources</goal>
                                 </goals>
                                 <configuration>
-                                    <outputDirectory>${project.basedir}/WPCore/src/main/resources/natives/windows-x86_64</outputDirectory>
+                                    <outputDirectory>${project.basedir}/WPCore/src/main/resources/natives/${welt.native.os}-${welt.native.arch}</outputDirectory>
                                     <resources>
                                         <resource>
-                                            <directory>E:\mc_modding\worldpainter\welt-native\target\release</directory>
+                                            <directory>${project.basedir}/../welt-native/target/release</directory>
                                             <includes>
-                                                <include>welt_core.dll</include>
+                                                <include>${welt.native.binary}</include>
+                                                <include>${welt.native.slices.binary}</include>
                                             </includes>
                                         </resource>
                                     </resources>
@@ -424,6 +417,43 @@
                     </plugin>
                 </plugins>
             </build>
+        </profile>
+        <!-- Platform properties are activated from the host JDK, so the same
+             -Pnative build works from any clone and drive letter. -->
+        <profile>
+            <id>welt-platform-windows</id>
+            <activation><os><family>Windows</family></os></activation>
+            <properties><welt.native.os>windows</welt.native.os><welt.native.binary>welt_core.dll</welt.native.binary><welt.native.slices.binary>welt_slices.dll</welt.native.slices.binary></properties>
+        </profile>
+        <profile>
+            <id>welt-platform-linux</id>
+            <activation><os><name>Linux</name></os></activation>
+            <properties><welt.native.os>linux</welt.native.os><welt.native.binary>libwelt_core.so</welt.native.binary><welt.native.slices.binary>libwelt_slices.so</welt.native.slices.binary></properties>
+        </profile>
+        <profile>
+            <id>welt-platform-macos</id>
+            <activation><os><family>Mac</family></os></activation>
+            <properties><welt.native.os>macos</welt.native.os><welt.native.binary>libwelt_core.dylib</welt.native.binary><welt.native.slices.binary>libwelt_slices.dylib</welt.native.slices.binary></properties>
+        </profile>
+        <profile>
+            <id>welt-arch-amd64</id>
+            <activation><os><arch>amd64</arch></os></activation>
+            <properties><welt.native.arch>x86_64</welt.native.arch></properties>
+        </profile>
+        <profile>
+            <id>welt-arch-x86_64</id>
+            <activation><os><arch>x86_64</arch></os></activation>
+            <properties><welt.native.arch>x86_64</welt.native.arch></properties>
+        </profile>
+        <profile>
+            <id>welt-arch-aarch64</id>
+            <activation><os><arch>aarch64</arch></os></activation>
+            <properties><welt.native.arch>aarch64</welt.native.arch></properties>
+        </profile>
+        <profile>
+            <id>welt-arch-arm64</id>
+            <activation><os><arch>arm64</arch></os></activation>
+            <properties><welt.native.arch>aarch64</welt.native.arch></properties>
         </profile>
     </profiles>
 </project>

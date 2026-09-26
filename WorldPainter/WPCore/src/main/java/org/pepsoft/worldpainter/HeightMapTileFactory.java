@@ -5,6 +5,9 @@
 
 package org.pepsoft.worldpainter;
 
+import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
+import org.pepsoft.worldpainter.heightMaps.ConstantHeightMap;
+import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.themes.SimpleTheme;
 import org.pepsoft.worldpainter.themes.Theme;
@@ -115,10 +118,37 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         tile.inhibitEvents();
         final int worldTileX = tileX * TILE_SIZE, worldTileY = tileY * TILE_SIZE;
         try {
+            NoiseHeightMap nativeNoiseMap = null;
+            double nativeConstant = 0.0;
+            boolean nativeConstantFirst = false;
+            if (heightMap instanceof NoiseHeightMap) {
+                nativeNoiseMap = (NoiseHeightMap) heightMap;
+            } else if (heightMap instanceof SumHeightMap) {
+                final SumHeightMap sum = (SumHeightMap) heightMap;
+                if ((sum.getHeightMap1() instanceof ConstantHeightMap) && (sum.getHeightMap2() instanceof NoiseHeightMap)) {
+                    nativeNoiseMap = (NoiseHeightMap) sum.getHeightMap2();
+                    nativeConstant = ((ConstantHeightMap) sum.getHeightMap1()).getHeight();
+                    nativeConstantFirst = true;
+                } else if ((sum.getHeightMap1() instanceof NoiseHeightMap) && (sum.getHeightMap2() instanceof ConstantHeightMap)) {
+                    nativeNoiseMap = (NoiseHeightMap) sum.getHeightMap1();
+                    nativeConstant = ((ConstantHeightMap) sum.getHeightMap2()).getHeight();
+                }
+            }
+            final double[] nativeHeights = (nativeNoiseMap != null)
+                    ? nativeNoiseMap.getNativeHeights(worldTileX, worldTileY, TILE_SIZE, TILE_SIZE)
+                    : null;
             for (int x = 0; x < TILE_SIZE; x++) {
                 for (int y = 0; y < TILE_SIZE; y++) {
                     final int blockX = worldTileX + x, blockY = worldTileY + y;
-                    final float height = clamp(minHeight, (float) heightMap.getHeight(blockX, blockY), maxZ);
+                    final double rawHeight;
+                    if (nativeHeights != null) {
+                        final double noise = nativeHeights[y * TILE_SIZE + x];
+                        rawHeight = (nativeNoiseMap == heightMap) ? noise
+                                : (nativeConstantFirst ? nativeConstant + noise : noise + nativeConstant);
+                    } else {
+                        rawHeight = heightMap.getHeight(blockX, blockY);
+                    }
+                    final float height = clamp(minHeight, (float) rawHeight, maxZ);
                     tile.setHeight(x, y, height);
                     tile.setWaterLevel(x, y, myWaterHeight);
                     if (floodWithLava) {

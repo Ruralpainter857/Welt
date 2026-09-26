@@ -4,7 +4,7 @@
 #   powershell -ExecutionPolicy Bypass -File docs\welt\scripts\dump-goldens.ps1
 #
 # Comportement :
-#   - Si des fichiers docs/welt/golden-tools/*.java existent : compilation javac --release 17
+#   - Si des fichiers docs/welt/golden-tools/*.java existent : compilation javac UTF-8 / --release 17
 #     (JDK 21, classpath Utils-2.2.0.jar, sortie vers un dossier temporaire) puis execution
 #     de chaque classe avec java (classpath temp + Utils-2.2.0.jar).
 #   - Sinon : affiche "dumpers pas encore presents (agents G2/G3)" et sort proprement (exit 0).
@@ -12,11 +12,8 @@
 # Ce script NE CREE PAS les dumpers eux-memes (propriete des agents G2/G3/G7).
 #
 # Hypotheses documentees :
-#   - Chaque .java de golden-tools/ contient une classe avec main (convention du guide
-#     ajouter-fonction-native.md section e) ; une erreur d'execution d'une classe est
-#     affichee mais n'interrompt pas les autres.
-#   - Les dumpers ecrivent eux-memes leurs sorties (vers welt-native/golden/ selon le guide) ;
-#     ce script ne gere pas les fichiers d'or.
+#   - Seuls les dumpers connus sont executes, avec leur chemin de sortie explicite.
+#   - VerifyGolden rejoue les fichiers produits puis le fixture canonique existant.
 #   - --release 17 obligatoire (projet Java 17, JDK 21 utilise comme compilateur, charte section 2).
 
 $ErrorActionPreference = 'Stop'
@@ -45,14 +42,20 @@ if (-not (Test-Path $utilsJar)) {
     exit 1
 }
 
-# --- Toolchain Java : JDK 21 (javac --release 17 pour cibler Java 17)
-$jdkBin    = 'C:\Users\[REDACTED]\AppData\Local\Programs\Eclipse Adoptium\jdk-21.0.9.10-hotspot\bin'
-$javacExe  = Join-Path $jdkBin 'javac.exe'
-$javaExe   = Join-Path $jdkBin 'java.exe'
-if (-not (Test-Path $javacExe)) {
-    Write-Error "javac introuvable : $javacExe"
-    exit 1
+# --- Toolchain Java : JDK 17+ (compilation cible Java 17)
+$jdkBins = @()
+if ($env:JAVA_HOME) { $jdkBins += (Join-Path $env:JAVA_HOME 'bin') }
+$jdkBins += (Join-Path $env:USERPROFILE '.jdks\jdk-17.0.12\bin')
+$jdkBins += (Join-Path $env:USERPROFILE '.jdks\ms-21.0.9\bin')
+$jdkBins += (Join-Path $env:ProgramFiles 'Java\jdk-17\bin')
+$jdkBin = $jdkBins | Where-Object { Test-Path (Join-Path $_ 'javac.exe') } | Select-Object -First 1
+if (-not $jdkBin) {
+    $javacCommand = Get-Command javac.exe -ErrorAction SilentlyContinue
+    if ($javacCommand) { $jdkBin = Split-Path $javacCommand.Source }
 }
+if (-not $jdkBin) { Write-Error 'JDK/Javac introuvable; installez ou exposez un JDK 17+.'; exit 1 }
+$javacExe = Join-Path $jdkBin 'javac.exe'
+$javaExe = Join-Path $jdkBin 'java.exe'
 
 # --- Dossier temporaire, nettoye en fin de script
 $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("welt-goldens-" + [guid]::NewGuid().ToString('N'))
@@ -63,31 +66,35 @@ try {
 
     # Compilation de tous les .java ensemble (les dumpers peuvent se referencer entre eux)
     Write-Host "Compilation de $($javaFiles.Count) dumper(s) vers $tempDir..."
-    & $javacExe --release 17 -cp $utilsJar -d $tempDir @($javaFiles | ForEach-Object { $_.FullName })
+    & $javacExe -encoding UTF-8 --release 17 -cp $utilsJar -d $tempDir @($javaFiles | ForEach-Object { $_.FullName })
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Echec de la compilation javac (code $LASTEXITCODE)."
         exit 1
     }
 
-    # Execution de chaque classe : FQCN = package du fichier (si present) + nom de fichier sans extension
+    # Dumper outputs are written to their canonical workspace files.
     $fullCp = "$tempDir;$utilsJar"
-    foreach ($file in $javaFiles) {
-        $className = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
-        $content = Get-Content -Path $file.FullName -Raw
-        if ($content -match '(?m)^\s*package\s+([\w.]+)\s*;') {
-            $className = "$($Matches[1]).$className"
-        }
-        Write-Host "Execution du dumper : $className"
-        & $javaExe -cp $fullCp $className
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Echec du dumper $className (code $LASTEXITCODE) - on continue avec les autres."
-            $failed++
-        }
+    $goldenDir = Join-Path $repoRoot 'welt-native\golden'
+    $dumpers = @(
+        @{ Class = 'DumpGoldenNoise'; Output = (Join-Path $goldenDir 'perlin-golden.txt') },
+        @{ Class = 'DumpGoldenRandom'; Output = (Join-Path $goldenDir 'java-random-golden.txt') },
+        @{ Class = 'DumpGoldenRandomEdge'; Output = (Join-Path $goldenDir 'java-random-edge.txt') }
+    )
+    foreach ($dumper in $dumpers) {
+        Write-Host "Generation : $($dumper.Output)"
+        & $javaExe -cp $fullCp $dumper.Class $dumper.Output
+        if ($LASTEXITCODE -ne 0) { throw "$($dumper.Class) a echoue (code $LASTEXITCODE)." }
     }
-
-    $ok = $javaFiles.Count - $failed
-    Write-Host "Termine : $ok/$($javaFiles.Count) dumper(s) executes avec succes, $failed echec(s)."
-    if ($failed -gt 0) { exit 1 }
+    $verifyFiles = @(
+        (Join-Path $goldenDir 'perlin-golden.txt'),
+        (Join-Path $goldenDir 'java-random-golden.txt'),
+        (Join-Path $goldenDir 'java-random-edge.txt'),
+        (Join-Path $weltDir 'golden-tools\example-golden.txt')
+    ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+    Write-Host 'Verification des golden Java...'
+    & $javaExe -cp $fullCp VerifyGolden @verifyFiles
+    if ($LASTEXITCODE -ne 0) { throw "VerifyGolden a echoue (code $LASTEXITCODE)." }
+    Write-Host "Termine : $($dumpers.Count) fichiers regenes et $($verifyFiles.Count) fichiers verifies."
     exit 0
 }
 finally {

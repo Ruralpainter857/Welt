@@ -19,7 +19,7 @@ package org.pepsoft.worldpainter.nativeapi;
  * <p><strong>Compilation</strong> (JDK 21, cible 17) :</p>
  * <pre>  javac --release 17 -encoding UTF-8 -d <out> WpNativeSmokeTest.java</pre>
  * <p><strong>Exécution</strong> (classpath limité au répertoire de sortie) :</p>
- * <pre>  java -cp <out> org.pepsoft.worldpainter.nativeapi.WpNativeSmokeTest</pre>
+ * <pre>  java -Dwelt.native.path=<chemin-vers-welt_core.dll> -cp <out> org.pepsoft.worldpainter.nativeapi.WpNativeSmokeTest</pre>
  * <p>Sortie attendue : {@code nativeVersion() = 1} puis {@code SMOKE TEST OK}.
  * Code retour 0 si tout est conforme, 1 sinon.</p>
  */
@@ -82,17 +82,16 @@ public class WpNativeSmokeTest {
  * {@code welt-native/welt-core/src/jni.rs}.
  */
 class WpNative {
-    /** Chemin de la lib construite par {@code cargo build} (debug). */
-    private static final String WELT_CORE_DLL =
-        "E:/mc_modding/worldpainter/welt-native/target/debug/welt_core.dll";
-
     public static native int nativeVersion();
 
     public static native int nativeTileViewCheck(int heightsLen, int terrainLen, int waterLen);
 
     static {
-        // Champ déclaré AVANT le bloc : les initialiseurs statiques s'exécutent
-        // dans l'ordre textuel du fichier.
-        System.load(WELT_CORE_DLL);
+        final String nativePath = System.getProperty("welt.native.path");
+        if ((nativePath == null) || nativePath.isBlank()) {
+            System.loadLibrary("welt_core");
+        } else {
+            System.load(java.nio.file.Path.of(nativePath).toAbsolutePath().toString());
+        }
     }
 }

@@ -27,7 +27,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Chargeur de la bibliothèque native Rust {@code welt_core}.
+ * Chargeur des bibliothèques natives Rust {@code welt_core} et {@code welt_slices}.
  *
  * <p>Stratégie de chargement (dans l'ordre) :</p>
  * <ol>
@@ -60,7 +60,8 @@ import java.util.logging.Logger;
  *
  * <p>Cette classe ne fait pas partie d'un chemin critique (« hot path ») : la
  * synchronisation de {@link #ensureLoaded()} est sans impact sur les
- * performances.</p>
+ * performances. Le pont de calcul par lots {@code welt_slices} est chargé à la
+ * demande par {@link #areSlicesAvailable()}.</p>
  */
 public final class NativeLoader {
     /**
@@ -79,6 +80,8 @@ public final class NativeLoader {
      * sans verrou par {@link #isNativeAvailable()} après initialisation.
      */
     private static volatile boolean loaded = false;
+    private static volatile boolean slicesLoaded = false;
+    private static boolean slicesLoadAttempted = false;
 
     private NativeLoader() {
         // Classe utilitaire : pas d'instanciation.
@@ -143,6 +146,55 @@ public final class NativeLoader {
         return loaded;
     }
 
+    /** Loads the bulk generation/export bridge when a feature flag needs it. */
+    public static synchronized boolean areSlicesAvailable() {
+        if (!slicesLoadAttempted) {
+            slicesLoadAttempted = true;
+            if (tryLoad("welt_slices")) {
+                try {
+                    slicesLoaded = NativeSlices.nativeAbiVersion() == NativeSlices.ABI_VERSION;
+                    if (!slicesLoaded) {
+                        LOGGER.warning("Version du pont welt_slices incompatible ; chemin Java utilisé");
+                    }
+                } catch (final UnsatisfiedLinkError e) {
+                    LOGGER.log(Level.WARNING, "Pont welt_slices incomplet ; chemin Java utilisé", e);
+                }
+            }
+        }
+        return slicesLoaded;
+    }
+
+    private static boolean tryLoad(final String libraryName) {
+        try {
+            System.loadLibrary(libraryName);
+            LOGGER.info(() -> "Bibliothèque native " + libraryName + " chargée via java.library.path");
+            return true;
+        } catch (final UnsatisfiedLinkError e) {
+            LOGGER.log(Level.FINE, "System.loadLibrary(" + libraryName + ") a échoué", e);
+        } catch (final SecurityException e) {
+            LOGGER.log(Level.WARNING, "Chargement natif interdit pour " + libraryName + " ; chemin Java utilisé", e);
+            return false;
+        }
+        final String resourcePath = nativeResourcePath(libraryName);
+        if (resourcePath == null) {
+            LOGGER.warning("Plateforme non supportée pour " + libraryName + " ; chemin Java utilisé");
+            return false;
+        }
+        try (final InputStream in = NativeLoader.class.getClassLoader().getResourceAsStream(resourcePath)) {
+            if (in == null) {
+                LOGGER.warning("Ressource native introuvable : " + resourcePath + " ; chemin Java utilisé");
+                return false;
+            }
+            final Path tempFile = extractToTempFile(in, libraryName);
+            System.load(tempFile.toString());
+            LOGGER.info(() -> "Bibliothèque native " + libraryName + " chargée depuis " + tempFile);
+            return true;
+        } catch (final UnsatisfiedLinkError | IOException | RuntimeException e) {
+            LOGGER.log(Level.WARNING, "Impossible de charger " + libraryName + " ; chemin Java utilisé", e);
+            return false;
+        }
+    }
+
     /**
      * Calcule le chemin classpath de la bibliothèque native pour la plateforme
      * courante : {@code natives/<os>-<arch>/<fichier>}.
@@ -151,19 +203,23 @@ public final class NativeLoader {
      *         n'est pas supportée
      */
     private static String nativeResourcePath() {
+        return nativeResourcePath(LIB_NAME);
+    }
+
+    private static String nativeResourcePath(final String libraryName) {
         final String osName = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
         final String osArch = System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT);
         final String os;
         final String fileName;
         if (osName.contains("windows")) {
             os = "windows";
-            fileName = LIB_NAME + ".dll";
+            fileName = libraryName + ".dll";
         } else if (osName.contains("linux")) {
             os = "linux";
-            fileName = "lib" + LIB_NAME + ".so";
+            fileName = "lib" + libraryName + ".so";
         } else if (osName.contains("mac") || osName.contains("darwin")) {
             os = "macos";
-            fileName = "lib" + LIB_NAME + ".dylib";
+            fileName = "lib" + libraryName + ".dylib";
         } else {
             return null;
         }
@@ -198,8 +254,12 @@ public final class NativeLoader {
      * @throws IOException en cas d'erreur d'écriture
      */
     private static Path extractToTempFile(final InputStream in) throws IOException {
+        return extractToTempFile(in, LIB_NAME);
+    }
+
+    private static Path extractToTempFile(final InputStream in, final String libraryName) throws IOException {
         final Path tempDir = Paths.get(System.getProperty("java.io.tmpdir"));
-        final Path tempFile = Files.createTempFile(tempDir, LIB_NAME + "-", null);
+        final Path tempFile = Files.createTempFile(tempDir, libraryName + "-", null);
         try (final OutputStream out = Files.newOutputStream(tempFile)) {
             in.transferTo(out);
         } catch (final IOException e) {

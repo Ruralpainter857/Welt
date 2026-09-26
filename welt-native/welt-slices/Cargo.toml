@@ -1,0 +1,15 @@
+[package]
+name = "welt-slices"
+description = "JNI bridge for the Welt generation and export kernels"
+license = "GPL-3.0"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "welt_slices"
+crate-type = ["cdylib"]
+
+[dependencies]
+welt-core = { path = "../welt-core" }
+welt-gen = { path = "../welt-gen" }
+welt-export = { path = "../welt-export" }

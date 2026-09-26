@@ -8,6 +8,7 @@ import org.pepsoft.util.IconUtils;
 import org.pepsoft.util.MathUtils;
 import org.pepsoft.util.PerlinNoise;
 import org.pepsoft.worldpainter.NoiseSettings;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
 import javax.swing.*;
 import java.io.IOException;
@@ -79,6 +80,12 @@ public final class NoiseHeightMap extends AbstractHeightMap {
 
     public long getSeedOffset() {
         return seedOffset;
+    }
+
+    /** Returns row-major heights for a tile when the optional native path is available. */
+    public double[] getNativeHeights(int originX, int originY, int width, int height) {
+        return NativeSlices.noiseHeights(originX, originY, width, height,
+                dHeight, scale, octaves, getSeed() + seedOffset);
     }
 
     // HeightMap

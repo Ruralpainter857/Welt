@@ -157,7 +157,10 @@ pub const fn is_valid_buffer_len(len: i32) -> bool {
 /// l'export JNI `nativeTileViewCheck` ; les fonctions Rust internes préfèrent
 /// [`WpTileView::validate`], plus stricte.
 pub const fn check_lengths(heights_len: i32, terrain_len: i32, water_len: i32) -> WeltError {
-    if !is_valid_buffer_len(heights_len) || !is_valid_buffer_len(terrain_len) || !is_valid_buffer_len(water_len) {
+    if !is_valid_buffer_len(heights_len)
+        || !is_valid_buffer_len(terrain_len)
+        || !is_valid_buffer_len(water_len)
+    {
         WeltError::IllegalArgument
     } else {
         WeltError::Ok
@@ -424,7 +427,10 @@ mod tests {
         assert_eq!(check_lengths(16384, 16384, 16384), WeltError::Ok);
         assert_eq!(check_lengths(0, 0, 0), WeltError::Ok);
         assert_eq!(check_lengths(32768, 16384, 0), WeltError::Ok);
-        assert_eq!(check_lengths(16384, 16385, 16384), WeltError::IllegalArgument);
+        assert_eq!(
+            check_lengths(16384, 16385, 16384),
+            WeltError::IllegalArgument
+        );
         assert_eq!(check_lengths(-16384, 0, 0), WeltError::IllegalArgument);
     }
 
@@ -505,7 +511,7 @@ mod tests {
 
         let mut bad = bit;
         bad.words_len = 255; // pas le nombre exact de mots
-        // SAFETY: cf. ci-dessus.
+                             // SAFETY: cf. ci-dessus.
         assert_eq!(unsafe { bad.validate() }, WeltError::IllegalArgument);
 
         let mut bad = bit;

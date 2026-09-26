@@ -2,10 +2,10 @@
 //! LCG java.util.Random, ABI WpTileView, mapping d'erreurs et exports JNI du fork Welt.
 //! Voir docs/welt/CHARTE-ORCHESTRATION.md (charte) et docs/plan-decoupage-java-rust.md.
 
-pub mod error;
 pub mod abi;
+pub mod error;
+pub mod jni;
+pub mod jni_export;
+pub mod jni_gen;
 pub mod noise;
 pub mod rng;
-pub mod jni;
-pub mod jni_gen;
-pub mod jni_export;

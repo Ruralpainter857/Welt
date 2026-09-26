@@ -7,3 +7,10 @@ edition.workspace = true
 
 [dependencies]
 welt-core = { path = "../welt-core" }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "noise_height_map"
+harness = false

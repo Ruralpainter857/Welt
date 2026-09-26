@@ -107,7 +107,9 @@ pub fn message_bytes_for_jni(message: &str) -> Vec<u8> {
     for character in message.chars() {
         match character {
             '\0' => bytes.push(b' '),
-            character if (character as u32) > 0xFFFF => bytes.extend_from_slice("\u{FFFD}".as_bytes()),
+            character if (character as u32) > 0xFFFF => {
+                bytes.extend_from_slice("\u{FFFD}".as_bytes())
+            }
             character => {
                 let mut buffer = [0u8; 4];
                 bytes.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
@@ -131,7 +133,12 @@ mod tests {
 
     #[test]
     fn from_code_roundtrips() {
-        for code in [WeltError::Ok, WeltError::NullPointer, WeltError::IllegalArgument, WeltError::Internal] {
+        for code in [
+            WeltError::Ok,
+            WeltError::NullPointer,
+            WeltError::IllegalArgument,
+            WeltError::Internal,
+        ] {
             assert_eq!(WeltError::from_code(code.code()), Some(code));
         }
         assert_eq!(WeltError::from_code(-1), None);
@@ -140,8 +147,14 @@ mod tests {
 
     #[test]
     fn exception_classes_are_slashed_jni_names() {
-        assert_eq!(WeltError::Internal.exception_class().to_bytes(), b"java/lang/RuntimeException");
-        assert_eq!(WeltError::NullPointer.exception_class().to_bytes(), b"java/lang/NullPointerException");
+        assert_eq!(
+            WeltError::Internal.exception_class().to_bytes(),
+            b"java/lang/RuntimeException"
+        );
+        assert_eq!(
+            WeltError::NullPointer.exception_class().to_bytes(),
+            b"java/lang/NullPointerException"
+        );
         assert_eq!(
             WeltError::IllegalArgument.exception_class().to_bytes(),
             b"java/lang/IllegalArgumentException"
@@ -153,7 +166,10 @@ mod tests {
         assert_eq!(panic_message(Box::new("boom")), "boom");
         assert_eq!(panic_message(Box::new(String::from("boom 2"))), "boom 2");
         // Payload non textuel (ex. struct quelconque) : message générique, pas de crash.
-        assert_eq!(panic_message(Box::new(42)), "Rust panic (non-textual payload)");
+        assert_eq!(
+            panic_message(Box::new(42)),
+            "Rust panic (non-textual payload)"
+        );
     }
 
     #[test]

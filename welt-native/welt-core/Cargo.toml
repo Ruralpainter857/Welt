@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "welt-core"
 description = "Coeur natif du fork Welt : bruit bit-exact, RNG, ABI WpTileView, JNI"
 license = "GPL-3.0"
@@ -8,3 +8,20 @@ edition.workspace = true
 [lib]
 name = "welt_core"
 crate-type = ["cdylib", "rlib"]
+
+# ============================================================================
+# Exception d'ownership documentée (G7, charte §4) : G7 peut modifier UNIQUEMENT
+# la section [dev-dependencies] et ajouter les sections [[bench]] ci-dessous.
+# Toute autre modification de ce fichier reste interdite à G7.
+# ============================================================================
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "perlin"
+harness = false
+
+[[bench]]
+name = "random"
+harness = false
