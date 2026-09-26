@@ -27,7 +27,7 @@ import static org.pepsoft.worldpainter.Constants.TINY_BLOBS;
  *
  * @author SchmitzP
  */
-public class SimpleTheme implements Theme, Cloneable {
+public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Cloneable {
     @Deprecated
     public SimpleTheme(long seed, int waterHeight, Terrain[] terrainRangesTable, int minHeight, int maxHeight, boolean randomise, boolean beaches) {
         setSeed(seed);
@@ -96,10 +96,12 @@ public class SimpleTheme implements Theme, Cloneable {
         perlinNoise = new PerlinNoise(seed);
     }
 
+    @Override
     public final SortedMap<Integer, Terrain> getTerrainRanges() {
         return terrainRanges;
     }
 
+    @Override
     public final void setTerrainRanges(SortedMap<Integer, Terrain> terrainRanges) {
         if (terrainRanges == null) {
             throw new NullPointerException("terrainRanges");
@@ -124,6 +126,7 @@ public class SimpleTheme implements Theme, Cloneable {
         updateTerrainRangesTable();
     }
 
+    @Override
     public final boolean isRandomise() {
         return randomise;
     }
@@ -142,6 +145,7 @@ public class SimpleTheme implements Theme, Cloneable {
         this.waterHeight = waterHeight;
     }
 
+    @Override
     public final boolean isBeaches() {
         return beaches;
     }
@@ -216,15 +220,18 @@ public class SimpleTheme implements Theme, Cloneable {
         }
     }
 
+    @Override
     public final Map<Filter, Layer> getLayerMap() {
         return layerMap;
     }
 
+    @Override
     public final void setLayerMap(Map<Filter, Layer> layerMap) {
         this.layerMap = layerMap;
         initCaches();
     }
 
+    @Override
     public final Map<Layer, Integer> getDiscreteValues() {
         return discreteValues;
     }
@@ -267,7 +274,8 @@ public class SimpleTheme implements Theme, Cloneable {
                 '}';
     }
 
-    protected Terrain getTerrain(int x, int y, int height) {
+    @Override
+    public Terrain getTerrain(int x, int y, int height) {
         if (beaches && (height >= (waterHeight - 2)) && (height <= (waterHeight + 1))) {
             return Terrain.BEACHES;
         } else {
