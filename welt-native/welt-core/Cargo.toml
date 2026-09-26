@@ -1,0 +1,10 @@
+﻿[package]
+name = "welt-core"
+description = "Coeur natif du fork Welt : bruit bit-exact, RNG, ABI WpTileView, JNI"
+license = "GPL-3.0"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "welt_core"
+crate-type = ["cdylib", "rlib"]

@@ -1,0 +1,6 @@
+﻿[package]
+name = "welt-export"
+description = "Welt volet export Minecraft (wp-export) - squelette Phase 0"
+license = "GPL-3.0"
+version.workspace = true
+edition.workspace = true
