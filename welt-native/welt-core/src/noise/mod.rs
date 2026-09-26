@@ -3,5 +3,5 @@
 pub mod perlin;
 pub mod random_field;
 
-pub use perlin::PerlinNoise;
+pub use perlin::{PerlinAxis3D, PerlinNoise};
 pub use random_field::RandomField;

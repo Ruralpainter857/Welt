@@ -25,6 +25,27 @@ pub struct PerlinAxis2D {
     fade: f32,
 }
 
+/// Precomputed lattice and interpolation data for one 3D Perlin coordinate.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PerlinAxis3D {
+    lattice: i32,
+    fraction: f32,
+    fade: f32,
+}
+
+impl PerlinAxis3D {
+    #[inline]
+    fn new(position: f64) -> Self {
+        let floor = position.floor();
+        let fraction = (position - floor) as f32;
+        Self {
+            lattice: floor as i32,
+            fraction,
+            fade: FastPerlin::fade(fraction),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct PerlinCorners2D {
     h00: i32,
@@ -132,6 +153,21 @@ impl PerlinNoise {
     #[inline]
     pub fn get_perlin_noise_3d(&self, x: f64, y: f64, z: f64) -> f32 {
         (f64::from(self.fast.sample_3d(x, y, z)) * FACTOR_3D) as f32
+    }
+
+    #[inline]
+    pub fn prepare_axis_3d(position: f64) -> PerlinAxis3D {
+        PerlinAxis3D::new(position)
+    }
+
+    #[inline]
+    pub fn get_perlin_noise_3d_prepared(
+        &self,
+        x: PerlinAxis3D,
+        y: PerlinAxis3D,
+        z: PerlinAxis3D,
+    ) -> f32 {
+        (f64::from(self.fast.sample_3d_prepared(x, y, z)) * FACTOR_3D) as f32
     }
 
     /// Raw `FastPerlin.sampleResult` value, exposed for cross-language parity tests.
@@ -247,25 +283,30 @@ impl FastPerlin {
     }
 
     fn sample_3d(&self, x: f64, y: f64, z: f64) -> f32 {
-        let floor_x = x.floor();
-        let floor_y = y.floor();
-        let floor_z = z.floor();
-        let by = floor_y as i32;
-        let bz = floor_z as i32;
-        let lx = (x - floor_x) as f32;
-        let ly = (y - floor_y) as f32;
-        let lz = (z - floor_z) as f32;
-        let px = self.pair(floor_x as i32);
+        self.sample_3d_prepared(
+            PerlinAxis3D::new(x),
+            PerlinAxis3D::new(y),
+            PerlinAxis3D::new(z),
+        )
+    }
+
+    fn sample_3d_prepared(&self, x: PerlinAxis3D, y: PerlinAxis3D, z: PerlinAxis3D) -> f32 {
+        let by = y.lattice;
+        let bz = z.lattice;
+        let lx = x.fraction;
+        let ly = y.fraction;
+        let lz = z.fraction;
+        let px = self.pair(x.lattice);
         let x0y = self.pair(px.wrapping_add(by));
         let x1y = self.pair((px >> 8).wrapping_add(by));
         let x0y0z = self.pair(x0y.wrapping_add(bz));
         let x0y1z = self.pair((x0y >> 8).wrapping_add(bz));
         let x1y0z = self.pair(x1y.wrapping_add(bz));
         let x1y1z = self.pair((x1y >> 8).wrapping_add(bz));
-        let py = Self::fade(ly);
-        let pz = Self::fade(lz);
+        let py = y.fade;
+        let pz = z.fade;
         Self::lerp(
-            Self::fade(lx),
+            x.fade,
             Self::lerp(
                 py,
                 Self::lerp(
@@ -413,6 +454,29 @@ mod tests {
             noise.get_perlin_noise_2d(-3.25, 7.5).to_bits(),
             noise.get_perlin_noise_2d(252.75, 263.5).to_bits()
         );
+    }
+
+    #[test]
+    fn prepared_3d_axes_match_scalar_noise_bit_for_bit() {
+        for seed in [-0x1234_5678, 0, 0x3141_5926] {
+            let noise = PerlinNoise::new(seed);
+            for x in [-131_073.25, -16.411, -0.125, 0.0, 19.875, 131_072.5] {
+                for y in [-257.75, -4.099, 0.0, 13.25, 4097.125] {
+                    for z in [-64.5, -1.0, 0.0, 62.25, 255.875] {
+                        let prepared = noise.get_perlin_noise_3d_prepared(
+                            PerlinNoise::prepare_axis_3d(x),
+                            PerlinNoise::prepare_axis_3d(y),
+                            PerlinNoise::prepare_axis_3d(z),
+                        );
+                        assert_eq!(
+                            prepared.to_bits(),
+                            noise.get_perlin_noise_3d(x, y, z).to_bits(),
+                            "seed={seed} x={x} y={y} z={z}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

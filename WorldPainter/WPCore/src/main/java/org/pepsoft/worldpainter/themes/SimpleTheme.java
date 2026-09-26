@@ -75,9 +75,13 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
         if (terrain == null) {
             throw new NullPointerException("apply(" + tile + ", " + x + ", " + y + ": getTerrain() returned null for " + this);
         }
-        if (tile.getTerrain(x, y) != terrain) {
+        if (freshTile ? terrain.ordinal() != 0 : tile.getTerrain(x, y) != terrain) {
             tile.setTerrain(x, y, terrain);
         }
+        applyLayers(tile, x, y, height, freshTile);
+    }
+
+    private void applyLayers(Tile tile, int x, int y, int height, boolean freshTile) {
         if (layerCache != null) {
             for (int i = 0; i < layerCache.length; i++) {
                 final int level = layerLevelCache[i][height - minHeight];
@@ -112,6 +116,15 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
     @Override
     public final SortedMap<Integer, Terrain> getTerrainRanges() {
         return terrainRanges;
+    }
+
+    /** Returns a copy of the terrain lookup table as stable enum ordinals. */
+    public final int[] getTerrainRangeOrdinals() {
+        final int[] ordinals = new int[terrainRangesTable.length];
+        for (int i = 0; i < terrainRangesTable.length; i++) {
+            ordinals[i] = terrainRangesTable[i].ordinal();
+        }
+        return ordinals;
     }
 
     @Override

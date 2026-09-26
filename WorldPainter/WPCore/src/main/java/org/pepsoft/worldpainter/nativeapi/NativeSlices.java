@@ -34,6 +34,34 @@ public final class NativeSlices {
         }
     }
 
+    /** Returns native terrain ordinals for one already-quantised SimpleTheme tile. */
+    public static int[] simpleThemeTerrains(final int originX, final int originY,
+                                            final int width, final int height,
+                                            final int minHeight, final int maxHeight,
+                                            final int waterHeight, final boolean randomise,
+                                            final boolean beaches, final int beachOrdinal,
+                                            final long seed, final int[] heights,
+                                            final int[] terrainRangeOrdinals) {
+        final long area = (long) width * height;
+        final long rangeLength = (long) maxHeight - minHeight;
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || heights == null || terrainRangeOrdinals == null
+                || width <= 0 || height <= 0 || area > 1_048_576L
+                || rangeLength <= 0 || rangeLength > 1_048_576L
+                || heights.length != area || terrainRangeOrdinals.length != rangeLength) {
+            return null;
+        }
+        final int[] output = new int[(int) area];
+        try {
+            return nativeFillThemeTerrains(originX, originY, width, height,
+                    minHeight, maxHeight, waterHeight, randomise ? 1 : 0,
+                    beaches ? 1 : 0, beachOrdinal, seed, heights,
+                    terrainRangeOrdinals, output) == 0 ? output : null;
+        } catch (final UnsatisfiedLinkError e) {
+            return null;
+        }
+    }
+
 
     /** False leaves the FrostExporter on its original Java path. */
     public static boolean frostColumn(final int minZ, final int maxZ, final int highestNonAir,
@@ -64,6 +92,15 @@ public final class NativeSlices {
                                                       double dHeight, double scale,
                                                       int octaves, long effectiveSeed,
                                                       double[] output);
+
+    private static native int nativeFillThemeTerrains(int originX, int originY,
+                                                       int width, int height,
+                                                       int minHeight, int maxHeight,
+                                                       int waterHeight, int randomise,
+                                                       int beaches, int beachOrdinal,
+                                                       long seed, int[] heights,
+                                                       int[] terrainRangeOrdinals,
+                                                       int[] output);
 
 
     private static native int nativeFrostColumn(int minZ, int maxZ, int highestNonAir,
