@@ -13,6 +13,7 @@ import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.ShelvingHeightMap;
 import org.pepsoft.worldpainter.layers.Frost;
+import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.layers.Layer;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
@@ -379,6 +380,51 @@ public final class SimpleThemeFreshTileParityTest {
     }
 
     @Test
+    public void rowMajorTerrainBatchPreservesBitLayerRandomSequence() throws Exception {
+        final Map<Filter, Layer> layers = java.util.Collections.singletonMap(
+                new HeightFilter(0, 256, 70, 180, true), FloodWithLava.INSTANCE);
+        final SortedMap<Integer, Terrain> ranges = new TreeMap<>();
+        ranges.put(-1, Terrain.GRASS);
+        ranges.put(90, Terrain.STONE_MIX);
+        final SimpleTheme legacyTheme = new SimpleTheme(0L, 62, ranges, layers, 0, 256, true, true) { };
+        final SimpleTheme batchTheme = new SimpleTheme(0L, 62, ranges, layers, 0, 256, true, true);
+        final HeightMapTileFactory legacyFactory = new HeightMapTileFactory(42L,
+                new SumHeightMap(new ConstantHeightMap(75), new NoiseHeightMap(18, 0.8, 3, 0x1234_5678L)),
+                0, 256, false, legacyTheme);
+        final HeightMapTileFactory batchFactory = new HeightMapTileFactory(42L,
+                new SumHeightMap(new ConstantHeightMap(75), new NoiseHeightMap(18, 0.8, 3, 0x1234_5678L)),
+                0, 256, false, batchTheme);
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        try {
+            Native.setGenEnabled(false);
+            resetSimpleThemeRandom(0x57454c54L);
+            final Tile legacy = legacyFactory.createTile(-3, 7);
+            resetSimpleThemeRandom(0x57454c54L);
+            final Tile batch = batchFactory.createTile(-3, 7);
+            for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                    assertEquals("height at " + x + ',' + y,
+                            Float.floatToRawIntBits(legacy.getHeight(x, y)),
+                            Float.floatToRawIntBits(batch.getHeight(x, y)));
+                    assertEquals("water at " + x + ',' + y,
+                            legacy.getWaterLevel(x, y), batch.getWaterLevel(x, y));
+                    assertEquals("terrain at " + x + ',' + y,
+                            legacy.getTerrain(x, y), batch.getTerrain(x, y));
+                    assertEquals("random BIT layer at " + x + ',' + y,
+                            legacy.getBitLayerValue(FloodWithLava.INSTANCE, x, y),
+                            batch.getBitLayerValue(FloodWithLava.INSTANCE, x, y));
+                }
+            }
+        } finally {
+            if (previousFlag == null) {
+                System.clearProperty(Native.GEN_KEY);
+            } else {
+                System.setProperty(Native.GEN_KEY, previousFlag);
+            }
+        }
+    }
+
+    @Test
     public void freshTileApplicationMatchesExistingPath() {
         final SimpleTheme theme = SimpleTheme.createDefault(Terrain.GRASS, 0, 256, 62, true, true);
         final Tile ordinary = newTileWithHeights();
@@ -550,6 +596,12 @@ public final class SimpleThemeFreshTileParityTest {
         }
         tile.releaseEvents();
         return tile;
+    }
+
+    private static void resetSimpleThemeRandom(long seed) throws ReflectiveOperationException {
+        final java.lang.reflect.Field randomField = SimpleTheme.class.getDeclaredField("random");
+        randomField.setAccessible(true);
+        ((java.util.Random) randomField.get(null)).setSeed(seed);
     }
 
     private static SimpleTheme createSimpleTheme(boolean legacyPerCellPath) {
