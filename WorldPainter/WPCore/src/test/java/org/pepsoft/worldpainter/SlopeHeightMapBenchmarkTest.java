@@ -59,6 +59,7 @@ public final class SlopeHeightMapBenchmarkTest {
             Files.createDirectories(output.toAbsolutePath().getParent());
             Files.writeString(output, result, StandardCharsets.UTF_8);
             System.out.print("Slope benchmark: " + result);
+            benchmarkSlopeKernel();
         } finally {
             if (previousFlag == null) {
                 System.clearProperty(Native.GEN_KEY);
@@ -80,5 +81,55 @@ public final class SlopeHeightMapBenchmarkTest {
         }
         sink ^= check;
         return (System.nanoTime() - start) / 1_000_000.0 / tileCount;
+    }
+
+    private static void benchmarkSlopeKernel() {
+        final int inputWidth = 130, inputHeight = 130;
+        final double[] base = new double[inputWidth * inputHeight];
+        final double[] output = new double[128 * 128];
+        for (int i = 0; i < base.length; i++) {
+            base[i] = ((i * 31 % 997) - 498) * 0.0625;
+        }
+        final SlopeHeightMap slope = new SlopeHeightMap(new ConstantHeightMap(0.0), 1.75f);
+        final int iterations = 64;
+        final double[] javaSamples = new double[9];
+        final double[] nativeSamples = new double[9];
+        for (int warmup = 0; warmup < 6; warmup++) {
+            sampleSlopeKernel(slope, base, output, inputWidth, inputHeight, iterations, false);
+            sampleSlopeKernel(slope, base, output, inputWidth, inputHeight, iterations, true);
+        }
+        for (int round = 0; round < javaSamples.length; round++) {
+            if ((round & 1) == 0) {
+                javaSamples[round] = sampleSlopeKernel(slope, base, output,
+                        inputWidth, inputHeight, iterations, false);
+                nativeSamples[round] = sampleSlopeKernel(slope, base, output,
+                        inputWidth, inputHeight, iterations, true);
+            } else {
+                nativeSamples[round] = sampleSlopeKernel(slope, base, output,
+                        inputWidth, inputHeight, iterations, true);
+                javaSamples[round] = sampleSlopeKernel(slope, base, output,
+                        inputWidth, inputHeight, iterations, false);
+            }
+        }
+        Arrays.sort(javaSamples);
+        Arrays.sort(nativeSamples);
+        final int median = javaSamples.length / 2;
+        System.out.printf("Slope kernel benchmark: iterations=%d java_ms_per_tile=%.4f "
+                        + "native_ms_per_tile=%.4f speedup=%.3f%n",
+                iterations, javaSamples[median], nativeSamples[median],
+                javaSamples[median] / nativeSamples[median]);
+    }
+
+    private static double sampleSlopeKernel(SlopeHeightMap slope, double[] base, double[] output,
+                                            int width, int height, int iterations, boolean nativePath) {
+        Native.setGenEnabled(nativePath);
+        final long start = System.nanoTime();
+        for (int i = 0; i < iterations; i++) {
+            if (!slope.fillSamples(base, width, height, output)) {
+                throw new AssertionError("Slope kernel rejected a benchmark tile");
+            }
+            sink ^= (int) Double.doubleToRawLongBits(output[i & (output.length - 1)]);
+        }
+        return (System.nanoTime() - start) / 1_000_000.0 / iterations;
     }
 }

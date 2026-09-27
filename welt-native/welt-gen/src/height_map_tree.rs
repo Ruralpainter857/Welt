@@ -592,6 +592,95 @@ pub fn fill_height_map_tree_points(
     Ok(())
 }
 
+/// Computes WorldPainter's slope operator from a row-major base grid with a
+/// one-cell halo. The output contains `(input_width - 2) * (input_height - 2)`
+/// row-major values and preserves the Java operator's distinct scale==1 path.
+pub fn fill_slope_samples(
+    base_samples: &[f64],
+    input_width: usize,
+    input_height: usize,
+    vertical_scaling: f32,
+    output: &mut [f64],
+) -> bool {
+    let Some(input_area) = input_width.checked_mul(input_height) else {
+        return false;
+    };
+    let Some(output_width) = input_width.checked_sub(2) else {
+        return false;
+    };
+    let Some(output_height) = input_height.checked_sub(2) else {
+        return false;
+    };
+    let Some(output_area) = output_width.checked_mul(output_height) else {
+        return false;
+    };
+    if input_width < 3
+        || input_height < 3
+        || input_area != base_samples.len()
+        || output_area != output.len()
+    {
+        return false;
+    }
+
+    let root_eight = 8.0_f64.sqrt();
+    let radians_to_degrees = 180.0_f64 / std::f64::consts::PI;
+    let scaled = vertical_scaling != 1.0_f32;
+    let scale = vertical_scaling as f64;
+    for y in 0..output_height {
+        let source_row = (y + 1) * input_width;
+        let north_row = source_row - input_width;
+        let south_row = source_row + input_width;
+        let output_row = y * output_width;
+        for x in 0..output_width {
+            let west = source_row + x;
+            let centre = west + 1;
+            let east = west + 2;
+            let horizontal = if scaled {
+                ((base_samples[east] / scale - base_samples[west] / scale) / 2.0).abs()
+            } else {
+                ((base_samples[east] / scale - base_samples[west]) / 2.0).abs()
+            };
+            let (diagonal1, vertical, diagonal2) = if scaled {
+                (
+                    ((base_samples[south_row + east - source_row] / scale
+                        - base_samples[north_row + west - source_row] / scale)
+                        / root_eight)
+                        .abs(),
+                    ((base_samples[south_row + centre - source_row] / scale
+                        - base_samples[north_row + centre - source_row] / scale)
+                        / 2.0)
+                        .abs(),
+                    ((base_samples[south_row + west - source_row] / scale
+                        - base_samples[north_row + east - source_row] / scale)
+                        / root_eight)
+                        .abs(),
+                )
+            } else {
+                (
+                    ((base_samples[south_row + east - source_row]
+                        - base_samples[north_row + west - source_row])
+                        / root_eight)
+                        .abs(),
+                    ((base_samples[south_row + centre - source_row]
+                        - base_samples[north_row + centre - source_row])
+                        / 2.0)
+                        .abs(),
+                    ((base_samples[south_row + west - source_row]
+                        - base_samples[north_row + east - source_row])
+                        / root_eight)
+                        .abs(),
+                )
+            };
+            let maximum = java_max(
+                java_max(horizontal, diagonal1),
+                java_max(vertical, diagonal2),
+            );
+            output[output_row + x] = maximum.tan() * radians_to_degrees;
+        }
+    }
+    true
+}
+
 #[derive(Clone, Copy, Debug)]
 enum ParsedNode {
     Constant(f64),
@@ -778,7 +867,8 @@ fn java_max(left: f64, right: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        fill_height_map_tree, fill_height_map_tree_points, HeightMapNode, HeightMapTreeError,
+        fill_height_map_tree, fill_height_map_tree_points, fill_slope_samples, HeightMapNode,
+        HeightMapTreeError,
     };
     use crate::noise_height_map::NoiseHeightMapBulk;
 
@@ -985,5 +1075,32 @@ mod tests {
             assert_eq!(minimum[0].to_bits(), min.to_bits());
             assert_eq!(maximum[0].to_bits(), max.to_bits());
         }
+    }
+
+    #[test]
+    fn slope_samples_match_the_java_scale_one_and_scaled_formulas() {
+        let base = [
+            0.0, 1.0, 2.0, 3.0, // north
+            0.0, 1.0, 2.0, 3.0, // centre
+            0.0, 1.0, 2.0, 3.0, // south
+        ];
+        let mut output = [0.0; 2];
+        for (scale, maximum) in [(1.0_f32, 1.0_f64), (2.0_f32, 0.5_f64)] {
+            assert!(fill_slope_samples(&base, 4, 3, scale, &mut output));
+            let expected = maximum.tan() * (180.0 / std::f64::consts::PI);
+            assert!(output
+                .iter()
+                .all(|value| value.to_bits() == expected.to_bits()));
+        }
+    }
+
+    #[test]
+    fn slope_samples_propagate_nan_and_reject_malformed_buffers() {
+        let base = [f64::NAN; 9];
+        let mut output = [0.0];
+        assert!(fill_slope_samples(&base, 3, 3, 1.0, &mut output));
+        assert!(output[0].is_nan());
+        assert!(!fill_slope_samples(&base, 3, 3, 1.0, &mut []));
+        assert!(!fill_slope_samples(&base, 2, 3, 1.0, &mut output));
     }
 }

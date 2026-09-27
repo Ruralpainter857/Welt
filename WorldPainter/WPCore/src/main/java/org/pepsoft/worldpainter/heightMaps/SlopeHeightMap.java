@@ -19,6 +19,7 @@ package org.pepsoft.worldpainter.heightMaps;
 
 import org.pepsoft.util.IconUtils;
 import org.pepsoft.worldpainter.HeightMap;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
 import javax.swing.*;
 import java.awt.*;
@@ -98,6 +99,10 @@ public class SlopeHeightMap extends DelegatingHeightMap {
                 || ((long) inputWidth * inputHeight != baseSamples.length)
                 || ((long) outputWidth * outputHeight != samples.length)) {
             return false;
+        }
+        if (NativeSlices.fillSlopeSamples(baseSamples, inputWidth, inputHeight,
+                verticalScaling, samples)) {
+            return true;
         }
         final boolean scaled = verticalScaling != 1.0f;
         for (int y = 0; y < outputHeight; y++) {

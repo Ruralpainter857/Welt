@@ -13,7 +13,8 @@ use welt_export::frost::{
     FrostUpdate,
 };
 use welt_gen::height_map_tree::{
-    fill_height_map_tree, fill_height_map_tree_points, HeightMapNode, MAX_PROGRAM_NODES,
+    fill_height_map_tree, fill_height_map_tree_points, fill_slope_samples, HeightMapNode,
+    MAX_PROGRAM_NODES,
 };
 use welt_gen::noise_height_map::NoiseHeightMapBulk;
 use welt_gen::resource_noise::fill_resource_materials_into;
@@ -823,6 +824,75 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 fill_height_map_tree_points(&nodes, &xs, &ys, output_values.as_mut_slice());
             drop(output_values);
             if result.is_err() {
+                return WeltError::IllegalArgument as jint;
+            }
+            WeltError::Ok as jint
+        })
+    }
+}
+
+/// Computes the slope operator from a sampled base grid with a one-cell halo.
+///
+/// # Safety
+/// Both arrays must be valid JNI references from the current JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFillSlopeSamples(
+    env: *mut JNIEnv,
+    _class: jclass,
+    input_width: jint,
+    input_height: jint,
+    vertical_scaling: f32,
+    base_samples: jobject,
+    output: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if base_samples.is_null() || output.is_null() || input_width < 3 || input_height < 3 {
+                return WeltError::IllegalArgument as jint;
+            }
+            let input_area = (input_width as usize).checked_mul(input_height as usize);
+            let output_area = ((input_width - 2) as usize).checked_mul((input_height - 2) as usize);
+            let (Some(input_area), Some(output_area)) = (input_area, output_area) else {
+                return WeltError::IllegalArgument as jint;
+            };
+            if input_area > 1_048_576 || output_area > 1_048_576 {
+                return WeltError::IllegalArgument as jint;
+            }
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            if get_array_length(env, base_samples) != input_area as jint
+                || get_array_length(env, output) != output_area as jint
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            type GetDoubleArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut f64);
+            let get_doubles: GetDoubleArrayRegion =
+                std::mem::transmute(function(env, GET_DOUBLE_ARRAY_REGION));
+            let mut input = vec![0.0_f64; input_area];
+            get_doubles(env, base_samples, 0, input_area as jint, input.as_mut_ptr());
+            let get_elements: unsafe extern "system" fn(*mut JNIEnv, jobject, *mut u8) -> *mut f64 =
+                std::mem::transmute(function(env, GET_DOUBLE_ARRAY_ELEMENTS));
+            let output_ptr = get_elements(env, output, std::ptr::null_mut());
+            if output_ptr.is_null() {
+                return WeltError::Internal as jint;
+            }
+            let mut output_values = DoubleArrayOutput {
+                env,
+                array: output,
+                values: output_ptr,
+                length: output_area,
+            };
+            let result = fill_slope_samples(
+                &input,
+                input_width as usize,
+                input_height as usize,
+                vertical_scaling,
+                output_values.as_mut_slice(),
+            );
+            drop(output_values);
+            if !result {
                 return WeltError::IllegalArgument as jint;
             }
             WeltError::Ok as jint

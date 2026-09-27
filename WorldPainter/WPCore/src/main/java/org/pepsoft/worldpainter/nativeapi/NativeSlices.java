@@ -17,6 +17,27 @@ public final class NativeSlices {
         throw new AssertionError("Non instanciable");
     }
 
+    /** Computes Java's slope operator in a bulk native pass, or leaves fallback to the caller. */
+    public static boolean fillSlopeSamples(final double[] baseSamples,
+                                           final int inputWidth, final int inputHeight,
+                                           final float verticalScaling, final double[] output) {
+        final long inputArea = (long) inputWidth * inputHeight;
+        final long outputArea = (long) (inputWidth - 2) * (inputHeight - 2);
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || inputWidth < 3 || inputHeight < 3 || inputArea > 1_048_576L
+                || outputArea <= 0 || outputArea > 1_048_576L
+                || baseSamples == null || output == null
+                || baseSamples.length != inputArea || output.length != outputArea) {
+            return false;
+        }
+        try {
+            return nativeFillSlopeSamples(inputWidth, inputHeight,
+                    verticalScaling, baseSamples, output) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     /** Applies two packed ColourUtils.multiply passes to an ARGB tile buffer in place. */
     public static boolean shadeColours(final int[] colours, final long[] packedAmounts) {
         if (!Native.isRenderEnabled() || !NativeLoader.areSlicesAvailable()
@@ -364,6 +385,10 @@ public final class NativeSlices {
                                                             double[] scales, int[] octaves,
                                                             long[] seeds, float[] xCoordinates,
                                                             float[] yCoordinates, double[] output);
+
+    private static native int nativeFillSlopeSamples(int inputWidth, int inputHeight,
+                                                      float verticalScaling,
+                                                      double[] baseSamples, double[] output);
 
     private static native int nativeShadeColours(int[] colours, long[] packedAmounts);
 
