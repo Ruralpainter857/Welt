@@ -66,6 +66,23 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
         apply(tile, x, y, true);
     }
 
+    /** Resolves the terrain for a fresh tile when its quantised height is already available. */
+    public final Terrain getTerrainForFreshTile(Tile tile, int x, int y, int quantisedHeight) {
+        final int height = clamp(minHeight, quantisedHeight, maxHeight - 1);
+        final Terrain terrain = getTerrain(x, y, height);
+        if (terrain == null) {
+            throw new NullPointerException("apply(" + tile + ", " + x + ", " + y
+                    + ": getTerrain() returned null for " + this);
+        }
+        return terrain;
+    }
+
+    /** Applies cached layers after terrain has been batch-initialised on a fresh tile. */
+    public final void applyLayersToFreshTile(Tile tile, int x, int y, int quantisedHeight) {
+        final int height = clamp(minHeight, quantisedHeight, maxHeight - 1);
+        applyLayers(tile, x, y, height, true);
+    }
+
     private void apply(Tile tile, int x, int y, boolean freshTile) {
         // height has been observed to be far out of bounds in the wild, so restrict it to min- and maxHeight:
         // TODO: determine why this happens and fix the root cause

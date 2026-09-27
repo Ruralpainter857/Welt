@@ -128,6 +128,55 @@ public final class SimpleThemeFreshTileParityTest {
         assertEquals("water notification", 1, changes[1]);
     }
 
+    @Test
+    public void bulkTerrainInitializationCoalescesTerrainEvent() {
+        final Tile tile = new Tile(0, 0, 0, 256);
+        final int[] terrainChanges = new int[1];
+        tile.addListener(new Tile.Listener() {
+            @Override
+            public void heightMapChanged(Tile changedTile) {
+                throw new AssertionError("height should not change");
+            }
+
+            @Override
+            public void terrainChanged(Tile changedTile) {
+                terrainChanges[0]++;
+            }
+
+            @Override
+            public void waterLevelChanged(Tile changedTile) {
+                throw new AssertionError("water should not change");
+            }
+
+            @Override
+            public void layerDataChanged(Tile changedTile, Set<Layer> changedLayers) {
+                throw new AssertionError("layers should not change");
+            }
+
+            @Override
+            public void allBitLayerDataChanged(Tile changedTile) {
+                throw new AssertionError("layers should not change");
+            }
+
+            @Override
+            public void allNonBitlayerDataChanged(Tile changedTile) {
+                throw new AssertionError("layers should not change");
+            }
+
+            @Override
+            public void seedsChanged(Tile changedTile) {
+                throw new AssertionError("seeds should not change");
+            }
+        });
+        final byte[] terrainOrdinals = new byte[Constants.TILE_SIZE * Constants.TILE_SIZE];
+        terrainOrdinals[5] = (byte) Terrain.BEACHES.ordinal();
+        tile.inhibitEvents();
+        tile.initializeTerrainOrdinals(terrainOrdinals);
+        tile.releaseEvents();
+        assertEquals("coalesced terrain notification", 1, terrainChanges[0]);
+        assertEquals("batch terrain value", Terrain.BEACHES, tile.getTerrain(5, 0));
+    }
+
     private static Tile newTileWithHeights() {
         final Tile tile = new Tile(0, 0, 0, 256);
         tile.inhibitEvents();

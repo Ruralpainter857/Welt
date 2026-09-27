@@ -148,12 +148,18 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                         heights[x | (y << TILE_SIZE_BITS)] = clamp(minHeight, (float) rawHeight, maxZ);
                     }
                 }
-                tile.initializeHeightAndWaterLevels(heights, myWaterHeight);
+                final int[] intHeights = tile.initializeHeightAndWaterLevels(heights, myWaterHeight);
+                final SimpleTheme simpleTheme = (SimpleTheme) theme;
+                final byte[] terrainOrdinals = new byte[TILE_SIZE * TILE_SIZE];
                 for (int x = 0; x < TILE_SIZE; x++) {
                     for (int y = 0; y < TILE_SIZE; y++) {
-                        ((SimpleTheme) theme).applyToFreshTile(tile, x, y);
+                        final int index = x | (y << TILE_SIZE_BITS);
+                        terrainOrdinals[index] = (byte) simpleTheme
+                                .getTerrainForFreshTile(tile, x, y, intHeights[index]).ordinal();
+                        simpleTheme.applyLayersToFreshTile(tile, x, y, intHeights[index]);
                     }
                 }
+                tile.initializeTerrainOrdinals(terrainOrdinals);
                 return tile;
             }
             for (int x = 0; x < TILE_SIZE; x++) {

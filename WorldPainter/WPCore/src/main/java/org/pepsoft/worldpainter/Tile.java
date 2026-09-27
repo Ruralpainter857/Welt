@@ -226,34 +226,62 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
      * normal copy-on-write buffers and coalesces the same deferred change
      * notifications that individual setters would produce.
      */
-    void initializeHeightAndWaterLevels(float[] heights, int waterLevel) {
+    int[] initializeHeightAndWaterLevels(float[] heights, int waterLevel) {
         if (eventInhibitionCounter == 0) {
             throw new IllegalStateException("Bulk tile initialisation requires inhibited events");
         }
         if ((heights == null) || (heights.length != TILE_SIZE * TILE_SIZE)) {
             throw new IllegalArgumentException("Expected one height for every tile cell");
         }
+        final int[] intHeights = new int[heights.length];
         synchronized (this) {
             if (tall) {
                 ensureWriteable(TALL_HEIGHTMAP);
                 ensureWriteable(TALL_WATERLEVEL);
                 final short rawWaterLevel = (short) (waterLevel - minHeight);
                 for (int i = 0; i < heights.length; i++) {
-                    tallHeightMap[i] = (int) ((heights[i] - minHeight) * 256);
+                    final int rawHeight = (int) ((heights[i] - minHeight) * 256);
+                    tallHeightMap[i] = rawHeight;
                     tallWaterLevel[i] = rawWaterLevel;
+                    intHeights[i] = Math.round(rawHeight / 256f + minHeight);
                 }
             } else {
                 ensureWriteable(HEIGHTMAP);
                 ensureWriteable(WATERLEVEL);
                 final byte rawWaterLevel = (byte) (waterLevel - minHeight);
                 for (int i = 0; i < heights.length; i++) {
-                    heightMap[i] = (short) ((heights[i] - minHeight) * 256);
+                    final short rawHeight = (short) ((heights[i] - minHeight) * 256);
+                    heightMap[i] = rawHeight;
                     this.waterLevel[i] = rawWaterLevel;
+                    intHeights[i] = Math.round((rawHeight & 0xFFFF) / 256f + minHeight);
                 }
             }
         }
         heightMapChanged();
         waterLevelChanged();
+        return intHeights;
+    }
+
+    /** Batch terrain writes for a fresh, event-inhibited tile. */
+    void initializeTerrainOrdinals(byte[] terrainOrdinals) {
+        if (eventInhibitionCounter == 0) {
+            throw new IllegalStateException("Bulk terrain initialisation requires inhibited events");
+        }
+        if ((terrainOrdinals == null) || (terrainOrdinals.length != TILE_SIZE * TILE_SIZE)) {
+            throw new IllegalArgumentException("Expected one terrain ordinal for every tile cell");
+        }
+        boolean hasNonDefaultTerrain = false;
+        for (byte ordinal : terrainOrdinals) {
+            hasNonDefaultTerrain |= ordinal != 0;
+        }
+        if (!hasNonDefaultTerrain) {
+            return;
+        }
+        synchronized (this) {
+            ensureWriteable(TERRAIN);
+            System.arraycopy(terrainOrdinals, 0, terrain, 0, terrainOrdinals.length);
+        }
+        terrainChanged();
     }
 
     /**
