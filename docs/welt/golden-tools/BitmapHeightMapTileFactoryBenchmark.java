@@ -19,14 +19,15 @@ public final class BitmapHeightMapTileFactoryBenchmark {
         final int tiles = args.length > 0 ? Integer.parseInt(args[0]) : 48;
         final int rounds = args.length > 1 ? Integer.parseInt(args[1]) : 9;
         final String scenario = args.length > 2 ? args[2].toLowerCase() : "bitmap";
-        final boolean bicubic = "bicubic".equals(scenario);
+        final boolean bicubicRepeat = "bicubic-repeat".equals(scenario);
+        final boolean bicubic = "bicubic".equals(scenario) || bicubicRepeat;
         final boolean edge = "edge".equals(scenario);
         final boolean repeat = "repeat".equals(scenario);
-        final int imageWidth = edge ? 515 : repeat ? 96 : 512;
-        final int imageHeight = edge ? 513 : repeat ? 73 : 512;
+        final int imageWidth = edge ? 515 : (repeat || bicubicRepeat) ? 96 : 512;
+        final int imageHeight = edge ? 513 : (repeat || bicubicRepeat) ? 73 : 512;
         final BufferedImage image = createImage(imageWidth, imageHeight);
-        final HeightMapTileFactory legacy = factory(image, true, bicubic, repeat);
-        final HeightMapTileFactory batch = factory(image, false, bicubic, repeat);
+        final HeightMapTileFactory legacy = factory(image, true, bicubic, repeat, bicubicRepeat);
+        final HeightMapTileFactory batch = factory(image, false, bicubic, repeat, bicubicRepeat);
         final double[] legacySamples = new double[rounds];
         final double[] batchSamples = new double[rounds];
         for (int warmup = 0; warmup < 10; warmup++) {
@@ -60,10 +61,12 @@ public final class BitmapHeightMapTileFactoryBenchmark {
         return image;
     }
 
-    private static HeightMapTileFactory factory(BufferedImage image, boolean legacy, boolean bicubic, boolean repeat) {
+    private static HeightMapTileFactory factory(BufferedImage image, boolean legacy,
+                                                boolean bicubic, boolean repeat, boolean bicubicRepeat) {
         final BitmapHeightMap bitmap = BitmapHeightMap.build()
                 .withImage(image).withChannel(0).withRepeat(repeat).now();
-        final org.pepsoft.worldpainter.HeightMap heightMap = bicubic ? new BicubicHeightMap(bitmap) : bitmap;
+        final org.pepsoft.worldpainter.HeightMap heightMap = bicubic
+                ? new BicubicHeightMap(bitmap, bicubicRepeat) : bitmap;
         final SimpleTheme theme = SimpleTheme.createDefault(Terrain.GRASS, 0, 256, 62, false, true);
         final SimpleTheme selectedTheme = legacy
                 ? new SimpleTheme(theme.getSeed(), theme.getWaterHeight(), theme.getTerrainRanges(),

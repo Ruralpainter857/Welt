@@ -613,6 +613,51 @@ public final class SimpleThemeFreshTileParityTest {
     }
 
     @Test
+    public void repeatingBicubicHeightMapBulkRasterMatchesPerCellSampling() {
+        for (final int[] imageTypeAndChannel : new int[][] {
+                {BufferedImage.TYPE_BYTE_GRAY, 0},
+                {BufferedImage.TYPE_USHORT_GRAY, 0},
+                {BufferedImage.TYPE_3BYTE_BGR, 2}}) {
+            for (final int[] dimensions : new int[][] {{260, 259}, {64, 73}}) {
+                final BufferedImage image = new BufferedImage(dimensions[0], dimensions[1], imageTypeAndChannel[0]);
+                for (int x = 0; x < image.getWidth(); x++) {
+                    for (int y = 0; y < image.getHeight(); y++) {
+                        final int red = (x * 17 + y * 3) & 0xff;
+                        final int green = (x * 5 + y * 11) & 0xff;
+                        final int blue = (x * 7 + y * 13) & 0xff;
+                        image.setRGB(x, y, 0xff000000 | (red << 16) | (green << 8) | blue);
+                    }
+                }
+                final BitmapHeightMap legacyBitmap = BitmapHeightMap.build()
+                        .withImage(image).withChannel(imageTypeAndChannel[1]).now();
+                final BitmapHeightMap batchBitmap = BitmapHeightMap.build()
+                        .withImage(image).withChannel(imageTypeAndChannel[1]).now();
+                final HeightMapTileFactory legacyFactory = new HeightMapTileFactory(42L,
+                        new BicubicHeightMap(legacyBitmap, true), 0, 256, false, createSimpleTheme(true));
+                final HeightMapTileFactory batchFactory = new HeightMapTileFactory(42L,
+                        new BicubicHeightMap(batchBitmap, true), 0, 256, false, createSimpleTheme(false));
+                for (final int[] tile : new int[][] {
+                        {0, 0}, {1, 1}, {-1, 0}, {0, -1}, {-1, -1}, {2, -2}}) {
+                    final Tile legacy = legacyFactory.createTile(tile[0], tile[1]);
+                    final Tile batch = batchFactory.createTile(tile[0], tile[1]);
+                    for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                        for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                            assertEquals("height for image type " + imageTypeAndChannel[0]
+                                            + " at " + x + ',' + y,
+                                    Float.floatToRawIntBits(legacy.getHeight(x, y)),
+                                    Float.floatToRawIntBits(batch.getHeight(x, y)));
+                            assertEquals("water at " + x + ',' + y,
+                                    legacy.getWaterLevel(x, y), batch.getWaterLevel(x, y));
+                            assertEquals("terrain at " + x + ',' + y,
+                                    legacy.getTerrain(x, y), batch.getTerrain(x, y));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     public void freshTileApplicationMatchesExistingPath() {
         final SimpleTheme theme = SimpleTheme.createDefault(Terrain.GRASS, 0, 256, 62, true, true);
         final Tile ordinary = newTileWithHeights();

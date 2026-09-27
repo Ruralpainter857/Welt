@@ -87,6 +87,17 @@ public final class BitmapHeightMap extends AbstractHeightMap {
     /** Bulk-reads a rectangle using the same clipping and repeat rules as {@link #getHeight(int, int)}. */
     public boolean fillSamples(int x, int y, int sampleWidth, int sampleHeight,
                                double[] samples, double[] rowSamples) {
+        return fillSamples(x, y, sampleWidth, sampleHeight, samples, rowSamples, repeat);
+    }
+
+    /** Bulk-reads a rectangle with wrapping even when this bitmap itself is non-repeating. */
+    public boolean fillRepeatedSamples(int x, int y, int sampleWidth, int sampleHeight,
+                                       double[] samples, double[] rowSamples) {
+        return fillSamples(x, y, sampleWidth, sampleHeight, samples, rowSamples, true);
+    }
+
+    private boolean fillSamples(int x, int y, int sampleWidth, int sampleHeight,
+                                double[] samples, double[] rowSamples, boolean repeatCoordinates) {
         if ((sampleWidth <= 0) || (sampleHeight <= 0) || (samples == null)
                 || ((long) sampleWidth * sampleHeight != samples.length)) {
             return false;
@@ -103,7 +114,7 @@ public final class BitmapHeightMap extends AbstractHeightMap {
         for (int row = 0; row < sampleHeight; row++) {
             final int worldY = y + row;
             final int sourceY;
-            if (repeat) {
+            if (repeatCoordinates) {
                 sourceY = MathUtils.mod(worldY, height);
             } else {
                 if ((worldY < 0) || (worldY >= height)) {
@@ -112,7 +123,7 @@ public final class BitmapHeightMap extends AbstractHeightMap {
                 sourceY = worldY;
             }
             final int outputRow = row * sampleWidth;
-            if (repeat && (width <= sampleWidth)) {
+            if (repeatCoordinates && (width <= sampleWidth)) {
                 raster.getSamples(0, sourceY, width, 1, channel, rowSamples);
                 for (int column = 0; column < sampleWidth; column++) {
                     samples[outputRow + column] = rowSamples[MathUtils.mod(x + column, width)];
@@ -124,7 +135,7 @@ public final class BitmapHeightMap extends AbstractHeightMap {
                 final int worldX = x + column;
                 final int sourceX;
                 final int runLength;
-                if (repeat) {
+                if (repeatCoordinates) {
                     sourceX = MathUtils.mod(worldX, width);
                     final int beforeOverflow = (int) Math.min(Integer.MAX_VALUE - (long) worldX + 1L,
                             Integer.MAX_VALUE);

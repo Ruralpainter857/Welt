@@ -252,8 +252,12 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             final BitmapHeightMap bitmapHeightMap = getBulkReadableBitmapBase(heightMap);
             if (nativeHeights == null && batchFreshSimpleTheme && (bitmapHeightMap != null)) {
                 final double[] output = buffers.nativeHeights();
-                if (bitmapHeightMap.fillSamples(
-                        worldTileX, worldTileY, TILE_SIZE, TILE_SIZE, output, buffers.bitmapRowSamples)) {
+                final boolean filled = isRepeatingBicubicHeightMap(heightMap)
+                        ? bitmapHeightMap.fillRepeatedSamples(worldTileX, worldTileY,
+                                TILE_SIZE, TILE_SIZE, output, buffers.bitmapRowSamples)
+                        : bitmapHeightMap.fillSamples(worldTileX, worldTileY,
+                                TILE_SIZE, TILE_SIZE, output, buffers.bitmapRowSamples);
+                if (filled) {
                     nativeHeights = output;
                     completeHeightMapValuesAvailable = true;
                 }
@@ -417,19 +421,23 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         return getBulkReadableBitmapBase(heightMap) != null;
     }
 
-    /** Integer sampling of non-repeating BicubicHeightMap delegates directly to its bitmap child. */
+    /** Integer sampling of BicubicHeightMap delegates directly to its bitmap child, with optional wrapping. */
     private static BitmapHeightMap getBulkReadableBitmapBase(HeightMap heightMap) {
         if (heightMap.getClass() == BitmapHeightMap.class) {
             return (BitmapHeightMap) heightMap;
         }
-        if ((heightMap.getClass() == BicubicHeightMap.class)
-                && !((BicubicHeightMap) heightMap).isRepeat()) {
+        if (heightMap.getClass() == BicubicHeightMap.class) {
             final HeightMap base = ((BicubicHeightMap) heightMap).getHeightMap(0);
             if (base.getClass() == BitmapHeightMap.class) {
                 return (BitmapHeightMap) base;
             }
         }
         return null;
+    }
+
+    private static boolean isRepeatingBicubicHeightMap(HeightMap heightMap) {
+        return (heightMap.getClass() == BicubicHeightMap.class)
+                && ((BicubicHeightMap) heightMap).isRepeat();
     }
 
     /** Returns only exact, translation-only wrappers with a batch-safe child. */
