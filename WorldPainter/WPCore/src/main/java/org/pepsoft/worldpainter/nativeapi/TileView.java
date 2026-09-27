@@ -38,10 +38,11 @@ import java.util.Objects;
  * fallback silencieux). Le marshalling effectif tableaux Java → {@code
  * WpTileView} appartient aux exports (jni.rs), pas à cette classe.</p>
  *
- * <p>Phase 0 (G1) : construction par pixel via les getters publics de
- * {@code Tile} (les buffers bruts de {@code Tile} sont {@code protected} et
- * les zones sont gelées). {@link #ofArrays} est le point d'accroche du chemin
- * bulk pour l'intégration snapshot — cf. le rapport G1.</p>
+ * <p>La construction générique {@link #of(Tile)} passe par les getters publics
+ * de {@code Tile}. Pour le chemin optimisé depuis un snapshot immuable, utiliser
+ * {@link org.pepsoft.worldpainter.TileViewSnapshotAdapter#of} : il assemble la
+ * vue depuis les buffers en une passe, puis {@link #ofArrays} en fait une copie
+ * défensive.</p>
  */
 public final class TileView {
     /** Côté d'une tuile, en pixels (miroir de {@code Constants.TILE_SIZE}). */
@@ -111,6 +112,10 @@ public final class TileView {
      */
     public static TileView of(Tile tile) {
         Objects.requireNonNull(tile, "tile");
+        if (tile instanceof org.pepsoft.worldpainter.TileSnapshot) {
+            return org.pepsoft.worldpainter.TileViewSnapshotAdapter.of(
+                (org.pepsoft.worldpainter.TileSnapshot) tile);
+        }
         final int minHeight = tile.getMinHeight();
         final int maxHeight = tile.getMaxHeight();
         // Même règle que le constructeur de Tile : (maxHeight - minHeight) > 256 => tall.
