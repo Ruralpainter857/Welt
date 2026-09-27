@@ -8,6 +8,7 @@ import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeTrue;
 
 /** Checks the native Minecraft long-array packer against the original Java path. */
@@ -43,6 +44,80 @@ public final class PackedArrayCubeNativeParityTest {
             } else {
                 System.setProperty(Native.EXPORT_KEY, previousFlag);
             }
+        }
+    }
+
+    @Test
+    public void compactPaletteStorageTracksMutationsAndSerialization() {
+        final String previousView = System.getProperty("welt.packedArrayCube.compactPaletteStorage");
+        try {
+            System.setProperty("welt.packedArrayCube.compactPaletteStorage", "false");
+            final PackedArrayCube<String> source = new PackedArrayCube<>(16, 4, false, String.class);
+            for (int i = 0; i < 4096; i++) {
+                source.setValue(i & 15, (i >>> 4) & 15, (i >>> 8) & 15, "state-" + (i % 7));
+            }
+            final PackedArrayCube<String>.PackedData packed = source.pack();
+
+            System.setProperty("welt.packedArrayCube.compactPaletteStorage", "true");
+            final PackedArrayCube<String> indexed = new PackedArrayCube<>(16, packed.data,
+                    packed.palette, 4, false, String.class);
+            assertTrue(indexed.hasPaletteIndexStorage());
+            assertIndexesMatchValues(indexed);
+
+            indexed.setValue(3, 4, 5, "new-state");
+            assertIndexesMatchValues(indexed);
+            indexed.fill("filled-state");
+            assertIndexesMatchValues(indexed);
+            indexed.setValue(15, 15, 15, null);
+            assertIndexesMatchValues(indexed);
+
+            System.setProperty("welt.packedArrayCube.compactPaletteStorage", "false");
+            final PackedArrayCube<String> reference = new PackedArrayCube<>(16, 4, false, String.class);
+            for (int i = 0; i < 4096; i++) {
+                reference.setValue(i & 15, (i >>> 4) & 15, (i >>> 8) & 15,
+                        indexed.getValueAtIndex(i));
+            }
+            final PackedArrayCube<String>.PackedData expected = reference.pack();
+            final PackedArrayCube<String>.PackedData actual = indexed.pack();
+            assertArrayEquals(expected.palette, actual.palette);
+            assertArrayEquals(expected.data, actual.data);
+        } finally {
+            if (previousView == null) {
+                System.clearProperty("welt.packedArrayCube.compactPaletteStorage");
+            } else {
+                System.setProperty("welt.packedArrayCube.compactPaletteStorage", previousView);
+            }
+        }
+    }
+
+    @Test
+    public void compactStoragePreservesPaletteObjectIdentity() {
+        final String previousFlag = System.getProperty("welt.packedArrayCube.compactPaletteStorage");
+        try {
+            System.setProperty("welt.packedArrayCube.compactPaletteStorage", "true");
+            final String first = new String("equal");
+            final String second = new String("equal");
+            final long[] data = new long[256];
+            data[0] = 0x10L;
+            final PackedArrayCube<String> cube = new PackedArrayCube<>(16, data,
+                    new String[]{first, second}, 4, false, String.class);
+
+            assertTrue(cube.getValueAtIndex(0) == first);
+            assertTrue(cube.getValueAtIndex(1) == second);
+        } finally {
+            if (previousFlag == null) {
+                System.clearProperty("welt.packedArrayCube.compactPaletteStorage");
+            } else {
+                System.setProperty("welt.packedArrayCube.compactPaletteStorage", previousFlag);
+            }
+        }
+    }
+
+    private static void assertIndexesMatchValues(PackedArrayCube<String> cube) {
+        final int[] indexes = new int[4096];
+        cube.copyPaletteIndexesTo(indexes, 0);
+        for (int i = 0; i < indexes.length; i++) {
+            assertEquals(cube.getValueAtIndex(i), cube.getPaletteValue(indexes[i]));
         }
     }
 

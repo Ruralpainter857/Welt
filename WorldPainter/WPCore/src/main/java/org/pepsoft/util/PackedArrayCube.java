@@ -28,7 +28,11 @@ public class PackedArrayCube<T> {
         this.type = type;
         bitsPerCoordinate = (int) Math.ceil(Math.log(size) / Math.log(2));
         arraySize = size * size * size;
-        values = (T[]) Array.newInstance(type, arraySize);
+        paletteIndexStorage = Boolean.getBoolean("welt.packedArrayCube.compactPaletteStorage");
+        values = paletteIndexStorage ? null : (T[]) Array.newInstance(type, arraySize);
+        if (paletteIndexStorage) {
+            buildEmptyPaletteIndexView();
+        }
     }
 
     /**
@@ -56,6 +60,12 @@ public class PackedArrayCube<T> {
         final int wordSize = Math.max(minimumWordSize, (int) Math.ceil(Math.log(palette.length) / Math.log(2)));
         final int expectedPackedDataArrayLengthInBytes = wordSize * arraySize / 8;
         final int dataArrayLengthInBytes = data.length * 8;
+        if (paletteIndexStorage) {
+            final int[] unpacked = unpackIndexes(data, wordSize, palette.length,
+                    expectedPackedDataArrayLengthInBytes == dataArrayLengthInBytes);
+            buildPaletteIndexView(palette, unpacked);
+            return;
+        }
         // The per-long Java loop is faster than JNI for non-straddling arrays on the measured fixture.
         if ((wordSize == 4 || dataArrayLengthInBytes == expectedPackedDataArrayLengthInBytes)
                 && Native.isExportEnabled() && NativeLoader.areSlicesAvailable()) {
@@ -118,20 +128,108 @@ public class PackedArrayCube<T> {
     }
 
     public T getValue(int x, int y, int z) {
-        return values[offset(x, y, z)];
+        return getValueAtIndex(offset(x, y, z));
+    }
+
+    /** Reads the x-fast linear storage without creating a coordinate tuple. */
+    public T getValueAtIndex(int index) {
+        if ((index < 0) || (index >= arraySize)) {
+            throw new IndexOutOfBoundsException("index " + index);
+        }
+        return (values != null) ? values[index] : indexedPalette[paletteIndexes[index]];
+    }
+
+    /** Whether this cube stores palette indexes as its primary value representation. */
+    public boolean hasPaletteIndexStorage() {
+        return paletteIndexes != null;
+    }
+
+    /** Copies the cube's current palette indices into caller-owned storage. */
+    public void copyPaletteIndexesTo(int[] target, int targetOffset) {
+        if (paletteIndexes == null) {
+            throw new IllegalStateException("This cube has no palette-index view");
+        }
+        if ((targetOffset < 0) || (targetOffset > target.length - paletteIndexes.length)) {
+            throw new IndexOutOfBoundsException("targetOffset " + targetOffset);
+        }
+        System.arraycopy(paletteIndexes, 0, target, targetOffset, paletteIndexes.length);
+    }
+
+    public int getPaletteIndexCount() {
+        return (indexedPalette != null) ? indexedPalette.length : 0;
+    }
+
+    public T getPaletteValue(int index) {
+        if ((indexedPalette == null) || (index < 0) || (index >= indexedPalette.length)) {
+            throw new IndexOutOfBoundsException("palette index " + index);
+        }
+        return indexedPalette[index];
+    }
+
+    private void buildPaletteIndexView(T[] sourcePalette, int[] sourceIndexes) {
+        indexedPalette = Arrays.copyOf(sourcePalette, sourcePalette.length);
+        indexedPaletteLookup = new IdentityHashMap<>(sourcePalette.length * 2);
+        for (int i = 0; i < sourcePalette.length; i++) {
+            indexedPaletteLookup.putIfAbsent(sourcePalette[i], i);
+        }
+        paletteIndexes = sourceIndexes;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void buildEmptyPaletteIndexView() {
+        indexedPalette = (T[]) Array.newInstance(type, 1);
+        indexedPaletteLookup = new IdentityHashMap<>();
+        indexedPaletteLookup.put(null, 0);
+        paletteIndexes = new int[arraySize];
+    }
+
+    private int paletteIndexFor(T value) {
+        Integer index = indexedPaletteLookup.get(value);
+        if (index == null) {
+            index = indexedPalette.length;
+            indexedPalette = Arrays.copyOf(indexedPalette, index + 1);
+            indexedPalette[index] = value;
+            indexedPaletteLookup.put(value, index);
+        }
+        return index;
     }
 
     public void setValue(int x, int y, int z, T value) {
-        values[offset(x, y, z)] = value;
+        final int index = offset(x, y, z);
+        if (values != null) {
+            values[index] = value;
+        }
+        if (paletteIndexes != null) {
+            paletteIndexes[index] = paletteIndexFor(value);
+        }
+    }
+
+    /** Copies the cube's linear x-fast storage to caller-owned scratch space. */
+    public void copyValuesTo(T[] target, int targetOffset) {
+        if ((targetOffset < 0) || (targetOffset > target.length - arraySize)) {
+            throw new IndexOutOfBoundsException("targetOffset " + targetOffset);
+        }
+        if (values != null) {
+            System.arraycopy(values, 0, target, targetOffset, arraySize);
+        } else {
+            for (int i = 0; i < arraySize; i++) {
+                target[targetOffset + i] = indexedPalette[paletteIndexes[i]];
+            }
+        }
     }
 
     public void fill(T value) {
-        Arrays.fill(values, value);
+        if (values != null) {
+            Arrays.fill(values, value);
+        }
+        if (paletteIndexes != null) {
+            Arrays.fill(paletteIndexes, paletteIndexFor(value));
+        }
     }
 
     public boolean isEmpty() {
         for (int i = 0; i < arraySize; i++) {
-            if (values[i] != null) {
+            if (getValueAtIndex(i) != null) {
                 return false;
             }
         }
@@ -157,6 +255,9 @@ public class PackedArrayCube<T> {
      */
     @SuppressWarnings("unchecked") // Guaranteed by Java library
     public PackedData pack(T nullSubstitute) {
+        if (paletteIndexStorage) {
+            return packFromPaletteIndexes(nullSubstitute);
+        }
         // Create the palette. We have to do this first, because otherwise we don't know how many bits the indices will
         // be and therefore how big to make the data array
         final Map<T, Integer> reversePalette = new HashMap<>();
@@ -262,6 +363,110 @@ public class PackedArrayCube<T> {
         return x | ((y | (z << bitsPerCoordinate)) << bitsPerCoordinate);
     }
 
+    @SuppressWarnings("unchecked") // The palette uses this cube's declared runtime component type.
+    private PackedData packFromPaletteIndexes(T nullSubstitute) {
+        final Map<T, Integer> reverse = new HashMap<>(indexedPalette.length * 2);
+        final List<T> palette = new ArrayList<>(indexedPalette.length);
+        final int[] remap = new int[indexedPalette.length];
+        Arrays.fill(remap, -1);
+        final int[] packedIndexes = new int[arraySize];
+        for (int i = 0; i < arraySize; i++) {
+            final int sourceIndex = paletteIndexes[i];
+            int packedIndex = remap[sourceIndex];
+            if (packedIndex < 0) {
+                T value = indexedPalette[sourceIndex];
+                if (value == null) {
+                    value = nullSubstitute;
+                }
+                Integer existing = reverse.get(value);
+                if (existing == null) {
+                    existing = palette.size();
+                    reverse.put(value, existing);
+                    palette.add(value);
+                }
+                packedIndex = existing;
+                remap[sourceIndex] = packedIndex;
+            }
+            packedIndexes[i] = packedIndex;
+        }
+        final int bits = Math.max((int) Math.ceil(Math.log(palette.size()) / Math.log(2)), minimumWordSize);
+        final T[] packedPalette = palette.toArray((T[]) Array.newInstance(type, palette.size()));
+        if (Native.isExportEnabled() && NativeLoader.areSlicesAvailable()) {
+            final long[] nativeData = NativeSlices.packArrayCube(packedIndexes, bits, straddleLongs);
+            if (nativeData != null) {
+                return new PackedData(nativeData, packedPalette);
+            }
+        }
+        final long[] data;
+        if ((bits == 4) && ((arraySize % 16) == 0)) {
+            data = new long[arraySize >> 4];
+            for (int i = 0; i < arraySize; i += 16) {
+                long word = 0;
+                for (int j = 0; j < 16; j++) {
+                    word |= (long) packedIndexes[i + j] << (j * 4);
+                }
+                data[i >> 4] = word;
+            }
+        } else {
+            final BitSet bitsOut = new BitSet(arraySize * bits);
+            for (int i = 0; i < arraySize; i++) {
+                final int offset = straddleLongs ? i * bits : (i / (64 / bits)) * 64 + (i % (64 / bits)) * bits;
+                for (int b = 0; b < bits; b++) {
+                    if ((packedIndexes[i] & (1 << b)) != 0) {
+                        bitsOut.set(offset + b);
+                    }
+                }
+            }
+            final long[] raw = bitsOut.toLongArray();
+            final int expected;
+            if (straddleLongs) {
+                expected = 64 * bits;
+            } else {
+                final int wordsPerLong = 64 / bits;
+                expected = arraySize / wordsPerLong + ((arraySize % wordsPerLong == 0) ? 0 : 1);
+            }
+            data = Arrays.copyOf(raw, expected);
+        }
+        return new PackedData(data, packedPalette);
+    }
+
+    private int[] unpackIndexes(long[] data, int bits, int paletteLength, boolean straddles) {
+        if ((bits == 4 || straddles) && Native.isExportEnabled() && NativeLoader.areSlicesAvailable()) {
+            final int[] nativeIndexes = NativeSlices.unpackArrayCube(data, arraySize, bits, paletteLength);
+            if (nativeIndexes != null) {
+                return nativeIndexes;
+            }
+        }
+        final int[] result = new int[arraySize];
+        if (bits == 4) {
+            for (int i = 0; i < arraySize; i += 16) {
+                final long word = data[i >> 4];
+                for (int j = 0; j < 16; j++) {
+                    result[i + j] = (int) ((word >>> (j * 4)) & 0xf);
+                }
+            }
+        } else if (!straddles) {
+            final int perLong = 64 / bits;
+            final long mask = (1L << bits) - 1L;
+            for (int i = 0; i < arraySize; i++) {
+                result[i] = (int) ((data[i / perLong] >>> ((i % perLong) * bits)) & mask);
+            }
+        } else {
+            final BitSet source = BitSet.valueOf(data);
+            for (int i = 0; i < arraySize; i++) {
+                final int bitOffset = i * bits;
+                int index = 0;
+                for (int b = 0; b < bits; b++) {
+                    if (source.get(bitOffset + b)) {
+                        index |= 1 << b;
+                    }
+                }
+                result[i] = index;
+            }
+        }
+        return result;
+    }
+
     private T substituteNull(T value, T nullSubstitute) {
         return (value == null) ? nullSubstitute : value;
     }
@@ -270,6 +475,10 @@ public class PackedArrayCube<T> {
     private final int arraySize, minimumWordSize, bitsPerCoordinate;
     private final boolean straddleLongs;
     private final T[] values;
+    private final boolean paletteIndexStorage;
+    private int[] paletteIndexes;
+    private T[] indexedPalette;
+    private Map<T, Integer> indexedPaletteLookup;
 
     public class PackedData {
         public PackedData(long[] data, T[] palette) {
