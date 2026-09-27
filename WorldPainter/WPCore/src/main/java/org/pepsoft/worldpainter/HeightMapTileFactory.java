@@ -15,6 +15,7 @@ import org.pepsoft.worldpainter.heightMaps.MaximisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MandelbrotHeightMap;
 import org.pepsoft.worldpainter.heightMaps.BandedHeightMap;
 import org.pepsoft.worldpainter.heightMaps.NinePatchHeightMap;
+import org.pepsoft.worldpainter.heightMaps.SlopeHeightMap;
 import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.ShelvingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.BitmapHeightMap;
@@ -158,6 +159,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             final boolean freshSimpleTheme = (theme.getClass() == SimpleTheme.class) && !floodWithLava;
             final boolean batchFreshSimpleTheme = freshSimpleTheme
                     && (isBatchSafeHeightMap(heightMap) || isNativeBandedHeightMap(heightMap)
+                    || isNativeSlopeHeightMap(heightMap)
                     || (translatedHeightMap != null)
                     || isBulkReadableBitmapHeightMap(heightMap)
                     || isNativeShelvingHeightMap(heightMap, worldTileX, worldTileY));
@@ -176,6 +178,30 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                         buffers.heightMapSeeds, output)) {
                     nativeHeights = output;
                     completeHeightMapValuesAvailable = true;
+                }
+            }
+            if (nativeHeights == null && batchFreshSimpleTheme && Native.isGenEnabled()
+                    && (heightMap.getClass() == SlopeHeightMap.class)) {
+                final SlopeHeightMap slopeHeightMap = (SlopeHeightMap) heightMap;
+                final HeightMap baseHeightMap = slopeHeightMap.getBaseHeightMap();
+                if (!baseHeightMap.isConstant()
+                        && areSlopeCoordinatesExactlyRepresentableAsFloats(worldTileX, worldTileY)
+                        && buffers.prepareHeightMapProgram(baseHeightMap)
+                        && (buffers.heightMapNoiseCount > 0 || buffers.heightMapMandelbrotCount > 0
+                        || buffers.heightMapBandedCount > 0 || buffers.heightMapNinePatchCount > 0)) {
+                    final double[] baseSamples = buffers.nativeSlopeBaseHeights();
+                    if (NativeSlices.fillHeightMapTree(worldTileX - 1, worldTileY - 1,
+                            TILE_SIZE + 2, TILE_SIZE + 2, buffers.heightMapNodeCount,
+                            buffers.heightMapOpcodes, buffers.heightMapValues,
+                            buffers.heightMapScales, buffers.heightMapOctaves,
+                            buffers.heightMapSeeds, baseSamples)) {
+                        final double[] output = buffers.nativeHeights();
+                        if (slopeHeightMap.fillSamples(baseSamples, TILE_SIZE + 2,
+                                TILE_SIZE + 2, output)) {
+                            nativeHeights = output;
+                            completeHeightMapValuesAvailable = true;
+                        }
+                    }
                 }
             }
             final BitmapHeightMap bitmapHeightMap = getBulkReadableBitmapBase(heightMap);
@@ -284,6 +310,20 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         return false;
     }
 
+    private static boolean isNativeSlopeHeightMap(HeightMap heightMap) {
+        if (heightMap.getClass() != SlopeHeightMap.class) {
+            return false;
+        }
+        final HeightMap base = ((SlopeHeightMap) heightMap).getBaseHeightMap();
+        return isBatchSafeHeightMap(base) || isNativeBandedHeightMap(base);
+    }
+
+    private static boolean areSlopeCoordinatesExactlyRepresentableAsFloats(int originX, int originY) {
+        final long limit = 1L << 24;
+        return ((long) originX - 1 >= -limit) && ((long) originX + TILE_SIZE <= limit)
+                && ((long) originY - 1 >= -limit) && ((long) originY + TILE_SIZE <= limit);
+    }
+
     /** The measured Rust fast path currently specializes a standalone smooth banded map. */
     private static boolean isNativeBandedHeightMap(HeightMap heightMap) {
         return (heightMap.getClass() == BandedHeightMap.class)
@@ -356,6 +396,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         private int heightMapBandedCount;
         private int heightMapNinePatchCount;
         private double[] nativeHeightValues;
+        private double[] nativeSlopeBaseValues;
 
         private boolean prepareHeightMapProgram(HeightMap heightMap) {
             heightMapNodeCount = 0;
@@ -463,6 +504,13 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 nativeHeightValues = new double[TILE_SIZE * TILE_SIZE];
             }
             return nativeHeightValues;
+        }
+
+        private double[] nativeSlopeBaseHeights() {
+            if (nativeSlopeBaseValues == null) {
+                nativeSlopeBaseValues = new double[(TILE_SIZE + 2) * (TILE_SIZE + 2)];
+            }
+            return nativeSlopeBaseValues;
         }
     }
 

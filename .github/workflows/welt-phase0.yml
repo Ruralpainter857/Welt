@@ -93,3 +93,10 @@ jobs:
           name: ninepatch-heightmap-benchmark-${{ matrix.os }}
           path: WorldPainter/WPCore/target/ninepatch-heightmap-benchmark.txt
           if-no-files-found: ignore
+      - name: Upload slope benchmark result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slope-heightmap-benchmark-${{ matrix.os }}
+          path: WorldPainter/WPCore/target/slope-heightmap-benchmark.txt
+          if-no-files-found: ignore

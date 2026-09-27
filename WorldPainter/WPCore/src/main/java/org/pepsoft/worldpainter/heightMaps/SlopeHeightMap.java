@@ -86,6 +86,49 @@ public class SlopeHeightMap extends DelegatingHeightMap {
         }
     }
 
+    /**
+     * Computes a slope tile from an already sampled base-map buffer with a one-cell halo.
+     * The input is row-major and the output contains {@code inputWidth - 2} by
+     * {@code inputHeight - 2} values, also row-major.
+     */
+    public boolean fillSamples(double[] baseSamples, int inputWidth, int inputHeight, double[] samples) {
+        final int outputWidth = inputWidth - 2;
+        final int outputHeight = inputHeight - 2;
+        if ((baseSamples == null) || (samples == null) || (outputWidth <= 0) || (outputHeight <= 0)
+                || ((long) inputWidth * inputHeight != baseSamples.length)
+                || ((long) outputWidth * outputHeight != samples.length)) {
+            return false;
+        }
+        final boolean scaled = verticalScaling != 1.0f;
+        for (int y = 0; y < outputHeight; y++) {
+            final int sourceRow = (y + 1) * inputWidth;
+            final int northRow = sourceRow - inputWidth;
+            final int southRow = sourceRow + inputWidth;
+            final int outputRow = y * outputWidth;
+            for (int x = 0; x < outputWidth; x++) {
+                final int west = sourceRow + x;
+                final int centre = west + 1;
+                final int east = west + 2;
+                final double horizontal;
+                if (scaled) {
+                    horizontal = Math.abs((baseSamples[east] / verticalScaling
+                            - baseSamples[west] / verticalScaling) / 2);
+                } else {
+                    horizontal = Math.abs((baseSamples[east] / verticalScaling - baseSamples[west]) / 2);
+                }
+                final double diagonal1 = Math.abs((baseSamples[southRow + east - sourceRow]
+                        - baseSamples[northRow + west - sourceRow]) / ROOT_EIGHT);
+                final double vertical = Math.abs((baseSamples[southRow + centre - sourceRow]
+                        - baseSamples[northRow + centre - sourceRow]) / 2);
+                final double diagonal2 = Math.abs((baseSamples[southRow + west - sourceRow]
+                        - baseSamples[northRow + east - sourceRow]) / ROOT_EIGHT);
+                final double maximum = Math.max(Math.max(horizontal, diagonal1), Math.max(vertical, diagonal2));
+                samples[outputRow + x] = Math.tan(maximum) * RADIANS_TO_DEGREES;
+            }
+        }
+        return true;
+    }
+
     @Override
     public Rectangle getExtent() {
         return children[0].getExtent();
