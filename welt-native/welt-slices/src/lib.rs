@@ -22,10 +22,14 @@ use welt_gen::theme_terrain::SimpleThemeTerrainBulk;
 use welt_nbt::packed_array::{pack_indices, unpack_indices};
 use welt_render::shade::shade_pixels;
 
+mod chunk_buffer;
+
 // JNI function-table indices, checked against the JDK's jni.h. The first four
 // entries are reserved; GetArrayLength is 171, GetDoubleArrayElements is 190,
 // and ReleaseDoubleArrayElements is 198. Keeping calls here avoids a JNI crate.
 const GET_ARRAY_LENGTH: usize = 171;
+const GET_DIRECT_BUFFER_ADDRESS: usize = 230;
+const GET_DIRECT_BUFFER_CAPACITY: usize = 231;
 const GET_INT_ARRAY_REGION: usize = 203;
 const GET_LONG_ARRAY_REGION: usize = 204;
 const GET_FLOAT_ARRAY_REGION: usize = 205;
@@ -36,6 +40,7 @@ const JNI_ABORT: jint = 2;
 const GET_BYTE_ARRAY_ELEMENTS: usize = 184;
 const RELEASE_BYTE_ARRAY_ELEMENTS: usize = 192;
 const SET_INT_ARRAY_REGION: usize = 211;
+const SET_LONG_ARRAY_REGION: usize = 212;
 const GET_BYTE_ARRAY_REGION: usize = 200;
 const SET_BYTE_ARRAY_REGION: usize = 208;
 const SET_FLOAT_ARRAY_REGION: usize = 213;
@@ -72,6 +77,43 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
     _class: jclass,
 ) -> jint {
     unsafe { jni_catch(env, || SLICES_ABI_VERSION) }
+}
+
+/// Validates a direct chunk palette buffer in place, without copying to a Rust Vec.
+///
+/// # Safety
+/// `env` and `buffer` must be supplied by the JVM for the current native call.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeValidateChunkPaletteBuffer(
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if buffer.is_null() {
+                return WeltError::IllegalArgument as jint;
+            }
+            type GetDirectBufferAddress =
+                unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
+            type GetDirectBufferCapacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
+            let address: GetDirectBufferAddress =
+                std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
+            let capacity: GetDirectBufferCapacity =
+                std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
+            let pointer = address(env, buffer).cast::<u8>();
+            let length = capacity(env, buffer);
+            if pointer.is_null() || length < 0 || length > 9_000_000 {
+                return WeltError::IllegalArgument as jint;
+            }
+            let bytes = slice::from_raw_parts(pointer, length as usize);
+            if chunk_buffer::validate(bytes) {
+                WeltError::Ok as jint
+            } else {
+                WeltError::IllegalArgument as jint
+            }
+        })
+    }
 }
 
 /// Applies WorldPainter's two integer RGB brightness multiplications to one
@@ -1330,6 +1372,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
     dirt_materials: jobject,
     chances: jobject,
     output: jobject,
+    profile_nanos: jobject,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
@@ -1361,6 +1404,9 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let columns = get_array_length(env, tiny_x);
             let materials = get_array_length(env, seeds);
             if !(1..=256).contains(&columns) || !(0..=64).contains(&materials) {
+                return WeltError::IllegalArgument as jint;
+            }
+            if !profile_nanos.is_null() && get_array_length(env, profile_nanos) != 2 {
                 return WeltError::IllegalArgument as jint;
             }
             let expected_output = i64::from(columns) * height;
@@ -1408,6 +1454,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 unsafe extern "system" fn(*mut JNIEnv, jobject, *mut u8) -> *mut i8;
             let get_byte_elements: GetByteArrayElements =
                 std::mem::transmute(function(env, GET_BYTE_ARRAY_ELEMENTS));
+            let copies_start = std::time::Instant::now();
             let output_ptr = get_byte_elements(env, output, std::ptr::null_mut());
             if output_ptr.is_null() {
                 return WeltError::Internal as jint;
@@ -1418,7 +1465,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 values: output_ptr,
                 length: expected_output as usize,
             };
-            let result = RESOURCE_NOISE_INPUTS.with(|workspace| {
+            let (result, copy_nanos, kernel_nanos) = RESOURCE_NOISE_INPUTS.with(|workspace| {
                 let mut values = workspace.borrow_mut();
                 values.tiny_x.resize(columns as usize, 0.0);
                 values.tiny_y.resize(columns as usize, 0.0);
@@ -1490,7 +1537,9 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 for index in 0..materials as usize {
                     values.dirt_materials[index] = values.raw_dirt_materials[index] as u8;
                 }
-                fill_resource_materials_into(
+                let copy_nanos = copies_start.elapsed().as_nanos().min(i64::MAX as u128) as i64;
+                let kernel_start = std::time::Instant::now();
+                let result = fill_resource_materials_into(
                     min_z,
                     max_z,
                     &values.tiny_x,
@@ -1506,12 +1555,28 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                     &values.dirt_materials,
                     &values.chances,
                     output_values.as_mut_slice(),
-                )
+                );
+                let kernel_nanos = kernel_start.elapsed().as_nanos().min(i64::MAX as u128) as i64;
+                (result, copy_nanos, kernel_nanos)
             });
             if result.is_err() {
                 return WeltError::IllegalArgument as jint;
             }
             drop(output_values);
+            if !profile_nanos.is_null() {
+                type SetLongArrayRegion =
+                    unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i64);
+                let set_long: SetLongArrayRegion =
+                    std::mem::transmute(function(env, SET_LONG_ARRAY_REGION));
+                let timings = [copy_nanos, kernel_nanos];
+                set_long(
+                    env,
+                    profile_nanos,
+                    0,
+                    timings.len() as jint,
+                    timings.as_ptr(),
+                );
+            }
             WeltError::Ok as jint
         })
     }

@@ -9,12 +9,27 @@
  */
 package org.pepsoft.worldpainter.nativeapi;
 
+import java.nio.ByteBuffer;
+
 /** Bulk JNI entry points. A null result asks the caller to use its Java path. */
 public final class NativeSlices {
     static final int ABI_VERSION = 1;
 
     private NativeSlices() {
         throw new AssertionError("Non instanciable");
+    }
+
+    /** Validates the shared chunk-buffer ABI in place, without copying its bytes. */
+    public static boolean validateChunkPaletteBuffer(final ByteBuffer buffer) {
+        if (!NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()
+                || buffer.position() != 0 || buffer.remaining() < 68) {
+            return false;
+        }
+        try {
+            return nativeValidateChunkPaletteBuffer(buffer.slice()) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
     }
 
     /** Computes Java's slope operator in a bulk native pass, or leaves fallback to the caller. */
@@ -284,6 +299,20 @@ public final class NativeSlices {
                                           final int[] materialMinZ, final int[] materialMaxZ,
                                           final byte[] dirtMaterials, final float[] chances,
                                           final byte[] output) {
+        return resourceMaterialsInto(minZ, maxZ, tinyX, tinyY, dirtX, dirtY,
+                columnMinZ, columnMaxZ, resourceValues, seeds, materialMinZ,
+                materialMaxZ, dirtMaterials, chances, output, null);
+    }
+
+    /** Variant that optionally records JNI input-copy and Rust-kernel nanoseconds. */
+    public static boolean resourceMaterialsInto(final int minZ, final int maxZ,
+                                          final double[] tinyX, final double[] tinyY,
+                                          final double[] dirtX, final double[] dirtY,
+                                          final int[] columnMinZ, final int[] columnMaxZ,
+                                          final int[] resourceValues, final long[] seeds,
+                                          final int[] materialMinZ, final int[] materialMaxZ,
+                                          final byte[] dirtMaterials, final float[] chances,
+                                          final byte[] output, final long[] profileNanos) {
         final long height = (long) maxZ - minZ + 1L;
         if (!Native.isExportEnabled() || !NativeLoader.areSlicesAvailable()
                 || tinyX == null || tinyY == null || dirtX == null || dirtY == null
@@ -297,13 +326,14 @@ public final class NativeSlices {
                 || seeds.length > 64 || materialMinZ.length != seeds.length
                 || materialMaxZ.length != seeds.length || dirtMaterials.length != seeds.length
                 || chances.length != seeds.length * 16L || tinyX.length * height > 1_048_576L
-                || output.length != tinyX.length * height) {
+                || output.length != tinyX.length * height
+                || (profileNanos != null && profileNanos.length != 2)) {
             return false;
         }
         try {
             return nativeFillResourceMaterials(minZ, maxZ, tinyX, tinyY, dirtX, dirtY,
                     columnMinZ, columnMaxZ, resourceValues, seeds, materialMinZ,
-                    materialMaxZ, dirtMaterials, chances, output) == 0;
+                    materialMaxZ, dirtMaterials, chances, output, profileNanos) == 0;
         } catch (final UnsatisfiedLinkError e) {
             return false;
         }
@@ -423,7 +453,9 @@ public final class NativeSlices {
                                                            int[] resourceValues, long[] seeds,
                                                            int[] materialMinZ, int[] materialMaxZ,
                                                            byte[] dirtMaterials, float[] chances,
-                                                           byte[] output);
+                                                           byte[] output, long[] profileNanos);
+
+    private static native int nativeValidateChunkPaletteBuffer(ByteBuffer buffer);
 
 
     private static native int nativeFrostColumn(int minZ, int maxZ, int highestNonAir,
