@@ -22,7 +22,16 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Format
+        id: rustfmt
         run: cargo fmt --all --manifest-path welt-native/Cargo.toml -- --check
+      - name: Publish Rust formatting diff
+        if: always() && steps.rustfmt.outcome == 'failure'
+        shell: pwsh
+        run: |
+          $diagnostics = (cargo fmt --all --manifest-path welt-native/Cargo.toml -- --check 2>&1 | Out-String).Trim()
+          $escaped = $diagnostics.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Rust formatting diff`n`n````text`n$diagnostics`n````"
+          Write-Output "::error title=Rust formatting diff::$escaped"
       - name: Unit and golden parity tests
         run: cargo test --workspace --manifest-path welt-native/Cargo.toml
       - name: Lint all crates and benchmarks
