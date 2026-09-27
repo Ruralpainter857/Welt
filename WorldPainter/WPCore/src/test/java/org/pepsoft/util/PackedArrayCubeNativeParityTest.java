@@ -113,6 +113,38 @@ public final class PackedArrayCubeNativeParityTest {
         }
     }
 
+    @Test
+    public void bulkPaletteIndexMutationIsVisibleToReadsAndSerialization() {
+        final String previousFlag = System.getProperty("welt.packedArrayCube.compactPaletteStorage");
+        try {
+            System.setProperty("welt.packedArrayCube.compactPaletteStorage", "true");
+            final PackedArrayCube<String> cube = new PackedArrayCube<>(16, 4, false, String.class);
+            cube.fill("stone");
+            final int[] indexes = cube.getPaletteIndexesForBulkUpdate();
+            final int oreIndex = cube.ensurePaletteIndexForBulkUpdate("ore");
+
+            assertNotNull(indexes);
+            indexes[cubeIndex(3, 5, 7)] = oreIndex;
+            assertEquals("ore", cube.getValue(3, 5, 7));
+
+            final PackedArrayCube<String>.PackedData packed = cube.pack();
+            final PackedArrayCube<String> decoded = new PackedArrayCube<>(16, packed.data,
+                    packed.palette, 4, false, String.class);
+            assertEquals("ore", decoded.getValue(3, 5, 7));
+            assertEquals("stone", decoded.getValue(2, 5, 7));
+        } finally {
+            if (previousFlag == null) {
+                System.clearProperty("welt.packedArrayCube.compactPaletteStorage");
+            } else {
+                System.setProperty("welt.packedArrayCube.compactPaletteStorage", previousFlag);
+            }
+        }
+    }
+
+    private static int cubeIndex(int x, int y, int z) {
+        return x | ((y | (z << 4)) << 4);
+    }
+
     private static void assertIndexesMatchValues(PackedArrayCube<String> cube) {
         final int[] indexes = new int[4096];
         cube.copyPaletteIndexesTo(indexes, 0);

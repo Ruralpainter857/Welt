@@ -144,6 +144,26 @@ public class PackedArrayCube<T> {
         return paletteIndexes != null;
     }
 
+    /**
+     * Return the canonical palette-index storage for a bulk updater, or
+     * {@code null} when this cube uses object storage. Mutations through the
+     * returned array are immediately visible to reads and serialization when
+     * palette-index storage is enabled. Callers must reserve every output
+     * value first and must not retain the array beyond the owning chunk's
+     * lifetime.
+     */
+    public int[] getPaletteIndexesForBulkUpdate() {
+        return paletteIndexes;
+    }
+
+    /**
+     * Add or find a value in the canonical palette for a bulk updater.
+     * Returns {@code -1} when this cube does not use palette-index storage.
+     */
+    public int ensurePaletteIndexForBulkUpdate(T value) {
+        return (paletteIndexes != null) ? paletteIndexFor(value) : -1;
+    }
+
     /** Copies the cube's current palette indices into caller-owned storage. */
     public void copyPaletteIndexesTo(int[] target, int targetOffset) {
         if (paletteIndexes == null) {
