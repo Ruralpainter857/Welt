@@ -282,27 +282,34 @@ public final class SimpleThemeFreshTileParityTest {
         try {
             final int[][] parameters = {{0, 8, 12}, {7, 0, 10}, {9, 6, 0}, {16, 11, 13}};
             for (final int[] parameter : parameters) {
-                for (final int[] tile : new int[][] {{0, 0}, {-1, 0}, {0, 1}, {-2, -2}, {1000, -1000}}) {
-                    final HeightMap javaMap = new NinePatchHeightMap(
-                            parameter[0], parameter[1], parameter[2], 117.25);
-                    final HeightMap nativeMap = new NinePatchHeightMap(
-                            parameter[0], parameter[1], parameter[2], 117.25);
-                    final HeightMapTileFactory javaFactory = new HeightMapTileFactory(73L, javaMap,
-                            0, 256, false, createSimpleTheme(true));
-                    final HeightMapTileFactory nativeFactory = new HeightMapTileFactory(73L, nativeMap,
-                            0, 256, false, createSimpleTheme(false));
-                    Native.setGenEnabled(false);
-                    final Tile javaTile = javaFactory.createTile(tile[0], tile[1]);
-                    Native.setGenEnabled(true);
-                    final Tile nativeTile = nativeFactory.createTile(tile[0], tile[1]);
-                    for (int x = 0; x < Constants.TILE_SIZE; x++) {
-                        for (int y = 0; y < Constants.TILE_SIZE; y++) {
-                            assertEquals("height at " + x + ',' + y + " parameters="
-                                            + java.util.Arrays.toString(parameter),
-                                    Float.floatToRawIntBits(javaTile.getHeight(x, y)),
-                                    Float.floatToRawIntBits(nativeTile.getHeight(x, y)));
-                            assertEquals("terrain at " + x + ',' + y,
-                                    javaTile.getTerrain(x, y), nativeTile.getTerrain(x, y));
+                for (final boolean combined : new boolean[] {false, true}) {
+                    for (final int[] tile : new int[][] {{0, 0}, {-1, 0}, {0, 1}, {-2, -2}, {1000, -1000}}) {
+                        final HeightMap javaBase = new NinePatchHeightMap(
+                                parameter[0], parameter[1], parameter[2], 117.25);
+                        final HeightMap nativeBase = new NinePatchHeightMap(
+                                parameter[0], parameter[1], parameter[2], 117.25);
+                        final HeightMap javaMap = combined
+                                ? new SumHeightMap(new ConstantHeightMap(3.25), javaBase) : javaBase;
+                        final HeightMap nativeMap = combined
+                                ? new SumHeightMap(new ConstantHeightMap(3.25), nativeBase) : nativeBase;
+                        final HeightMapTileFactory javaFactory = new HeightMapTileFactory(73L, javaMap,
+                                0, 256, false, createSimpleTheme(true));
+                        final HeightMapTileFactory nativeFactory = new HeightMapTileFactory(73L, nativeMap,
+                                0, 256, false, createSimpleTheme(false));
+                        Native.setGenEnabled(false);
+                        final Tile javaTile = javaFactory.createTile(tile[0], tile[1]);
+                        Native.setGenEnabled(true);
+                        final Tile nativeTile = nativeFactory.createTile(tile[0], tile[1]);
+                        for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                            for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                                assertEquals("height at " + x + ',' + y + " parameters="
+                                                + java.util.Arrays.toString(parameter)
+                                                + " combined=" + combined,
+                                        Float.floatToRawIntBits(javaTile.getHeight(x, y)),
+                                        Float.floatToRawIntBits(nativeTile.getHeight(x, y)));
+                                assertEquals("terrain at " + x + ',' + y,
+                                        javaTile.getTerrain(x, y), nativeTile.getTerrain(x, y));
+                            }
                         }
                     }
                 }

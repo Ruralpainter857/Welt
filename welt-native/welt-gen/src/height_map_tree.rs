@@ -189,7 +189,20 @@ pub fn fill_height_map_tree(
                     shelve_strength,
                 });
             }
-            HeightMapNode::NinePatch { .. } => return Err(HeightMapTreeError::InvalidProgram),
+            HeightMapNode::NinePatch {
+                inner_size,
+                border_size,
+                coast_size,
+                height,
+            } => {
+                parsed.push(ParsedNode::NinePatch {
+                    inner_size,
+                    border_size,
+                    coast_size,
+                    height,
+                });
+                depth += 1;
+            }
             HeightMapNode::Add => {
                 if depth < 2 {
                     return Err(HeightMapTreeError::InvalidProgram);
@@ -296,6 +309,24 @@ pub fn fill_height_map_tree(
                         - (value * std::f64::consts::TAU / f64::from(shelve_height)).sin()
                             * f64::from(shelve_strength);
                 }
+                ParsedNode::NinePatch {
+                    inner_size,
+                    border_size,
+                    coast_size,
+                    height,
+                } => {
+                    let x = origin_x.wrapping_add((cell % width) as i32) as f32;
+                    let y = origin_y.wrapping_add((cell / width) as i32) as f32;
+                    stack[stack_depth] = nine_patch_height(
+                        x,
+                        y,
+                        inner_size,
+                        border_size,
+                        coast_size,
+                        height,
+                    );
+                    stack_depth += 1;
+                }
                 ParsedNode::Add => {
                     let right = stack[stack_depth - 1];
                     let left = stack[stack_depth - 2];
@@ -348,6 +379,12 @@ enum ParsedNode {
     Shelving {
         shelve_height: i32,
         shelve_strength: i32,
+    },
+    NinePatch {
+        inner_size: i32,
+        border_size: i32,
+        coast_size: i32,
+        height: f64,
     },
     Add,
     Subtract,
@@ -437,7 +474,7 @@ fn nine_patch_corner(
 }
 
 fn nine_patch_coast(distance: f32, coast: f32, half_height: f64) -> f64 {
-    (f64::from((distance / coast) as f32) * std::f64::consts::PI).cos() * half_height + half_height
+    (f64::from(distance / coast) * std::f64::consts::PI).cos() * half_height + half_height
 }
 
 fn banded_height(
