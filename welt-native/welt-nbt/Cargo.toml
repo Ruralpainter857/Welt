@@ -1,0 +1,9 @@
+[package]
+name = "welt-nbt"
+description = "Welt Minecraft palette and packed-array kernels"
+license = "GPL-3.0"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "welt_nbt"

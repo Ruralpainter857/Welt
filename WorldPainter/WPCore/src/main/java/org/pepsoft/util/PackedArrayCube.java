@@ -1,5 +1,9 @@
 package org.pepsoft.util;
 
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
+
 import java.lang.reflect.Array;
 import java.util.*;
 
@@ -145,18 +149,32 @@ public class PackedArrayCube<T> {
         // be and therefore how big to make the data array
         final Map<T, Integer> reversePalette = new HashMap<>();
         final List<T> palette = new LinkedList<>();
-        for (T value: values) {
+        final int[] paletteIndices = Native.isExportEnabled() && NativeLoader.areSlicesAvailable()
+                ? new int[arraySize] : null;
+        for (int i = 0; i < values.length; i++) {
+            T value = values[i];
             if (value == null) {
                 value = nullSubstitute;
             }
-            if (! reversePalette.containsKey(value)) {
-                reversePalette.put(value, palette.size());
+            Integer paletteIndex = reversePalette.get(value);
+            if (paletteIndex == null) {
+                paletteIndex = palette.size();
+                reversePalette.put(value, paletteIndex);
                 palette.add(value);
+            }
+            if (paletteIndices != null) {
+                paletteIndices[i] = paletteIndex;
             }
         }
 
         // Create the data array and fill it, using the appropriate length palette indices so that it just fits
         final int paletteIndexSize = Math.max((int) Math.ceil(Math.log(palette.size()) / Math.log(2)), minimumWordSize);
+        if (paletteIndices != null) {
+            final long[] nativeData = NativeSlices.packArrayCube(paletteIndices, paletteIndexSize, straddleLongs);
+            if (nativeData != null) {
+                return new PackedData(nativeData, palette.toArray((T[]) Array.newInstance(type, palette.size())));
+            }
+        }
         final long[] data;
         if ((paletteIndexSize == 4) && ((values.length % 16) == 0)) {
             // Optimised special case

@@ -101,6 +101,35 @@ public final class NativeSlices {
         }
     }
 
+    /** Packs an already palette-mapped cube using Minecraft's long-array layout. */
+    public static long[] packArrayCube(final int[] paletteIndices, final int bitsPerIndex,
+                                       final boolean straddleLongs) {
+        if (!Native.isExportEnabled() || !NativeLoader.areSlicesAvailable()
+                || paletteIndices == null || paletteIndices.length > 1_048_576
+                || bitsPerIndex < 1 || bitsPerIndex > 32) {
+            return null;
+        }
+        final long outputLength;
+        if ((bitsPerIndex == 4) && ((paletteIndices.length % 16) == 0)) {
+            outputLength = paletteIndices.length / 16L;
+        } else if (straddleLongs) {
+            outputLength = 64L * bitsPerIndex;
+        } else {
+            final int valuesPerLong = 64 / bitsPerIndex;
+            outputLength = ((long) paletteIndices.length + valuesPerLong - 1L) / valuesPerLong;
+        }
+        if (outputLength > Integer.MAX_VALUE) {
+            return null;
+        }
+        final long[] output = new long[(int) outputLength];
+        try {
+            return nativePackArrayCube(paletteIndices, bitsPerIndex,
+                    straddleLongs ? 1 : 0, output) == 0 ? output : null;
+        } catch (final UnsatisfiedLinkError e) {
+            return null;
+        }
+    }
+
 
     /** False leaves the FrostExporter on its original Java path. */
     public static boolean frostColumn(final int minZ, final int maxZ, final int highestNonAir,
@@ -181,6 +210,9 @@ public final class NativeSlices {
     private static native int nativeBakeEdgeHeights(int width, int height, int radius,
                                                      float minHeight, byte[] sources,
                                                      float[] sourceHeights, float[] output);
+
+    private static native int nativePackArrayCube(int[] paletteIndices, int bitsPerIndex,
+                                                  int straddleLongs, long[] output);
 
 
     private static native int nativeFrostColumn(int minZ, int maxZ, int highestNonAir,

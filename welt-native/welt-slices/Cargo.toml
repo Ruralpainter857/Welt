@@ -13,3 +13,4 @@ crate-type = ["cdylib"]
 welt-core = { path = "../welt-core" }
 welt-gen = { path = "../welt-gen" }
 welt-export = { path = "../welt-export" }
+welt-nbt = { path = "../welt-nbt" }
