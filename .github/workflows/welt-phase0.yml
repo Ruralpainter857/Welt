@@ -86,3 +86,10 @@ jobs:
       - name: Build native libraries and run WPCore JNI parity tests
         working-directory: WorldPainter
         run: mvn --batch-mode --no-transfer-progress -Pnative -pl WPCore -am test
+      - name: Upload NinePatch benchmark result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ninepatch-heightmap-benchmark-${{ matrix.os }}
+          path: WorldPainter/WPCore/target/ninepatch-heightmap-benchmark.txt
+          if-no-files-found: ignore
