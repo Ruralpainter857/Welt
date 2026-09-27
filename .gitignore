@@ -11,3 +11,12 @@ exports
 # Artefacts de build natifs (regeneres par mvn -Pnative, cf. docs/welt/)
 WorldPainter/WPCore/src/main/resources/natives/
 
+# Documents locaux exclus de la branche publique dev-oesphy.
+/docs/welt/rapports/
+/docs/welt/ajouter-fonction-native.md
+/docs/welt/CHARTE-ORCHESTRATION.md
+/docs/welt/EXPORT-CHUNK-BUFFER.md
+/docs/welt/README.md
+/docs/plan-decoupage-java-rust.md
+/CONTEXTE-REPRISE-2026-09-26.md
+

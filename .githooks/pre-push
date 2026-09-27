@@ -1,0 +1,22 @@
+#!/bin/sh
+
+# Check the entire branch history, including files added and later deleted.
+protected='(^docs/welt/rapports/|^docs/welt/(ajouter-fonction-native|CHARTE-ORCHESTRATION|EXPORT-CHUNK-BUFFER|README)\.md$|^docs/plan-decoupage-java-rust\.md$|^CONTEXTE-REPRISE-2026-09-26\.md$)'
+while read -r local_ref local_oid remote_ref remote_oid; do
+    if [ "$remote_ref" != 'refs/heads/dev-oesphy' ]; then
+        continue
+    fi
+    case "$local_oid" in
+        0000000000000000000000000000000000000000) continue ;;
+    esac
+    if ! git cat-file -e "$local_oid^{commit}" 2>/dev/null; then
+        printf '%s\n' 'Push blocked: cannot inspect the proposed dev-oesphy commit.' >&2
+        exit 1
+    fi
+    matches=$(git rev-list --objects "$local_oid" | cut -d ' ' -f2- | grep -Ei "$protected" || :)
+    if [ -n "$matches" ]; then
+        printf '%s\n' 'Push blocked: dev-oesphy history contains local planning documents:' >&2
+        printf '%s\n' "$matches" | sort -u | head -n 10 >&2
+        exit 1
+    fi
+done
