@@ -5,7 +5,7 @@
 //! and vertical order as the original exporter.
 
 use std::cell::RefCell;
-use welt_core::noise::perlin::PerlinAxis3D;
+use welt_core::noise::perlin::{PerlinAxis3D, PerlinColumn3D};
 use welt_core::noise::PerlinNoise;
 
 thread_local! {
@@ -22,6 +22,16 @@ struct ResourceNoiseWorkspace {
     dirt_y: Vec<PerlinAxis3D>,
     tiny_z: Vec<PerlinAxis3D>,
     dirt_z: Vec<PerlinAxis3D>,
+    resource_candidate_offsets: Vec<usize>,
+    resource_candidates: Vec<usize>,
+    column_contexts: Vec<ResourceColumnContext>,
+    context_epoch: u64,
+}
+
+#[derive(Default)]
+struct ResourceColumnContext {
+    epoch: u64,
+    context: PerlinColumn3D,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,6 +181,71 @@ pub fn fill_resource_materials_into(
             (min_z..=max_z).map(|y| PerlinNoise::prepare_axis_3d(f64::from(y as f32 / 16.411_f32))),
         );
 
+        // Perlin's horizontal permutation hashes are stable for every sample
+        // of a given material and column. Keep one lazy context per pair; its
+        // eight gradients are refreshed only when the vertical lattice cell
+        // changes.
+        let context_count = columns * seeds.len();
+        workspace
+            .column_contexts
+            .resize_with(context_count, ResourceColumnContext::default);
+        let mut context_epoch = workspace.context_epoch.wrapping_add(1);
+        if context_epoch == 0 {
+            for context in &mut workspace.column_contexts {
+                context.epoch = 0;
+            }
+            context_epoch = 1;
+        }
+        workspace.context_epoch = context_epoch;
+
+        // Candidate material eligibility depends only on the resource level
+        // and Y. Resolve those bounds/chance checks once per used level instead
+        // of repeating them for every one of its 256 columns.
+        let height = height as usize;
+        let stride = height + 1;
+        workspace.resource_candidate_offsets.resize(16 * stride, 0);
+        workspace.resource_candidates.clear();
+        let mut used_resource_values = [false; 16];
+        for &resource_value in resource_values {
+            if resource_value > 0 {
+                used_resource_values[resource_value as usize] = true;
+            }
+        }
+        for resource_value in 1..16 {
+            if !used_resource_values[resource_value] {
+                continue;
+            }
+            let level_offset = resource_value * stride;
+            for z_index in 0..height {
+                let y = min_z + z_index as i32;
+                workspace.resource_candidate_offsets[level_offset + z_index] =
+                    workspace.resource_candidates.len();
+                for material in 0..seeds.len() {
+                    if chances[material * 16 + resource_value] <= 0.5
+                        && y >= material_min_z[material]
+                        && y <= material_max_z[material]
+                    {
+                        workspace.resource_candidates.push(material);
+                    }
+                }
+            }
+            workspace.resource_candidate_offsets[level_offset + height] =
+                workspace.resource_candidates.len();
+        }
+
+        let ResourceNoiseWorkspace {
+            noises,
+            column_contexts,
+            tiny_x,
+            tiny_y,
+            dirt_x,
+            dirt_y,
+            tiny_z,
+            dirt_z,
+            resource_candidate_offsets,
+            resource_candidates,
+            ..
+        } = &mut *workspace;
         for column in 0..columns {
             let start_y = column_min_z[column].max(min_z);
             let end_y = column_max_z[column].min(max_z);
@@ -180,25 +255,29 @@ pub fn fill_resource_materials_into(
             for y in (start_y..=end_y).rev() {
                 let z_index = (y - min_z) as usize;
                 let resource_value = resource_values[column] as usize;
-                for (material, noise) in workspace.noises.iter().enumerate() {
+                let level_offset = resource_value * stride;
+                let candidate_start = resource_candidate_offsets[level_offset + z_index];
+                let candidate_end = resource_candidate_offsets[level_offset + z_index + 1];
+                for &material in &resource_candidates[candidate_start..candidate_end] {
                     let chance = chances[material * 16 + resource_value];
-                    if chance > 0.5 || y < material_min_z[material] || y > material_max_z[material]
-                    {
-                        continue;
-                    }
-                    let value = if dirt_materials[material] != 0 {
-                        noise.get_perlin_noise_3d_prepared(
-                            workspace.dirt_x[column],
-                            workspace.dirt_y[column],
-                            workspace.dirt_z[z_index],
-                        )
+                    let is_dirt = dirt_materials[material] != 0;
+                    let (x, y) = if is_dirt {
+                        (dirt_x[column], dirt_y[column])
                     } else {
-                        noise.get_perlin_noise_3d_prepared(
-                            workspace.tiny_x[column],
-                            workspace.tiny_y[column],
-                            workspace.tiny_z[z_index],
-                        )
+                        (tiny_x[column], tiny_y[column])
                     };
+                    let slot = &mut column_contexts[column * seeds.len() + material];
+                    if slot.epoch != context_epoch {
+                        slot.context = noises[material].prepare_column_3d(x, y);
+                        slot.epoch = context_epoch;
+                    }
+                    let z = if is_dirt {
+                        dirt_z[z_index]
+                    } else {
+                        tiny_z[z_index]
+                    };
+                    let value =
+                        noises[material].get_perlin_noise_3d_column_prepared(&mut slot.context, z);
                     if value >= chance {
                         output[column * height as usize + z_index] = (material + 1) as i8;
                         break;

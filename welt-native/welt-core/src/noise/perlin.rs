@@ -33,6 +33,20 @@ pub struct PerlinAxis3D {
     fade: f32,
 }
 
+/// Reusable hashes for samples along one vertical column of 3D Perlin noise.
+/// The horizontal hash chain is fixed; gradient indices are refreshed only
+/// when the vertical lattice cell changes.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PerlinColumn3D {
+    x: PerlinAxis3D,
+    y: PerlinAxis3D,
+    x0y_hash: i32,
+    x1y_hash: i32,
+    z_lattice: i32,
+    gradients: [u8; 8],
+    has_z: bool,
+}
+
 impl PerlinAxis3D {
     #[inline]
     fn new(position: f64) -> Self {
@@ -170,6 +184,23 @@ impl PerlinNoise {
         (f64::from(self.fast.sample_3d_prepared(x, y, z)) * FACTOR_3D) as f32
     }
 
+    /// Prepare the material- and column-specific part of a vertical 3D scan.
+    #[inline]
+    pub fn prepare_column_3d(&self, x: PerlinAxis3D, y: PerlinAxis3D) -> PerlinColumn3D {
+        self.fast.prepare_column_3d(x, y)
+    }
+
+    /// Sample a vertical point while retaining horizontal hashes and the
+    /// current cell's eight gradient indices in `column`.
+    #[inline]
+    pub fn get_perlin_noise_3d_column_prepared(
+        &self,
+        column: &mut PerlinColumn3D,
+        z: PerlinAxis3D,
+    ) -> f32 {
+        (f64::from(self.fast.sample_3d_column_prepared(column, z)) * FACTOR_3D) as f32
+    }
+
     /// Raw `FastPerlin.sampleResult` value, exposed for cross-language parity tests.
     #[doc(hidden)]
     pub fn sample_fast_1d(&self, x: f64) -> f32 {
@@ -207,6 +238,7 @@ fn unique_lattices(axes: &[PerlinAxis2D]) -> (Vec<i32>, Vec<usize>) {
 #[derive(Clone, Debug)]
 struct FastPerlin {
     pairs: [u16; 256],
+    hardware_fma: bool,
 }
 
 impl FastPerlin {
@@ -224,7 +256,10 @@ impl FastPerlin {
         for i in 0..256 {
             pairs[i] = u16::from(permutation[i]) | (u16::from(permutation[(i + 1) & 255]) << 8);
         }
-        Self { pairs }
+        Self {
+            pairs,
+            hardware_fma: supports_hardware_fma(),
+        }
     }
 
     #[inline]
@@ -291,18 +326,143 @@ impl FastPerlin {
     }
 
     fn sample_3d_prepared(&self, x: PerlinAxis3D, y: PerlinAxis3D, z: PerlinAxis3D) -> f32 {
-        let by = y.lattice;
-        let bz = z.lattice;
+        let x_hash = self.pair(x.lattice);
+        let x0y_hash = self.pair(x_hash.wrapping_add(y.lattice));
+        let x1y_hash = self.pair((x_hash >> 8).wrapping_add(y.lattice));
+        let gradients = Self::gradient_indices(x0y_hash, x1y_hash, z.lattice, self);
+        self.sample_3d_with_gradients(x, y, z, gradients)
+    }
+
+    #[inline]
+    fn prepare_column_3d(&self, x: PerlinAxis3D, y: PerlinAxis3D) -> PerlinColumn3D {
+        let x_hash = self.pair(x.lattice);
+        PerlinColumn3D {
+            x,
+            y,
+            x0y_hash: self.pair(x_hash.wrapping_add(y.lattice)),
+            x1y_hash: self.pair((x_hash >> 8).wrapping_add(y.lattice)),
+            z_lattice: 0,
+            gradients: [0; 8],
+            has_z: false,
+        }
+    }
+
+    #[inline]
+    fn sample_3d_column_prepared(&self, column: &mut PerlinColumn3D, z: PerlinAxis3D) -> f32 {
+        if !column.has_z || column.z_lattice != z.lattice {
+            column.gradients =
+                Self::gradient_indices(column.x0y_hash, column.x1y_hash, z.lattice, self);
+            column.z_lattice = z.lattice;
+            column.has_z = true;
+        }
+        self.sample_3d_with_gradients(column.x, column.y, z, column.gradients)
+    }
+
+    #[inline]
+    fn gradient_indices(x0y: i32, x1y: i32, bz: i32, perlin: &Self) -> [u8; 8] {
+        let x0y0z = perlin.pair(x0y.wrapping_add(bz));
+        let x0y1z = perlin.pair((x0y >> 8).wrapping_add(bz));
+        let x1y0z = perlin.pair(x1y.wrapping_add(bz));
+        let x1y1z = perlin.pair((x1y >> 8).wrapping_add(bz));
+        [
+            (x0y0z & 15) as u8,
+            ((x0y0z >> 8) & 15) as u8,
+            (x0y1z & 15) as u8,
+            ((x0y1z >> 8) & 15) as u8,
+            (x1y0z & 15) as u8,
+            ((x1y0z >> 8) & 15) as u8,
+            (x1y1z & 15) as u8,
+            ((x1y1z >> 8) & 15) as u8,
+        ]
+    }
+
+    fn sample_3d_with_gradients(
+        &self,
+        x: PerlinAxis3D,
+        y: PerlinAxis3D,
+        z: PerlinAxis3D,
+        gradients: [u8; 8],
+    ) -> f32 {
+        #[cfg(target_arch = "x86_64")]
+        if self.hardware_fma {
+            // SAFETY: the flag is set only after runtime detection of FMA support.
+            return unsafe { self.sample_3d_prepared_hardware_fma(x, y, z, gradients) };
+        }
+        self.sample_3d_prepared_portable(x, y, z, gradients)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "fma")]
+    unsafe fn sample_3d_prepared_hardware_fma(
+        &self,
+        x: PerlinAxis3D,
+        y: PerlinAxis3D,
+        z: PerlinAxis3D,
+        gradients: [u8; 8],
+    ) -> f32 {
+        use std::arch::x86_64::{_mm_cvtss_f32, _mm_fmadd_ss, _mm_set_ss};
+        macro_rules! fma {
+            ($a:expr, $b:expr, $c:expr) => {{
+                _mm_cvtss_f32(_mm_fmadd_ss(_mm_set_ss($a), _mm_set_ss($b), _mm_set_ss($c)))
+            }};
+        }
+        let lerp = |progress: f32, a: f32, b: f32| fma!(b - a, progress, a);
+        let grad = |hash: u8, gx: f32, gy: f32, gz: f32| {
+            let index = hash as usize * 3;
+            fma!(
+                gx,
+                GRADIENTS[index],
+                fma!(gy, GRADIENTS[index + 1], gz * GRADIENTS[index + 2])
+            )
+        };
+
         let lx = x.fraction;
         let ly = y.fraction;
         let lz = z.fraction;
-        let px = self.pair(x.lattice);
-        let x0y = self.pair(px.wrapping_add(by));
-        let x1y = self.pair((px >> 8).wrapping_add(by));
-        let x0y0z = self.pair(x0y.wrapping_add(bz));
-        let x0y1z = self.pair((x0y >> 8).wrapping_add(bz));
-        let x1y0z = self.pair(x1y.wrapping_add(bz));
-        let x1y1z = self.pair((x1y >> 8).wrapping_add(bz));
+        let py = y.fade;
+        let pz = z.fade;
+        lerp(
+            x.fade,
+            lerp(
+                py,
+                lerp(
+                    pz,
+                    grad(gradients[0], lx, ly, lz),
+                    grad(gradients[1], lx, ly, lz - 1.0),
+                ),
+                lerp(
+                    pz,
+                    grad(gradients[2], lx, ly - 1.0, lz),
+                    grad(gradients[3], lx, ly - 1.0, lz - 1.0),
+                ),
+            ),
+            lerp(
+                py,
+                lerp(
+                    pz,
+                    grad(gradients[4], lx - 1.0, ly, lz),
+                    grad(gradients[5], lx - 1.0, ly, lz - 1.0),
+                ),
+                lerp(
+                    pz,
+                    grad(gradients[6], lx - 1.0, ly - 1.0, lz),
+                    grad(gradients[7], lx - 1.0, ly - 1.0, lz - 1.0),
+                ),
+            ),
+        )
+    }
+
+    #[inline]
+    fn sample_3d_prepared_portable(
+        &self,
+        x: PerlinAxis3D,
+        y: PerlinAxis3D,
+        z: PerlinAxis3D,
+        gradients: [u8; 8],
+    ) -> f32 {
+        let lx = x.fraction;
+        let ly = y.fraction;
+        let lz = z.fraction;
         let py = y.fade;
         let pz = z.fade;
         Self::lerp(
@@ -311,26 +471,26 @@ impl FastPerlin {
                 py,
                 Self::lerp(
                     pz,
-                    Self::grad_3d(x0y0z, lx, ly, lz),
-                    Self::grad_3d(x0y0z >> 8, lx, ly, lz - 1.0),
+                    Self::grad_3d(i32::from(gradients[0]), lx, ly, lz),
+                    Self::grad_3d(i32::from(gradients[1]), lx, ly, lz - 1.0),
                 ),
                 Self::lerp(
                     pz,
-                    Self::grad_3d(x0y1z, lx, ly - 1.0, lz),
-                    Self::grad_3d(x0y1z >> 8, lx, ly - 1.0, lz - 1.0),
+                    Self::grad_3d(i32::from(gradients[2]), lx, ly - 1.0, lz),
+                    Self::grad_3d(i32::from(gradients[3]), lx, ly - 1.0, lz - 1.0),
                 ),
             ),
             Self::lerp(
                 py,
                 Self::lerp(
                     pz,
-                    Self::grad_3d(x1y0z, lx - 1.0, ly, lz),
-                    Self::grad_3d(x1y0z >> 8, lx - 1.0, ly, lz - 1.0),
+                    Self::grad_3d(i32::from(gradients[4]), lx - 1.0, ly, lz),
+                    Self::grad_3d(i32::from(gradients[5]), lx - 1.0, ly, lz - 1.0),
                 ),
                 Self::lerp(
                     pz,
-                    Self::grad_3d(x1y1z, lx - 1.0, ly - 1.0, lz),
-                    Self::grad_3d(x1y1z >> 8, lx - 1.0, ly - 1.0, lz - 1.0),
+                    Self::grad_3d(i32::from(gradients[6]), lx - 1.0, ly - 1.0, lz),
+                    Self::grad_3d(i32::from(gradients[7]), lx - 1.0, ly - 1.0, lz - 1.0),
                 ),
             ),
         )
@@ -365,6 +525,17 @@ impl FastPerlin {
             GRADIENTS[i],
             java_fma_f32(y, GRADIENTS[i + 1], z * GRADIENTS[i + 2]),
         )
+    }
+}
+
+fn supports_hardware_fma() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        std::arch::is_x86_feature_detected!("fma")
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        false
     }
 }
 
@@ -454,6 +625,28 @@ mod tests {
             noise.get_perlin_noise_2d(-3.25, 7.5).to_bits(),
             noise.get_perlin_noise_2d(252.75, 263.5).to_bits()
         );
+    }
+
+    #[test]
+    fn prepared_column_matches_individual_samples_across_vertical_cells() {
+        let noise = PerlinNoise::new(0x1234_5678);
+        let x = PerlinNoise::prepare_axis_3d(-17.375);
+        let y = PerlinNoise::prepare_axis_3d(42.625);
+        let mut column = noise.prepare_column_3d(x, y);
+        for z in [
+            9.75, 9.5, 9.25, 8.99, 8.75, 8.5, 8.25, 8.01, 7.75, 7.5, 7.25, 9.25, -0.125, -0.25,
+            -0.375, -1.125, -1.25,
+        ] {
+            let z = PerlinNoise::prepare_axis_3d(z);
+            assert_eq!(
+                noise
+                    .get_perlin_noise_3d_column_prepared(&mut column, z)
+                    .to_bits(),
+                noise.get_perlin_noise_3d_prepared(x, y, z).to_bits(),
+                "column context differs at z={}",
+                z.lattice as f32 + z.fraction,
+            );
+        }
     }
 
     #[test]

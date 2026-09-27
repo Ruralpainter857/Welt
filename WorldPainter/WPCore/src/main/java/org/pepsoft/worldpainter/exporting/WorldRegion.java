@@ -255,12 +255,16 @@ public class WorldRegion implements MinecraftWorld {
     }
 
     public void save(File worldDir, int dimension) {
+        final boolean profileChunkCapture = Boolean.getBoolean("welt.export.profileChunkCapture");
         try (ChunkStore chunkStore = platformProvider.getChunkStore(platform, worldDir, dimension)) {
             chunkStore.doInTransaction(() -> {
                 for (int x = 0; x < CHUNKS_PER_SIDE; x++) {
                     for (int z = 0; z < CHUNKS_PER_SIDE; z++) {
                         final Chunk chunk = chunks[x + 1][z + 1];
                         if (chunk != null) {
+                            if (profileChunkCapture) {
+                                ChunkPaletteBuffer.captureProfiled(chunk);
+                            }
                             chunkStore.saveChunk(chunk);
                         }
                     }

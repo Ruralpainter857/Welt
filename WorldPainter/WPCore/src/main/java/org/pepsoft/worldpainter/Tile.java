@@ -571,6 +571,95 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     }
 
     /**
+     * Copies a rectangular bit layer into caller-owned x-major storage. The
+     * destination index is {@code offset + x * height + y}; bit-per-chunk
+     * layers are expanded to one value per cell in the rectangle.
+     */
+    public synchronized void copyBitLayerValues(Layer layer, int x, int y,
+                                                int width, int height,
+                                                byte[] destination, int offset) {
+        if ((layer.getDataSize() != Layer.DataSize.BIT)
+                && (layer.getDataSize() != Layer.DataSize.BIT_PER_CHUNK)) {
+            throw new IllegalArgumentException("Layer is not bit sized");
+        }
+        final int area = checkedLayerCopyArea(x, y, width, height, destination.length, offset);
+        ensureReadable(BIT_LAYER_DATA);
+        final BitSet bitSet = bitLayerData.get(layer);
+        for (int dx = 0; dx < width; dx++) {
+            Arrays.fill(destination, offset + dx * height, offset + (dx + 1) * height, (byte) 0);
+        }
+        if (bitSet == null) {
+            return;
+        }
+        final boolean bitPerChunk = layer.getDataSize() == Layer.DataSize.BIT_PER_CHUNK;
+        for (int dx = 0; dx < width; dx++) {
+            for (int dy = 0; dy < height; dy++) {
+                if (bitPerChunk
+                        ? getBitPerChunkLayerValue(bitSet, x + dx, y + dy)
+                        : getBitPerBlockLayerValue(bitSet, x + dx, y + dy)) {
+                    destination[offset + dx * height + dy] = 1;
+                }
+            }
+        }
+    }
+
+    /**
+     * Copies a rectangular numeric layer into caller-owned x-major storage.
+     * The destination index is {@code offset + x * height + y}.
+     */
+    public synchronized void copyLayerValues(Layer layer, int x, int y,
+                                             int width, int height,
+                                             int[] destination, int offset) {
+        if ((layer.getDataSize() == Layer.DataSize.BIT)
+                || (layer.getDataSize() == Layer.DataSize.BIT_PER_CHUNK)) {
+            throw new IllegalArgumentException("Can't get bits using this method");
+        }
+        final int area = checkedLayerCopyArea(x, y, width, height, destination.length, offset);
+        ensureReadable(LAYER_DATA);
+        final byte[] layerValues = layerData.get(layer);
+        if (layerValues == null) {
+            Arrays.fill(destination, offset, offset + area, layer.getDefaultValue());
+            return;
+        }
+        switch (layer.getDataSize()) {
+            case NIBBLE -> {
+                for (int dx = 0; dx < width; dx++) {
+                    for (int dy = 0; dy < height; dy++) {
+                        final int byteOffset = (x + dx) | ((y + dy) << TILE_SIZE_BITS);
+                        final byte value = layerValues[byteOffset >> 1];
+                        destination[offset + dx * height + dy] = ((byteOffset & 1) == 0)
+                                ? value & 0x0f : (value & 0xf0) >> 4;
+                    }
+                }
+            }
+            case BYTE -> {
+                for (int dx = 0; dx < width; dx++) {
+                    for (int dy = 0; dy < height; dy++) {
+                        final int byteOffset = (x + dx) | ((y + dy) << TILE_SIZE_BITS);
+                        destination[offset + dx * height + dy] = layerValues[byteOffset] & 0xff;
+                    }
+                }
+            }
+            case BIT, BIT_PER_CHUNK -> throw new IllegalArgumentException("Can't get bits using this method");
+            default -> throw new InternalError();
+        }
+    }
+
+    private static int checkedLayerCopyArea(int x, int y, int width, int height,
+                                            int targetLength, int offset) {
+        if ((width < 0) || (height < 0) || (x < 0) || (y < 0)
+                || (x > TILE_SIZE - width) || (y > TILE_SIZE - height)) {
+            throw new IndexOutOfBoundsException("rectangle " + x + "," + y + " " + width + "x" + height);
+        }
+        final long area = (long) width * height;
+        if ((offset < 0) || (area > Integer.MAX_VALUE)
+                || (offset > targetLength - (int) area)) {
+            throw new IndexOutOfBoundsException("destination offset " + offset + " for " + area + " values");
+        }
+        return (int) area;
+    }
+
+    /**
      * Count the number of blocks where the specified bit layer is set in a
      * square around a particular location
      *

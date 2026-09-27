@@ -23,6 +23,7 @@ import java.io.ObjectInputStream;
 import java.io.Serial;
 import java.io.Serializable;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static java.lang.Math.floor;
 import static org.pepsoft.minecraft.Constants.*;
@@ -38,6 +39,31 @@ import static org.pepsoft.worldpainter.layers.exporters.ResourcesExporter.Resour
  * @author pepijn
  */
 public class ResourcesExporter extends AbstractLayerExporter<Resources> implements FirstPassLayerExporter {
+    private static final String NATIVE_PROFILE_PROPERTY = "welt.export.profileResourcesNative";
+    private static final AtomicLong NATIVE_PROFILE_PREP_NANOS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_CALL_NANOS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_COPY_NANOS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_RUST_NANOS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_APPLY_NANOS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_CHUNKS = new AtomicLong();
+
+    /** Resets optional, out-of-band timings for the native Resources path. */
+    public static void resetNativeProfile() {
+        NATIVE_PROFILE_PREP_NANOS.set(0);
+        NATIVE_PROFILE_CALL_NANOS.set(0);
+        NATIVE_PROFILE_COPY_NANOS.set(0);
+        NATIVE_PROFILE_RUST_NANOS.set(0);
+        NATIVE_PROFILE_APPLY_NANOS.set(0);
+        NATIVE_PROFILE_CHUNKS.set(0);
+    }
+
+    /** Returns preparation, JNI-call, result-application nanoseconds and chunk count. */
+    public static long[] nativeProfileSnapshot() {
+        return new long[]{NATIVE_PROFILE_PREP_NANOS.get(), NATIVE_PROFILE_CALL_NANOS.get(),
+                NATIVE_PROFILE_APPLY_NANOS.get(), NATIVE_PROFILE_CHUNKS.get(),
+                NATIVE_PROFILE_COPY_NANOS.get(), NATIVE_PROFILE_RUST_NANOS.get()};
+    }
+
     public ResourcesExporter(Dimension dimension, Platform platform, ExporterSettings settings) {
         super(dimension, platform, (settings != null) ? settings : defaultSettings(platform, dimension.getAnchor(), dimension.getMinHeight(), dimension.getMaxHeight()), Resources.INSTANCE);
         final ResourcesExporterSettings resourcesSettings = (ResourcesExporterSettings) super.settings;
@@ -93,15 +119,18 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
         final int xOffset = (chunk.getxPos() & 7) << 4;
         final int zOffset = (chunk.getzPos() & 7) << 4;
         final boolean coverSteepTerrain = dimension.isCoverSteepTerrain(), nether = (dimension.getAnchor().dim == DIM_NETHER);
+        final NativeResourceBuffers buffers = nativeResourceBuffers.get();
+        copyResourceLayerColumns(tile, xOffset, zOffset, buffers);
 //        int[] counts = new int[256];
         for (int x = 0; x < 16; x++) {
             for (int z = 0; z < 16; z++) {
                 final int localX = xOffset + x, localY = zOffset + z;
                 final int worldX = tile.getX() * TILE_SIZE + localX, worldY = tile.getY() * TILE_SIZE + localY;
-                if (tile.getBitLayerValue(Void.INSTANCE, localX, localY)) {
+                final int column = x * 16 + z;
+                if (buffers.voidValues[column] != 0) {
                     continue;
                 }
-                final int resourcesValue = Math.max(minimumLevel, tile.getLayerValue(Resources.INSTANCE, localX, localY));
+                final int resourcesValue = Math.max(minimumLevel, buffers.resourceValues[column]);
                 if (resourcesValue > 0) {
                     final int terrainheight = tile.getIntHeight(localX, localY);
                     final int topLayerDepth = dimension.getTopLayerDepth(worldX, worldY, terrainheight);
@@ -173,20 +202,22 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
         final int[] resourceValues = buffers.resourceValues;
         final double[] tinyX = buffers.tinyX, tinyY = buffers.tinyY;
         final double[] dirtX = buffers.dirtX, dirtY = buffers.dirtY;
+        final boolean profile = Boolean.getBoolean(NATIVE_PROFILE_PROPERTY);
+        final long preparationStart = profile ? System.nanoTime() : 0L;
+        copyResourceLayerColumns(tile, xOffset, zOffset, buffers);
         int effectiveMinZ = Integer.MAX_VALUE;
         int effectiveMaxZ = Integer.MIN_VALUE;
         for (int x = 0; x < 16; x++) {
             for (int z = 0; z < 16; z++) {
                 final int column = x * 16 + z;
                 final int localX = xOffset + x, localY = zOffset + z;
-                if (tile.getBitLayerValue(Void.INSTANCE, localX, localY)) {
+                if (buffers.voidValues[column] != 0) {
                     resourceValues[column] = 0;
                     columnMinZ[column] = this.minZ;
                     columnMaxZ[column] = this.minZ - 1;
                     continue;
                 }
-                final int resourcesValue = Math.max(minimumLevel,
-                        tile.getLayerValue(Resources.INSTANCE, localX, localY));
+                final int resourcesValue = Math.max(minimumLevel, resourceValues[column]);
                 resourceValues[column] = resourcesValue;
                 if (resourcesValue == 0) {
                     columnMinZ[column] = this.minZ;
@@ -220,6 +251,10 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
             }
         }
         if (effectiveMinZ > effectiveMaxZ) {
+            if (profile) {
+                NATIVE_PROFILE_PREP_NANOS.addAndGet(System.nanoTime() - preparationStart);
+                NATIVE_PROFILE_CHUNKS.incrementAndGet();
+            }
             return true;
         }
         final long outputLengthLong = 256L * ((long) effectiveMaxZ - effectiveMinZ + 1L);
@@ -228,11 +263,22 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
         }
         final int outputLength = (int) outputLengthLong;
         final byte[] selected = buffers.output(outputLength);
+        final long nativeStart = profile ? System.nanoTime() : 0L;
         if (!NativeSlices.resourceMaterialsInto(effectiveMinZ, effectiveMaxZ,
                 tinyX, tinyY, dirtX, dirtY, columnMinZ, columnMaxZ, resourceValues,
-                nativeSeeds, minLevels, maxLevels, nativeDirtMaterials, nativeFlattenedChances, selected)) {
+                nativeSeeds, minLevels, maxLevels, nativeDirtMaterials, nativeFlattenedChances,
+                selected, profile ? buffers.nativeProfileNanos : null)) {
             return false;
         }
+        if (profile) {
+            final long nativeEnd = System.nanoTime();
+            NATIVE_PROFILE_PREP_NANOS.addAndGet(nativeStart - preparationStart);
+            NATIVE_PROFILE_CALL_NANOS.addAndGet(nativeEnd - nativeStart);
+            NATIVE_PROFILE_COPY_NANOS.addAndGet(buffers.nativeProfileNanos[0]);
+            NATIVE_PROFILE_RUST_NANOS.addAndGet(buffers.nativeProfileNanos[1]);
+            NATIVE_PROFILE_CHUNKS.incrementAndGet();
+        }
+        final long applyStart = profile ? System.nanoTime() : 0L;
         final boolean nether = dimension.getAnchor().dim == DIM_NETHER;
         final int verticalRange = effectiveMaxZ - effectiveMinZ + 1;
         for (int x = 0; x < 16; x++) {
@@ -255,7 +301,18 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
                 }
             }
         }
+        if (profile) {
+            NATIVE_PROFILE_APPLY_NANOS.addAndGet(System.nanoTime() - applyStart);
+        }
         return true;
+    }
+
+    private static void copyResourceLayerColumns(Tile tile, int xOffset, int zOffset,
+                                                 NativeResourceBuffers buffers) {
+        tile.copyBitLayerValues(Void.INSTANCE, xOffset, zOffset, 16, 16,
+                buffers.voidValues, 0);
+        tile.copyLayerValues(Resources.INSTANCE, xOffset, zOffset, 16, 16,
+                buffers.resourceValues, 0);
     }
 
 //  TODO: resource frequenties onderzoeken met Statistics tool!
@@ -271,12 +328,14 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
             ThreadLocal.withInitial(NativeResourceBuffers::new);
 
     private static final class NativeResourceBuffers {
+        private final byte[] voidValues = new byte[256];
         private final int[] columnMinZ = new int[256];
         private final int[] columnMaxZ = new int[256];
         private final int[] resourceValues = new int[256];
         private final double[] tinyX = new double[256], tinyY = new double[256];
         private final double[] dirtX = new double[256], dirtY = new double[256];
         private final byte[][] outputs = new byte[8][];
+        private final long[] nativeProfileNanos = new long[2];
         private int nextOutputSlot;
 
         private byte[] output(int length) {
