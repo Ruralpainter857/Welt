@@ -116,12 +116,24 @@ public class SlopeHeightMap extends DelegatingHeightMap {
                 } else {
                     horizontal = Math.abs((baseSamples[east] / verticalScaling - baseSamples[west]) / 2);
                 }
-                final double diagonal1 = Math.abs((baseSamples[southRow + east - sourceRow]
-                        - baseSamples[northRow + west - sourceRow]) / ROOT_EIGHT);
-                final double vertical = Math.abs((baseSamples[southRow + centre - sourceRow]
-                        - baseSamples[northRow + centre - sourceRow]) / 2);
-                final double diagonal2 = Math.abs((baseSamples[southRow + west - sourceRow]
-                        - baseSamples[northRow + east - sourceRow]) / ROOT_EIGHT);
+                final double diagonal1;
+                final double vertical;
+                final double diagonal2;
+                if (scaled) {
+                    diagonal1 = Math.abs((baseSamples[southRow + east - sourceRow] / verticalScaling
+                            - baseSamples[northRow + west - sourceRow] / verticalScaling) / ROOT_EIGHT);
+                    vertical = Math.abs((baseSamples[southRow + centre - sourceRow] / verticalScaling
+                            - baseSamples[northRow + centre - sourceRow] / verticalScaling) / 2);
+                    diagonal2 = Math.abs((baseSamples[southRow + west - sourceRow] / verticalScaling
+                            - baseSamples[northRow + east - sourceRow] / verticalScaling) / ROOT_EIGHT);
+                } else {
+                    diagonal1 = Math.abs((baseSamples[southRow + east - sourceRow]
+                            - baseSamples[northRow + west - sourceRow]) / ROOT_EIGHT);
+                    vertical = Math.abs((baseSamples[southRow + centre - sourceRow]
+                            - baseSamples[northRow + centre - sourceRow]) / 2);
+                    diagonal2 = Math.abs((baseSamples[southRow + west - sourceRow]
+                            - baseSamples[northRow + east - sourceRow]) / ROOT_EIGHT);
+                }
                 final double maximum = Math.max(Math.max(horizontal, diagonal1), Math.max(vertical, diagonal2));
                 samples[outputRow + x] = Math.tan(maximum) * RADIANS_TO_DEGREES;
             }
