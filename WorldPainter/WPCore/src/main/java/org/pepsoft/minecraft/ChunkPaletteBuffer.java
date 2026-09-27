@@ -110,8 +110,20 @@ public final class ChunkPaletteBuffer {
      * caller can use the established Java path for the whole chunk.
      */
     public static LivePaletteView openLivePaletteView(Chunk chunk, Material... reservedMaterials) {
+        if (chunk == null) {
+            return null;
+        }
+        return openLivePaletteView(chunk, chunk.getMinHeight(), chunk.getMaxHeight() - 1,
+                reservedMaterials);
+    }
+
+    /** Opens only the section range touched by a grouped updater. */
+    public static LivePaletteView openLivePaletteView(Chunk chunk, int minBlockY, int maxBlockY,
+                                                       Material... reservedMaterials) {
         if (chunk == null || chunk.isReadOnly() || reservedMaterials == null
-                || (chunk.getMinHeight() & 15) != 0 || (chunk.getMaxHeight() & 15) != 0) {
+                || (chunk.getMinHeight() & 15) != 0 || (chunk.getMaxHeight() & 15) != 0
+                || minBlockY > maxBlockY || minBlockY < chunk.getMinHeight()
+                || maxBlockY >= chunk.getMaxHeight()) {
             return null;
         }
         for (Material material : reservedMaterials) {
@@ -120,33 +132,37 @@ public final class ChunkPaletteBuffer {
             }
         }
 
-        final int minY = chunk.getMinHeight();
-        final long worldHeight = (long) chunk.getMaxHeight() - minY;
-        if (worldHeight <= 0 || worldHeight > 4096L || (worldHeight & 15L) != 0) {
+        final long worldHeight = (long) maxBlockY - minBlockY + 1L;
+        if (worldHeight <= 0 || worldHeight > 4096L) {
             return null;
         }
-        final int sectionCount = (int) (worldHeight >> 4);
+        final int firstSection = (minBlockY - chunk.getMinHeight()) >> 4;
+        final int lastSection = (maxBlockY - chunk.getMinHeight()) >> 4;
+        final int sectionCount = lastSection - firstSection + 1;
+        final int firstSectionY = chunk.getMinHeight() + (firstSection << 4);
         final PackedArrayCube<Material>[] cubes = newCubeArray(sectionCount);
         if (chunk instanceof MC115AnvilChunk anvil115) {
             final MC115AnvilChunk.Section[] sections = anvil115.getSections();
-            if (sections.length != sectionCount) {
+            if (firstSection < 0 || lastSection >= sections.length) {
                 return null;
             }
             for (int section = 0; section < sectionCount; section++) {
-                if (sections[section] == null || sections[section].materials == null
-                        || !sections[section].materials.hasPaletteIndexStorage()) {
+                final MC115AnvilChunk.Section source = sections[firstSection + section];
+                if (source == null || source.materials == null
+                        || !source.materials.hasPaletteIndexStorage()) {
                     return null;
                 }
-                cubes[section] = sections[section].materials;
+                cubes[section] = source.materials;
             }
         } else if (chunk instanceof MC118AnvilChunk anvil118) {
             final MC118AnvilChunk.Section[] sections = anvil118.getSections();
-            final int firstSection = (minY >> 4) + anvil118.undergroundSections;
-            if (firstSection < 0 || firstSection + sectionCount > sections.length) {
+            final int firstStoredSection = (chunk.getMinHeight() >> 4) + anvil118.undergroundSections;
+            if (firstStoredSection + firstSection < 0
+                    || firstStoredSection + lastSection >= sections.length) {
                 return null;
             }
             for (int section = 0; section < sectionCount; section++) {
-                final MC118AnvilChunk.Section source = sections[firstSection + section];
+                final MC118AnvilChunk.Section source = sections[firstStoredSection + firstSection + section];
                 if (source == null || source.singleMaterial != null || source.materials == null
                         || !source.materials.hasPaletteIndexStorage()) {
                     return null;
@@ -164,7 +180,7 @@ public final class ChunkPaletteBuffer {
                 }
             }
         }
-        return new LivePaletteView(minY, cubes);
+        return new LivePaletteView(firstSectionY, cubes);
     }
 
     @SuppressWarnings("unchecked")

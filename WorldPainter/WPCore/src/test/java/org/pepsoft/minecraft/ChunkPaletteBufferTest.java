@@ -115,6 +115,15 @@ public final class ChunkPaletteBufferTest {
             final ChunkPaletteBuffer.View capture115 = ChunkPaletteBuffer.capture(chunk115);
             assertEquals(ICE, capture115.material(capture115.indexAt(3, 18, 5)));
 
+            final MC115AnvilChunk sparse115 = new MC115AnvilChunk(3, 4, 32);
+            sparse115.setMaterial(1, 20, 2, STONE);
+            assertTrue(ChunkPaletteBuffer.openLivePaletteView(sparse115, ICE) == null);
+            final ChunkPaletteBuffer.LivePaletteView partial115 =
+                    ChunkPaletteBuffer.openLivePaletteView(sparse115, 16, 31, ICE);
+            assertTrue(partial115 != null);
+            assertEquals(16, partial115.minY());
+            assertEquals(1, partial115.sectionCount());
+
             final MC118AnvilChunk chunk118 = new MC118AnvilChunk(-4, 8, -16, 16);
             chunk118.setMaterial(4, -1, 7, STONE);
             chunk118.setMaterial(4, 0, 7, STONE);
