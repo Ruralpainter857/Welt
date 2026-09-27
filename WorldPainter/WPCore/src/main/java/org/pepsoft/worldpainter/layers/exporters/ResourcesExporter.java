@@ -6,6 +6,7 @@ package org.pepsoft.worldpainter.layers.exporters;
 
 import com.google.common.collect.ImmutableMap;
 import org.pepsoft.minecraft.Chunk;
+import org.pepsoft.minecraft.ChunkPaletteBuffer;
 import org.pepsoft.minecraft.Material;
 import org.pepsoft.util.PerlinNoise;
 import org.pepsoft.util.Version;
@@ -102,6 +103,16 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
             nativeSeeds[i] = noiseGenerators[i].getSeed();
             nativeDirtMaterials[i] = (byte) (this.activeMaterials[i].isNamedOneOf(MC_DIRT, MC_GRAVEL) ? 1 : 0);
             System.arraycopy(chances[i], 0, nativeFlattenedChances, i * 16, 16);
+        }
+        nativePaletteTargets = new Material[this.activeMaterials.length * 2];
+        final boolean nether = dimension.getAnchor().dim == DIM_NETHER;
+        for (int i = 0; i < this.activeMaterials.length; i++) {
+            final Material material = this.activeMaterials[i];
+            final Material normalTarget = nether && material.isNamed(MC_GOLD_ORE)
+                    ? NETHER_GOLD_ORE : material;
+            nativePaletteTargets[i * 2] = normalTarget;
+            nativePaletteTargets[i * 2 + 1] = ORE_TO_DEEPSLATE_VARIANT.getOrDefault(
+                    material.name, normalTarget);
         }
     }
 
@@ -263,6 +274,66 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
         }
         final int outputLength = (int) outputLengthLong;
         final byte[] selected = buffers.output(outputLength);
+        final boolean nether = dimension.getAnchor().dim == DIM_NETHER;
+        final ChunkPaletteBuffer.LivePaletteView paletteView =
+                ChunkPaletteBuffer.openLivePaletteView(chunk, effectiveMinZ, effectiveMaxZ,
+                        nativePaletteTargets);
+        if (paletteView != null) {
+            final int sectionCount = paletteView.sectionCount();
+            final int[][] sectionIndexes = buffers.sectionIndexes;
+            final byte[][] paletteFlags = buffers.paletteFlags;
+            final int[][] outputPaletteIndexes = buffers.outputPaletteIndexes;
+            for (int section = 0; section < sectionCount; section++) {
+                sectionIndexes[section] = paletteView.indexes(section);
+                final int paletteSize = paletteView.paletteSize(section);
+                if (paletteFlags[section] == null || paletteFlags[section].length < paletteSize) {
+                    paletteFlags[section] = new byte[paletteSize];
+                }
+                for (int paletteIndex = 0; paletteIndex < paletteSize; paletteIndex++) {
+                    final Material material = paletteView.paletteMaterial(section, paletteIndex);
+                    paletteFlags[section][paletteIndex] = (byte) ((material != null
+                            && material.isNamed(MC_DEEPSLATE)) ? 1 : 0);
+                }
+                if (outputPaletteIndexes[section] == null
+                        || outputPaletteIndexes[section].length != nativePaletteTargets.length) {
+                    outputPaletteIndexes[section] = new int[nativePaletteTargets.length];
+                }
+                for (int material = 0; material < nativePaletteTargets.length; material++) {
+                    outputPaletteIndexes[section][material] =
+                            paletteView.paletteIndex(section, nativePaletteTargets[material]);
+                }
+            }
+            final long paletteNativeStart = profile ? System.nanoTime() : 0L;
+            if (profile) {
+                buffers.nativeProfileNanos[0] = 0L;
+                buffers.nativeProfileNanos[1] = 0L;
+                buffers.nativeApplyNanos[0] = 0L;
+            }
+            final boolean paletteApplied;
+            try {
+                paletteApplied = NativeSlices.resourceMaterialsIntoPalette(effectiveMinZ, effectiveMaxZ,
+                    tinyX, tinyY, dirtX, dirtY, columnMinZ, columnMaxZ, resourceValues,
+                    nativeSeeds, minLevels, maxLevels, nativeDirtMaterials, nativeFlattenedChances,
+                    selected, paletteView.minY(), sectionCount, sectionIndexes, paletteFlags,
+                    outputPaletteIndexes, profile ? buffers.nativeProfileNanos : null,
+                    profile ? buffers.nativeApplyNanos : null);
+            } finally {
+                java.util.Arrays.fill(sectionIndexes, 0, sectionCount, null);
+            }
+            if (paletteApplied) {
+                if (profile) {
+                    final long nativeEnd = System.nanoTime();
+                    NATIVE_PROFILE_PREP_NANOS.addAndGet(paletteNativeStart - preparationStart);
+                    NATIVE_PROFILE_CALL_NANOS.addAndGet(nativeEnd - paletteNativeStart);
+                    NATIVE_PROFILE_COPY_NANOS.addAndGet(buffers.nativeProfileNanos[0]);
+                    NATIVE_PROFILE_RUST_NANOS.addAndGet(buffers.nativeProfileNanos[1]);
+                    NATIVE_PROFILE_APPLY_NANOS.addAndGet(buffers.nativeApplyNanos[0]);
+                    NATIVE_PROFILE_CHUNKS.incrementAndGet();
+                }
+                return true;
+            }
+        }
+
         final long nativeStart = profile ? System.nanoTime() : 0L;
         if (!NativeSlices.resourceMaterialsInto(effectiveMinZ, effectiveMaxZ,
                 tinyX, tinyY, dirtX, dirtY, columnMinZ, columnMaxZ, resourceValues,
@@ -279,7 +350,6 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
             NATIVE_PROFILE_CHUNKS.incrementAndGet();
         }
         final long applyStart = profile ? System.nanoTime() : 0L;
-        final boolean nether = dimension.getAnchor().dim == DIM_NETHER;
         final int verticalRange = effectiveMaxZ - effectiveMinZ + 1;
         for (int x = 0; x < 16; x++) {
             for (int z = 0; z < 16; z++) {
@@ -324,6 +394,7 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
     private final long[] nativeSeeds;
     private final byte[] nativeDirtMaterials;
     private final float[] nativeFlattenedChances;
+    private final Material[] nativePaletteTargets;
     private final ThreadLocal<NativeResourceBuffers> nativeResourceBuffers =
             ThreadLocal.withInitial(NativeResourceBuffers::new);
 
@@ -335,7 +406,11 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
         private final double[] tinyX = new double[256], tinyY = new double[256];
         private final double[] dirtX = new double[256], dirtY = new double[256];
         private final byte[][] outputs = new byte[8][];
+        private final int[][] sectionIndexes = new int[256][];
+        private final byte[][] paletteFlags = new byte[256][];
+        private final int[][] outputPaletteIndexes = new int[256][];
         private final long[] nativeProfileNanos = new long[2];
+        private final long[] nativeApplyNanos = new long[1];
         private int nextOutputSlot;
 
         private byte[] output(int length) {

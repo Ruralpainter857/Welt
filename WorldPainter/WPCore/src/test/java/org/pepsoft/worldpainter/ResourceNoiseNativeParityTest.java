@@ -1,15 +1,21 @@
 package org.pepsoft.worldpainter;
 
 import org.junit.Test;
+import org.pepsoft.minecraft.ChunkPaletteBuffer;
+import org.pepsoft.minecraft.MC115AnvilChunk;
+import org.pepsoft.minecraft.Material;
 import org.pepsoft.util.PerlinNoise;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeTrue;
+import static org.pepsoft.minecraft.Constants.MC_DEEPSLATE;
+import static org.pepsoft.minecraft.Material.*;
 
 /** Verifies batched Rust ore-noise decisions against the production Java noise. */
 public final class ResourceNoiseNativeParityTest {
@@ -88,6 +94,122 @@ public final class ResourceNoiseNativeParityTest {
             } else {
                 System.setProperty(Native.EXPORT_KEY, previousFlag);
             }
+        }
+    }
+
+    @Test
+    public void nativeResourceResultsMutateLivePaletteIndexesWithJavaParity() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String oldExport = System.getProperty(Native.EXPORT_KEY);
+        final String oldResources = System.getProperty(Native.RESOURCES_EXPORT_KEY);
+        final String oldCompact = System.getProperty("welt.packedArrayCube.compactPaletteStorage");
+        Native.setExportEnabled(true);
+        System.setProperty(Native.RESOURCES_EXPORT_KEY, "true");
+        System.setProperty("welt.packedArrayCube.compactPaletteStorage", "true");
+        try {
+            final int minY = 0, maxY = 15, height = 16;
+            final double[] tinyX = new double[256], tinyY = new double[256];
+            final double[] dirtX = new double[256], dirtY = new double[256];
+            final int[] columnMinY = new int[256], columnMaxY = new int[256];
+            final int[] resourceValues = new int[256];
+            for (int x = 0; x < 16; x++) {
+                for (int z = 0; z < 16; z++) {
+                    final int column = x * 16 + z;
+                    tinyX[column] = x / 4.099f;
+                    tinyY[column] = z / 4.099f;
+                    dirtX[column] = x / 16.411f;
+                    dirtY[column] = z / 16.411f;
+                    columnMinY[column] = minY;
+                    columnMaxY[column] = maxY;
+                    resourceValues[column] = 1;
+                }
+            }
+            final long[] seeds = {0x54a31L};
+            final int[] materialMinY = {minY}, materialMaxY = {maxY};
+            final byte[] dirtMaterials = {0};
+            final float[] chances = new float[16];
+            final MC115AnvilChunk expected = new MC115AnvilChunk(0, 0, 16);
+            final MC115AnvilChunk actual = new MC115AnvilChunk(0, 0, 16);
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = 0; z < 16; z++) {
+                    for (int x = 0; x < 16; x++) {
+                        final Material initial = ((x + z + y) % 5 == 0)
+                                ? Material.get(MC_DEEPSLATE) : STONE;
+                        expected.setMaterial(x, y, z, initial);
+                        actual.setMaterial(x, y, z, initial);
+                    }
+                }
+            }
+
+            final byte[] selected = NativeSlices.resourceMaterials(minY, maxY,
+                    tinyX, tinyY, dirtX, dirtY, columnMinY, columnMaxY, resourceValues,
+                    seeds, materialMinY, materialMaxY, dirtMaterials, chances);
+            assertNotNull("reference decision buffer", selected);
+            int selectedCount = 0, deepslateMatches = 0;
+            for (int x = 0; x < 16; x++) {
+                for (int z = 0; z < 16; z++) {
+                    final int column = x * 16 + z;
+                    for (int y = maxY; y >= minY; y--) {
+                        if ((selected[column * height + y - minY] & 0xff) == 0) {
+                            continue;
+                        }
+                        selectedCount++;
+                        final Material existing = expected.getMaterial(x, y, z);
+                        if (existing.isNamed(MC_DEEPSLATE)) {
+                            deepslateMatches++;
+                            expected.setMaterial(x, y, z, DEEPSLATE_DIAMOND_ORE);
+                        } else {
+                            expected.setMaterial(x, y, z, DIAMOND_ORE);
+                        }
+                    }
+                }
+            }
+            assertTrue("fixture must exercise actual ore placement", selectedCount > 0);
+            assertTrue("fixture must exercise deepslate replacement", deepslateMatches > 0);
+
+            final Material[] targets = {DIAMOND_ORE, DEEPSLATE_DIAMOND_ORE};
+            final ChunkPaletteBuffer.LivePaletteView view =
+                    ChunkPaletteBuffer.openLivePaletteView(actual, minY, maxY, targets);
+            assertTrue("compact modern chunk palette view", view != null);
+            final int[][] indexes = {view.indexes(0)};
+            final byte[][] paletteFlags = {new byte[view.paletteSize(0)]};
+            for (int paletteIndex = 0; paletteIndex < paletteFlags[0].length; paletteIndex++) {
+                final Material material = view.paletteMaterial(0, paletteIndex);
+                paletteFlags[0][paletteIndex] = (byte) ((material != null
+                        && material.isNamed(MC_DEEPSLATE)) ? 1 : 0);
+            }
+            final int[][] outputPaletteIndexes = {{
+                    view.paletteIndex(0, targets[0]), view.paletteIndex(0, targets[1])
+            }};
+            final long[] profileNanos = new long[2], applyNanos = new long[1];
+            final byte[] resultBuffer = new byte[selected.length];
+            assertTrue(NativeSlices.resourceMaterialsIntoPalette(minY, maxY,
+                    tinyX, tinyY, dirtX, dirtY, columnMinY, columnMaxY, resourceValues,
+                    seeds, materialMinY, materialMaxY, dirtMaterials, chances,
+                    resultBuffer, view.minY(), indexes.length, indexes, paletteFlags, outputPaletteIndexes,
+                    profileNanos, applyNanos));
+            assertArrayEquals(selected, resultBuffer);
+
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = 0; z < 16; z++) {
+                    for (int x = 0; x < 16; x++) {
+                        assertEquals("block " + x + "," + y + "," + z,
+                                expected.getMaterial(x, y, z), actual.getMaterial(x, y, z));
+                    }
+                }
+            }
+        } finally {
+            restore(Native.EXPORT_KEY, oldExport);
+            restore(Native.RESOURCES_EXPORT_KEY, oldResources);
+            restore("welt.packedArrayCube.compactPaletteStorage", oldCompact);
+        }
+    }
+
+    private static void restore(String key, String value) {
+        if (value == null) {
+            System.clearProperty(key);
+        } else {
+            System.setProperty(key, value);
         }
     }
 }

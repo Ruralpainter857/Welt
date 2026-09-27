@@ -1,5 +1,6 @@
 package org.pepsoft.util;
 
+import org.pepsoft.minecraft.Material;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.nativeapi.NativeSlices;
@@ -28,7 +29,8 @@ public class PackedArrayCube<T> {
         this.type = type;
         bitsPerCoordinate = (int) Math.ceil(Math.log(size) / Math.log(2));
         arraySize = size * size * size;
-        paletteIndexStorage = Boolean.getBoolean("welt.packedArrayCube.compactPaletteStorage");
+        paletteIndexStorage = Boolean.getBoolean("welt.packedArrayCube.compactPaletteStorage")
+                || ((type == Material.class) && Native.isResourcesExportEnabled());
         values = paletteIndexStorage ? null : (T[]) Array.newInstance(type, arraySize);
         if (paletteIndexStorage) {
             buildEmptyPaletteIndexView();

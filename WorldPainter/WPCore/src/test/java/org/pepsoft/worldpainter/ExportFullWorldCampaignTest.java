@@ -1,8 +1,6 @@
 package org.pepsoft.worldpainter;
 
 import jdk.jfr.Recording;
-import jdk.jfr.consumer.RecordedEvent;
-import jdk.jfr.consumer.RecordingStream;
 import org.junit.Test;
 import org.pepsoft.minecraft.ChunkFactory;
 import org.pepsoft.minecraft.ChunkPaletteBuffer;
@@ -831,28 +829,13 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
         private volatile boolean sampling;
         private long heapBeforeBytes;
         private Thread thread;
-        private RecordingStream rssRecording;
 
         private void start() {
             heapBeforeBytes = usedHeapBytes();
             peakHeapBytes.set(heapBeforeBytes);
-            try {
-                rssRecording = new RecordingStream();
-                rssRecording.enable("jdk.ResidentSetSize").withPeriod(Duration.ofMillis(SAMPLE_PERIOD_MILLIS));
-                rssRecording.onEvent("jdk.ResidentSetSize", this::sampleRss);
-                rssRecording.startAsync();
-                final long deadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
-                while (rssBeforeBytes.get() < 0 && System.nanoTime() < deadline) {
-                    try {
-                        Thread.sleep(1L);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    }
-                }
-            } catch (IllegalArgumentException | IllegalStateException unavailable) {
-                rssRecording = null;
-            }
+            final long residentBytes = org.pepsoft.worldpainter.nativeapi.NativeSlices.currentProcessResidentBytes();
+            rssBeforeBytes.set(residentBytes);
+            peakRssBytes.set(residentBytes);
             sampling = true;
             thread = new Thread(() -> {
                 while (sampling) {
@@ -895,21 +878,16 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 Thread.currentThread().interrupt();
             }
             sample();
-            if (rssRecording != null) {
-                rssRecording.close();
-                rssRecording = null;
-            }
         }
 
         private void sample() {
             final long used = usedHeapBytes();
             peakHeapBytes.accumulateAndGet(used, Math::max);
-        }
-
-        private void sampleRss(RecordedEvent event) {
-            final long size = event.getLong("size");
-            rssBeforeBytes.compareAndSet(-1L, size);
-            peakRssBytes.accumulateAndGet(size, Math::max);
+            final long residentBytes = org.pepsoft.worldpainter.nativeapi.NativeSlices.currentProcessResidentBytes();
+            if (residentBytes >= 0) {
+                rssBeforeBytes.compareAndSet(-1L, residentBytes);
+                peakRssBytes.accumulateAndGet(residentBytes, Math::max);
+            }
         }
 
         private long usedHeapBytes() {

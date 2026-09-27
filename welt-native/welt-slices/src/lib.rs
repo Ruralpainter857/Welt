@@ -23,11 +23,44 @@ use welt_nbt::packed_array::{pack_indices, unpack_indices};
 use welt_render::shade::shade_pixels;
 
 mod chunk_buffer;
+mod resource_palette;
+
+#[cfg(windows)]
+#[repr(C)]
+struct ProcessMemoryCounters {
+    cb: u32,
+    page_fault_count: u32,
+    peak_working_set_size: usize,
+    working_set_size: usize,
+    quota_peak_paged_pool_usage: usize,
+    quota_paged_pool_usage: usize,
+    quota_peak_non_paged_pool_usage: usize,
+    quota_non_paged_pool_usage: usize,
+    pagefile_usage: usize,
+    peak_pagefile_usage: usize,
+}
+
+#[cfg(windows)]
+#[link(name = "psapi")]
+unsafe extern "system" {
+    fn GetProcessMemoryInfo(
+        process: *mut c_void,
+        counters: *mut ProcessMemoryCounters,
+        size: u32,
+    ) -> i32;
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetCurrentProcess() -> *mut c_void;
+}
 
 // JNI function-table indices, checked against the JDK's jni.h. The first four
 // entries are reserved; GetArrayLength is 171, GetDoubleArrayElements is 190,
 // and ReleaseDoubleArrayElements is 198. Keeping calls here avoids a JNI crate.
 const GET_ARRAY_LENGTH: usize = 171;
+const GET_OBJECT_ARRAY_ELEMENT: usize = 173;
 const GET_DIRECT_BUFFER_ADDRESS: usize = 230;
 const GET_DIRECT_BUFFER_CAPACITY: usize = 231;
 const GET_INT_ARRAY_REGION: usize = 203;
@@ -39,6 +72,8 @@ const RELEASE_DOUBLE_ARRAY_ELEMENTS: usize = 198;
 const JNI_ABORT: jint = 2;
 const GET_BYTE_ARRAY_ELEMENTS: usize = 184;
 const RELEASE_BYTE_ARRAY_ELEMENTS: usize = 192;
+const GET_INT_ARRAY_ELEMENTS: usize = 187;
+const RELEASE_INT_ARRAY_ELEMENTS: usize = 195;
 const SET_INT_ARRAY_REGION: usize = 211;
 const SET_LONG_ARRAY_REGION: usize = 212;
 const GET_BYTE_ARRAY_REGION: usize = 200;
@@ -114,6 +149,44 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             }
         })
     }
+}
+
+/// Returns the current process working set in bytes, or -1 on unsupported platforms.
+///
+/// # Safety
+/// The JNI environment and class are provided by the active JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeCurrentProcessResidentBytes(
+    _env: *mut JNIEnv,
+    _class: jclass,
+) -> jlong {
+    #[cfg(windows)]
+    {
+        let mut counters = ProcessMemoryCounters {
+            cb: std::mem::size_of::<ProcessMemoryCounters>() as u32,
+            page_fault_count: 0,
+            peak_working_set_size: 0,
+            working_set_size: 0,
+            quota_peak_paged_pool_usage: 0,
+            quota_paged_pool_usage: 0,
+            quota_peak_non_paged_pool_usage: 0,
+            quota_non_paged_pool_usage: 0,
+            pagefile_usage: 0,
+            peak_pagefile_usage: 0,
+        };
+        let process = unsafe { GetCurrentProcess() };
+        if unsafe {
+            GetProcessMemoryInfo(
+                process,
+                &mut counters,
+                std::mem::size_of::<ProcessMemoryCounters>() as u32,
+            )
+        } != 0
+        {
+            return counters.working_set_size.min(i64::MAX as usize) as jlong;
+        }
+    }
+    -1
 }
 
 /// Applies WorldPainter's two integer RGB brightness multiplications to one
@@ -228,6 +301,40 @@ struct ByteArrayOutput {
     length: usize,
 }
 
+struct WritableIntArray {
+    env: *mut JNIEnv,
+    array: jobject,
+    values: *mut i32,
+    commit: bool,
+}
+
+impl WritableIntArray {
+    fn as_slice(&self) -> &[i32] {
+        unsafe { slice::from_raw_parts(self.values, 4096) }
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [i32] {
+        unsafe { slice::from_raw_parts_mut(self.values, 4096) }
+    }
+}
+
+impl Drop for WritableIntArray {
+    fn drop(&mut self) {
+        type ReleaseIntArrayElements =
+            unsafe extern "system" fn(*mut JNIEnv, jobject, *mut i32, jint);
+        let release: ReleaseIntArrayElements =
+            unsafe { std::mem::transmute(function(self.env, RELEASE_INT_ARRAY_ELEMENTS)) };
+        unsafe {
+            release(
+                self.env,
+                self.array,
+                self.values,
+                if self.commit { 0 } else { JNI_ABORT },
+            )
+        };
+    }
+}
+
 impl ByteArrayOutput {
     fn as_mut_slice(&mut self) -> &mut [i8] {
         unsafe { slice::from_raw_parts_mut(self.values, self.length) }
@@ -241,6 +348,29 @@ impl Drop for ByteArrayOutput {
         let release: ReleaseByteArrayElements =
             unsafe { std::mem::transmute(function(self.env, RELEASE_BYTE_ARRAY_ELEMENTS)) };
         unsafe { release(self.env, self.array, self.values, 0) };
+    }
+}
+
+struct ReadOnlyByteArray {
+    env: *mut JNIEnv,
+    array: jobject,
+    values: *mut i8,
+    length: usize,
+}
+
+impl ReadOnlyByteArray {
+    fn as_slice(&self) -> &[i8] {
+        unsafe { slice::from_raw_parts(self.values, self.length) }
+    }
+}
+
+impl Drop for ReadOnlyByteArray {
+    fn drop(&mut self) {
+        type ReleaseByteArrayElements =
+            unsafe extern "system" fn(*mut JNIEnv, jobject, *mut i8, jint);
+        let release: ReleaseByteArrayElements =
+            unsafe { std::mem::transmute(function(self.env, RELEASE_BYTE_ARRAY_ELEMENTS)) };
+        unsafe { release(self.env, self.array, self.values, JNI_ABORT) };
     }
 }
 

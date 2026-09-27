@@ -339,6 +339,66 @@ public final class NativeSlices {
         }
     }
 
+    /** Computes Resources and applies the selected materials to live chunk palette indexes. */
+    public static boolean resourceMaterialsIntoPalette(final int minZ, final int maxZ,
+                                          final double[] tinyX, final double[] tinyY,
+                                          final double[] dirtX, final double[] dirtY,
+                                          final int[] columnMinZ, final int[] columnMaxZ,
+                                          final int[] resourceValues, final long[] seeds,
+                                          final int[] materialMinZ, final int[] materialMaxZ,
+                                          final byte[] dirtMaterials, final float[] chances,
+                                          final byte[] output, final int sectionMinY,
+                                          final int sectionCount, final int[][] sectionIndexes,
+                                          final byte[][] paletteFlags,
+                                          final int[][] outputPaletteIndexes,
+                                          final long[] profileNanos, final long[] applyNanos) {
+        final long height = (long) maxZ - minZ + 1L;
+        if (!Native.isResourcesExportEnabled() || !NativeLoader.areSlicesAvailable()
+                || tinyX == null || tinyY == null || dirtX == null || dirtY == null
+                || columnMinZ == null || columnMaxZ == null || resourceValues == null
+                || seeds == null || materialMinZ == null || materialMaxZ == null
+                || dirtMaterials == null || chances == null || output == null
+                || sectionIndexes == null || paletteFlags == null || outputPaletteIndexes == null
+                || minZ > maxZ || height > 4096L || tinyX.length == 0 || tinyX.length > 256
+                || tinyY.length != tinyX.length || dirtX.length != tinyX.length
+                || dirtY.length != tinyX.length || columnMinZ.length != tinyX.length
+                || columnMaxZ.length != tinyX.length || resourceValues.length != tinyX.length
+                || seeds.length > 64 || materialMinZ.length != seeds.length
+                || materialMaxZ.length != seeds.length || dirtMaterials.length != seeds.length
+                || chances.length != seeds.length * 16L || tinyX.length * height > 1_048_576L
+                || output.length != tinyX.length * height || (sectionMinY & 15) != 0
+                || sectionCount <= 0 || sectionCount > sectionIndexes.length
+                || sectionCount > paletteFlags.length || sectionCount > outputPaletteIndexes.length
+                || minZ < sectionMinY || maxZ >= sectionMinY + (long) sectionCount * 16L
+                || sectionCount != (((maxZ - sectionMinY) >> 4) + 1)
+                || (profileNanos != null && profileNanos.length != 2)
+                || (applyNanos != null && applyNanos.length != 1)) {
+            return false;
+        }
+        for (int section = 0; section < sectionCount; section++) {
+            if (sectionIndexes[section] == null || sectionIndexes[section].length != 4096
+                    || paletteFlags[section] == null || paletteFlags[section].length == 0
+                    || outputPaletteIndexes[section] == null
+                    || outputPaletteIndexes[section].length != seeds.length * 2) {
+                return false;
+            }
+            for (int paletteIndex : outputPaletteIndexes[section]) {
+                if (paletteIndex < 0 || paletteIndex >= paletteFlags[section].length) {
+                    return false;
+                }
+            }
+        }
+        try {
+            return nativeFillResourceMaterialsIntoPalette(minZ, maxZ,
+                    tinyX, tinyY, dirtX, dirtY, columnMinZ, columnMaxZ, resourceValues,
+                    seeds, materialMinZ, materialMaxZ, dirtMaterials, chances, output,
+                    profileNanos, sectionMinY, sectionCount, sectionIndexes, paletteFlags,
+                    outputPaletteIndexes, applyNanos) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
 
     /** False leaves the FrostExporter on its original Java path. */
     public static boolean frostColumn(final int minZ, final int maxZ, final int highestNonAir,
@@ -455,7 +515,34 @@ public final class NativeSlices {
                                                            byte[] dirtMaterials, float[] chances,
                                                            byte[] output, long[] profileNanos);
 
+    private static native int nativeFillResourceMaterialsIntoPalette(int minZ, int maxZ,
+                                                           double[] tinyX, double[] tinyY,
+                                                           double[] dirtX, double[] dirtY,
+                                                           int[] columnMinZ, int[] columnMaxZ,
+                                                           int[] resourceValues, long[] seeds,
+                                                           int[] materialMinZ, int[] materialMaxZ,
+                                                           byte[] dirtMaterials, float[] chances,
+                                                           byte[] output, long[] profileNanos,
+                                                           int sectionMinY, int sectionCount,
+                                                           int[][] sectionIndexes,
+                                                           byte[][] paletteFlags, int[][] outputPaletteIndexes,
+                                                           long[] applyNanos);
+
     private static native int nativeValidateChunkPaletteBuffer(ByteBuffer buffer);
+
+    /** Returns the current process working set in bytes, or -1 if unavailable. */
+    public static long currentProcessResidentBytes() {
+        if (!NativeLoader.areSlicesAvailable()) {
+            return -1L;
+        }
+        try {
+            return nativeCurrentProcessResidentBytes();
+        } catch (final UnsatisfiedLinkError e) {
+            return -1L;
+        }
+    }
+
+    private static native long nativeCurrentProcessResidentBytes();
 
 
     private static native int nativeFrostColumn(int minZ, int maxZ, int highestNonAir,
