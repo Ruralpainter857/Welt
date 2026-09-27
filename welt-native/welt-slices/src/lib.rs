@@ -32,6 +32,7 @@ const GET_FLOAT_ARRAY_REGION: usize = 205;
 const GET_DOUBLE_ARRAY_REGION: usize = 206;
 const GET_DOUBLE_ARRAY_ELEMENTS: usize = 190;
 const RELEASE_DOUBLE_ARRAY_ELEMENTS: usize = 198;
+const JNI_ABORT: jint = 2;
 const GET_BYTE_ARRAY_ELEMENTS: usize = 184;
 const RELEASE_BYTE_ARRAY_ELEMENTS: usize = 192;
 const SET_INT_ARRAY_REGION: usize = 211;
@@ -150,6 +151,31 @@ impl Drop for DoubleArrayOutput {
         let release: ReleaseDoubleArrayElements =
             unsafe { std::mem::transmute(function(self.env, RELEASE_DOUBLE_ARRAY_ELEMENTS)) };
         unsafe { release(self.env, self.array, self.values, 0) };
+    }
+}
+
+struct DoubleArrayInput {
+    env: *mut JNIEnv,
+    array: jobject,
+    values: *mut f64,
+    length: usize,
+}
+
+impl DoubleArrayInput {
+    fn as_slice(&self) -> &[f64] {
+        unsafe { slice::from_raw_parts(self.values, self.length) }
+    }
+}
+
+impl Drop for DoubleArrayInput {
+    fn drop(&mut self) {
+        unsafe {
+            type ReleaseDoubleArrayElements =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, *mut f64, jint);
+            let release: ReleaseDoubleArrayElements =
+                std::mem::transmute(function(self.env, RELEASE_DOUBLE_ARRAY_ELEMENTS));
+            release(self.env, self.array, self.values, JNI_ABORT);
+        }
     }
 }
 
@@ -866,14 +892,18 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             {
                 return WeltError::IllegalArgument as jint;
             }
-            type GetDoubleArrayRegion =
-                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut f64);
-            let get_doubles: GetDoubleArrayRegion =
-                std::mem::transmute(function(env, GET_DOUBLE_ARRAY_REGION));
-            let mut input = vec![0.0_f64; input_area];
-            get_doubles(env, base_samples, 0, input_area as jint, input.as_mut_ptr());
             let get_elements: unsafe extern "system" fn(*mut JNIEnv, jobject, *mut u8) -> *mut f64 =
                 std::mem::transmute(function(env, GET_DOUBLE_ARRAY_ELEMENTS));
+            let input_ptr = get_elements(env, base_samples, std::ptr::null_mut());
+            if input_ptr.is_null() {
+                return WeltError::Internal as jint;
+            }
+            let input_values = DoubleArrayInput {
+                env,
+                array: base_samples,
+                values: input_ptr,
+                length: input_area,
+            };
             let output_ptr = get_elements(env, output, std::ptr::null_mut());
             if output_ptr.is_null() {
                 return WeltError::Internal as jint;
@@ -885,13 +915,14 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 length: output_area,
             };
             let result = fill_slope_samples(
-                &input,
+                input_values.as_slice(),
                 input_width as usize,
                 input_height as usize,
                 vertical_scaling,
                 output_values.as_mut_slice(),
             );
             drop(output_values);
+            drop(input_values);
             if !result {
                 return WeltError::IllegalArgument as jint;
             }
