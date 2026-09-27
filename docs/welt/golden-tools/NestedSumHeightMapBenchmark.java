@@ -4,6 +4,8 @@ import org.pepsoft.worldpainter.heightMaps.ConstantHeightMap;
 import org.pepsoft.worldpainter.heightMaps.DifferenceHeightMap;
 import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
 import org.pepsoft.worldpainter.heightMaps.ProductHeightMap;
+import org.pepsoft.worldpainter.heightMaps.MinimisingHeightMap;
+import org.pepsoft.worldpainter.heightMaps.MaximisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
@@ -22,10 +24,17 @@ public final class NestedSumHeightMapBenchmark {
         final int tiles = args.length > 0 ? Integer.parseInt(args[0]) : 48;
         final int rounds = args.length > 1 ? Integer.parseInt(args[1]) : 9;
         final boolean composite = args.length > 2 && "composite".equalsIgnoreCase(args[2]);
+        final boolean minmax = args.length > 2 && "minmax".equalsIgnoreCase(args[2]);
         if (!NativeLoader.areSlicesAvailable()) {
             throw new IllegalStateException("welt_slices is unavailable; build with Maven -Pnative");
         }
-        final org.pepsoft.worldpainter.HeightMap heightMap = composite
+        final org.pepsoft.worldpainter.HeightMap heightMap = minmax
+                ? new MaximisingHeightMap(new MinimisingHeightMap(
+                        new SumHeightMap(new ConstantHeightMap(48.0),
+                                new NoiseHeightMap(38.0, 0.8, 2, 0x1234_5678L)),
+                        new NoiseHeightMap(22.0, 2.1, 5, -0x2468_1357L)),
+                        new ConstantHeightMap(54.0))
+                : composite
                 ? new DifferenceHeightMap(new ProductHeightMap(
                         new SumHeightMap(new ConstantHeightMap(20.1),
                                 new NoiseHeightMap(38.0, 0.8, 2, 0x1234_5678L)),
@@ -58,7 +67,7 @@ public final class NestedSumHeightMapBenchmark {
         Arrays.sort(javaSamples);
         Arrays.sort(rustSamples);
         System.out.printf("scenario=%s tiles=%d rounds=%d java_median_ms_per_tile=%.4f rust_median_ms_per_tile=%.4f rust_speedup=%.3f sink=%d%n",
-                composite ? "product-difference" : "nested-sum", tiles, rounds,
+                minmax ? "minmax" : composite ? "product-difference" : "nested-sum", tiles, rounds,
                 javaSamples[rounds / 2], rustSamples[rounds / 2],
                 javaSamples[rounds / 2] / rustSamples[rounds / 2], sink);
     }

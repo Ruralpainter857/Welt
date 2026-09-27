@@ -4,6 +4,8 @@ import org.junit.Test;
 import org.pepsoft.worldpainter.heightMaps.ConstantHeightMap;
 import org.pepsoft.worldpainter.heightMaps.DifferenceHeightMap;
 import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
+import org.pepsoft.worldpainter.heightMaps.MinimisingHeightMap;
+import org.pepsoft.worldpainter.heightMaps.MaximisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.ProductHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.nativeapi.Native;
@@ -220,6 +222,61 @@ public final class NoiseHeightMapNativeParityTest {
                             Double.doubleToRawLongBits(tree.getHeight(originX + x, originY + y)),
                             Double.doubleToRawLongBits(output[y * width + x]));
                 }
+            }
+        } finally {
+            if (previousFlag == null) {
+                System.clearProperty(Native.GEN_KEY);
+            } else {
+                System.setProperty(Native.GEN_KEY, previousFlag);
+            }
+        }
+    }
+
+    @Test
+    public void nativeMinimumAndMaximumMatchJavaNaNPayloadAndSignedZero() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        Native.setGenEnabled(true);
+        try {
+            final double nanA = Double.longBitsToDouble(0x7ff8_0000_0000_0001L);
+            final double nanB = Double.longBitsToDouble(0x7ff8_0000_0000_0002L);
+            final double[][] cases = {{-0.0, 0.0}, {0.0, -0.0}, {nanA, nanB}, {3.0, nanB}, {nanA, 3.0}};
+            for (double[] operands : cases) {
+                final double[] values = {operands[0], operands[1], 0.0};
+                final int[] opcodes = {0, 0, 5};
+                final double[] output = new double[1];
+                assertTrue(NativeSlices.fillHeightMapTree(0, 0, 1, 1, 3, opcodes,
+                        values, new double[3], new int[3], new long[3], output));
+                assertEquals(Double.doubleToRawLongBits(Math.min(operands[0], operands[1])),
+                        Double.doubleToRawLongBits(output[0]));
+                opcodes[2] = 6;
+                assertTrue(NativeSlices.fillHeightMapTree(0, 0, 1, 1, 3, opcodes,
+                        values, new double[3], new int[3], new long[3], output));
+                assertEquals(Double.doubleToRawLongBits(Math.max(operands[0], operands[1])),
+                        Double.doubleToRawLongBits(output[0]));
+            }
+
+            final NoiseHeightMap noise = new NoiseHeightMap(30.0, 1.0, 2, 0x1357L);
+            final int[] opcodes = {0, 1, 5};
+            final double[] values = {45.0, noise.getHeight(), 0.0};
+            final double[] scales = {0.0, noise.getScale(), 0.0};
+            final int[] octaves = {0, noise.getOctaves(), 0};
+            final long[] seeds = {0L, noise.getSeed() + noise.getSeedOffset(), 0L};
+            final double[] output = new double[7 * 5];
+            assertTrue(NativeSlices.fillHeightMapTree(-9, 17, 7, 5, 3, opcodes,
+                    values, scales, octaves, seeds, output));
+            final MinimisingHeightMap min = new MinimisingHeightMap(new ConstantHeightMap(45.0), noise);
+            final MaximisingHeightMap max = new MaximisingHeightMap(new ConstantHeightMap(45.0), noise);
+            for (int i = 0; i < output.length; i++) {
+                assertEquals(Double.doubleToRawLongBits(min.getHeight(-9 + i % 7, 17 + i / 7)),
+                        Double.doubleToRawLongBits(output[i]));
+            }
+            opcodes[2] = 6;
+            assertTrue(NativeSlices.fillHeightMapTree(-9, 17, 7, 5, 3, opcodes,
+                    values, scales, octaves, seeds, output));
+            for (int i = 0; i < output.length; i++) {
+                assertEquals(Double.doubleToRawLongBits(max.getHeight(-9 + i % 7, 17 + i / 7)),
+                        Double.doubleToRawLongBits(output[i]));
             }
         } finally {
             if (previousFlag == null) {

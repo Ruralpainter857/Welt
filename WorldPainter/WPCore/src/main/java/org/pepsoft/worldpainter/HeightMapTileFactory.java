@@ -10,6 +10,8 @@ import org.pepsoft.worldpainter.heightMaps.ConstantHeightMap;
 import org.pepsoft.worldpainter.heightMaps.CombiningHeightMap;
 import org.pepsoft.worldpainter.heightMaps.DifferenceHeightMap;
 import org.pepsoft.worldpainter.heightMaps.ProductHeightMap;
+import org.pepsoft.worldpainter.heightMaps.MinimisingHeightMap;
+import org.pepsoft.worldpainter.heightMaps.MaximisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.nativeapi.Native;
@@ -242,7 +244,9 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         }
         if ((heightMap.getClass() == SumHeightMap.class)
                 || (heightMap.getClass() == DifferenceHeightMap.class)
-                || (heightMap.getClass() == ProductHeightMap.class)) {
+                || (heightMap.getClass() == ProductHeightMap.class)
+                || (heightMap.getClass() == MinimisingHeightMap.class)
+                || (heightMap.getClass() == MaximisingHeightMap.class)) {
             final CombiningHeightMap combining = (CombiningHeightMap) heightMap;
             return isBatchSafeHeightMap(combining.getHeightMap1())
                     && isBatchSafeHeightMap(combining.getHeightMap2());
@@ -298,6 +302,10 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 operator = 3;
             } else if (heightMap.getClass() == ProductHeightMap.class) {
                 operator = 4;
+            } else if (heightMap.getClass() == MinimisingHeightMap.class) {
+                operator = 5;
+            } else if (heightMap.getClass() == MaximisingHeightMap.class) {
+                operator = 6;
             } else {
                 return false;
             }

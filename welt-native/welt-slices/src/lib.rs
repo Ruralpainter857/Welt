@@ -578,6 +578,8 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                     2 => HeightMapNode::Add,
                     3 => HeightMapNode::Subtract,
                     4 => HeightMapNode::Multiply,
+                    5 => HeightMapNode::Minimum,
+                    6 => HeightMapNode::Maximum,
                     _ => return WeltError::IllegalArgument as jint,
                 });
             }

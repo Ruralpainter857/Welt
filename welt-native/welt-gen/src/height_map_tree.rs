@@ -17,6 +17,8 @@ pub enum HeightMapNode {
     Add,
     Subtract,
     Multiply,
+    Minimum,
+    Maximum,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -110,6 +112,20 @@ pub fn fill_height_map_tree(
                 depth -= 1;
                 parsed.push(ParsedNode::Multiply);
             }
+            HeightMapNode::Minimum => {
+                if depth < 2 {
+                    return Err(HeightMapTreeError::InvalidProgram);
+                }
+                depth -= 1;
+                parsed.push(ParsedNode::Minimum);
+            }
+            HeightMapNode::Maximum => {
+                if depth < 2 {
+                    return Err(HeightMapTreeError::InvalidProgram);
+                }
+                depth -= 1;
+                parsed.push(ParsedNode::Maximum);
+            }
         }
     }
     if depth != 1 {
@@ -166,6 +182,18 @@ pub fn fill_height_map_tree(
                     stack_depth -= 1;
                     stack[stack_depth - 1] = if left == 0.0 { 0.0 } else { left * right };
                 }
+                ParsedNode::Minimum => {
+                    let right = stack[stack_depth - 1];
+                    let left = stack[stack_depth - 2];
+                    stack_depth -= 1;
+                    stack[stack_depth - 1] = java_min(left, right);
+                }
+                ParsedNode::Maximum => {
+                    let right = stack[stack_depth - 1];
+                    let left = stack[stack_depth - 2];
+                    stack_depth -= 1;
+                    stack[stack_depth - 1] = java_max(left, right);
+                }
             }
         }
         output[cell] = stack[0];
@@ -180,6 +208,36 @@ enum ParsedNode {
     Add,
     Subtract,
     Multiply,
+    Minimum,
+    Maximum,
+}
+
+fn java_min(left: f64, right: f64) -> f64 {
+    if left.is_nan() {
+        left
+    } else if right.is_nan() {
+        right
+    } else if left == 0.0 && right == 0.0 {
+        f64::from_bits(left.to_bits() | right.to_bits())
+    } else if left <= right {
+        left
+    } else {
+        right
+    }
+}
+
+fn java_max(left: f64, right: f64) -> f64 {
+    if left.is_nan() {
+        left
+    } else if right.is_nan() {
+        right
+    } else if left == 0.0 && right == 0.0 {
+        f64::from_bits(left.to_bits() & right.to_bits())
+    } else if left >= right {
+        left
+    } else {
+        right
+    }
 }
 
 #[cfg(test)]
@@ -289,5 +347,35 @@ mod tests {
         assert!(actual
             .iter()
             .all(|value| value.to_bits() == 0.0_f64.to_bits()));
+    }
+
+    #[test]
+    fn minimum_and_maximum_match_java_nan_payload_and_signed_zero() {
+        let nan_a = f64::from_bits(0x7ff8_0000_0000_0001);
+        let nan_b = f64::from_bits(0x7ff8_0000_0000_0002);
+        for (left, right, min, max) in [
+            (-0.0, 0.0, -0.0, 0.0),
+            (0.0, -0.0, -0.0, 0.0),
+            (nan_a, nan_b, nan_a, nan_a),
+            (3.0, nan_b, nan_b, nan_b),
+            (nan_a, 3.0, nan_a, nan_a),
+        ] {
+            let min_nodes = [
+                HeightMapNode::Constant(left),
+                HeightMapNode::Constant(right),
+                HeightMapNode::Minimum,
+            ];
+            let max_nodes = [
+                HeightMapNode::Constant(left),
+                HeightMapNode::Constant(right),
+                HeightMapNode::Maximum,
+            ];
+            let mut minimum = [f64::NAN];
+            let mut maximum = [f64::NAN];
+            fill_height_map_tree(&min_nodes, 0, 0, 1, 1, &mut minimum).unwrap();
+            fill_height_map_tree(&max_nodes, 0, 0, 1, 1, &mut maximum).unwrap();
+            assert_eq!(minimum[0].to_bits(), min.to_bits());
+            assert_eq!(maximum[0].to_bits(), max.to_bits());
+        }
     }
 }
