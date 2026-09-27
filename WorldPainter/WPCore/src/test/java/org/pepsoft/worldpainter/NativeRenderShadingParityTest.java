@@ -5,6 +5,7 @@ import org.pepsoft.util.ColourUtils;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.nativeapi.NativeSlices;
+import org.pepsoft.worldpainter.layers.NotPresent;
 
 import java.util.Arrays;
 import java.util.Random;
@@ -13,6 +14,7 @@ import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
 
 import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeTrue;
 
@@ -70,6 +72,11 @@ public final class NativeRenderShadingParityTest {
                         final float height = 32 + ((x * 7 + y * 11) % 96);
                         tile.setHeight(x, y, height);
                         tile.setWaterLevel(x, y, 62 + ((x + y) % 24));
+                        if (x == 4 && y == 8) {
+                            tile.setBitLayerValue(org.pepsoft.worldpainter.layers.Void.INSTANCE, x, y, true);
+                        } else if (x == 12 && y == 5) {
+                            tile.setBitLayerValue(NotPresent.INSTANCE, x, y, true);
+                        }
                     }
                 }
             } finally {
@@ -78,6 +85,9 @@ public final class NativeRenderShadingParityTest {
             final int[] javaPixels = renderTile(dimension, tile, false);
             final int[] nativePixels = renderTile(dimension, tile, true);
             assertArrayEquals(javaPixels, nativePixels);
+            assertEquals("void pixel should stay transparent", 0, nativePixels[4 | (8 << Constants.TILE_SIZE_BITS)]);
+            assertEquals("not-present pixel should stay transparent", 0,
+                    nativePixels[12 | (5 << Constants.TILE_SIZE_BITS)]);
         } finally {
             restoreFlag(previousFlag);
         }
