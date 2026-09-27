@@ -100,3 +100,13 @@ jobs:
           name: slope-heightmap-benchmark-${{ matrix.os }}
           path: WorldPainter/WPCore/target/slope-heightmap-benchmark.txt
           if-no-files-found: ignore
+      - name: Publish slope benchmark summary
+        if: always()
+        shell: pwsh
+        run: |
+          $resultPath = 'WorldPainter/WPCore/target/slope-heightmap-benchmark.txt'
+          if (Test-Path $resultPath) {
+            $result = (Get-Content -Raw $resultPath).Trim()
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "Slope benchmark (${{ matrix.os }}): ``$result``"
+            Write-Output "::notice title=Slope benchmark (${{ matrix.os }})::$result"
+          }
