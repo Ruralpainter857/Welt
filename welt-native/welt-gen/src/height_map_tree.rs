@@ -26,6 +26,12 @@ pub enum HeightMapNode {
         shelve_height: i32,
         shelve_strength: i32,
     },
+    NinePatch {
+        inner_size: i32,
+        border_size: i32,
+        coast_size: i32,
+        height: f64,
+    },
     Add,
     Subtract,
     Multiply,
@@ -98,6 +104,30 @@ pub fn fill_height_map_tree(
         return Ok(());
     }
 
+    if let [HeightMapNode::NinePatch {
+        inner_size,
+        border_size,
+        coast_size,
+        height: map_height,
+    }] = nodes
+    {
+        for x in 0..width {
+            let world_x = origin_x.wrapping_add(x as i32) as f32;
+            for y in 0..height {
+                let world_y = origin_y.wrapping_add(y as i32) as f32;
+                output[y * width + x] = nine_patch_height(
+                    world_x,
+                    world_y,
+                    *inner_size,
+                    *border_size,
+                    *coast_size,
+                    *map_height,
+                );
+            }
+        }
+        return Ok(());
+    }
+
     let mut depth = 0_usize;
     let mut noise_maps = Vec::new();
     let mut parsed = Vec::with_capacity(nodes.len());
@@ -159,6 +189,7 @@ pub fn fill_height_map_tree(
                     shelve_strength,
                 });
             }
+            HeightMapNode::NinePatch { .. } => return Err(HeightMapTreeError::InvalidProgram),
             HeightMapNode::Add => {
                 if depth < 2 {
                     return Err(HeightMapTreeError::InvalidProgram);
@@ -335,6 +366,78 @@ fn mandelbrot_height(x0: f32, y0: f32) -> f64 {
         iteration += 1;
     }
     f64::from(iteration)
+}
+
+fn nine_patch_height(
+    x: f32,
+    y: f32,
+    inner_size: i32,
+    border_size: i32,
+    coast_size: i32,
+    height: f64,
+) -> f64 {
+    let x = x.abs();
+    let y = y.abs();
+    let border_total_i32 = inner_size.wrapping_add(border_size);
+    let coast_total_i32 = border_total_i32.wrapping_add(coast_size);
+    let border_total = border_total_i32 as f32;
+    let coast_total = coast_total_i32 as f32;
+    let inner = inner_size as f32;
+    let border = border_size as f32;
+    let coast = coast_size as f32;
+    let half_height = height / 2.0;
+    if x < inner {
+        if y < border_total {
+            height
+        } else if y < coast_total {
+            nine_patch_coast(y - border_total, coast, half_height)
+        } else {
+            0.0
+        }
+    } else if x < border_total {
+        if y < inner {
+            height
+        } else if y < coast_total {
+            nine_patch_corner(x, y, inner, border, coast, half_height, height)
+        } else {
+            0.0
+        }
+    } else if x < coast_total {
+        if y < inner {
+            nine_patch_coast(x - border_total, coast, half_height)
+        } else if y < coast_total {
+            nine_patch_corner(x, y, inner, border, coast, half_height, height)
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    }
+}
+
+fn nine_patch_corner(
+    x: f32,
+    y: f32,
+    inner: f32,
+    border: f32,
+    coast: f32,
+    half_height: f64,
+    height: f64,
+) -> f64 {
+    let dx = x - inner;
+    let dy = y - inner;
+    let distance = (f64::from(dx * dx + dy * dy).sqrt()) as f32;
+    if distance < border {
+        height
+    } else if distance - border < coast {
+        nine_patch_coast(distance - border, coast, half_height)
+    } else {
+        0.0
+    }
+}
+
+fn nine_patch_coast(distance: f32, coast: f32, half_height: f64) -> f64 {
+    (f64::from((distance / coast) as f32) * std::f64::consts::PI).cos() * half_height + half_height
 }
 
 fn banded_height(

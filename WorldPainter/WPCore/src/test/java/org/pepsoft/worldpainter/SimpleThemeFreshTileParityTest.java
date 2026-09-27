@@ -10,6 +10,7 @@ import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MinimisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MaximisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MandelbrotHeightMap;
+import org.pepsoft.worldpainter.heightMaps.NinePatchHeightMap;
 import org.pepsoft.worldpainter.heightMaps.ProductHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
@@ -260,6 +261,47 @@ public final class SimpleThemeFreshTileParityTest {
                                     Float.floatToRawIntBits(javaTile.getHeight(x, y)),
                                     Float.floatToRawIntBits(nativeTile.getHeight(x, y)));
                             assertEquals("terrain at " + x + ',' + y + " smooth=" + smooth,
+                                    javaTile.getTerrain(x, y), nativeTile.getTerrain(x, y));
+                        }
+                    }
+                }
+            }
+        } finally {
+            if (previousFlag == null) {
+                System.clearProperty(Native.GEN_KEY);
+            } else {
+                System.setProperty(Native.GEN_KEY, previousFlag);
+            }
+        }
+    }
+
+    @Test
+    public void nativeNinePatchHeightMapMatchesJavaFreshTile() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        try {
+            final int[][] parameters = {{0, 8, 12}, {7, 0, 10}, {9, 6, 0}, {16, 11, 13}};
+            for (final int[] parameter : parameters) {
+                for (final int[] tile : new int[][] {{0, 0}, {-1, 0}, {0, 1}, {-2, -2}, {1000, -1000}}) {
+                    final HeightMap javaMap = new NinePatchHeightMap(
+                            parameter[0], parameter[1], parameter[2], 117.25);
+                    final HeightMap nativeMap = new NinePatchHeightMap(
+                            parameter[0], parameter[1], parameter[2], 117.25);
+                    final HeightMapTileFactory javaFactory = new HeightMapTileFactory(73L, javaMap,
+                            0, 256, false, createSimpleTheme(true));
+                    final HeightMapTileFactory nativeFactory = new HeightMapTileFactory(73L, nativeMap,
+                            0, 256, false, createSimpleTheme(false));
+                    Native.setGenEnabled(false);
+                    final Tile javaTile = javaFactory.createTile(tile[0], tile[1]);
+                    Native.setGenEnabled(true);
+                    final Tile nativeTile = nativeFactory.createTile(tile[0], tile[1]);
+                    for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                        for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                            assertEquals("height at " + x + ',' + y + " parameters="
+                                            + java.util.Arrays.toString(parameter),
+                                    Float.floatToRawIntBits(javaTile.getHeight(x, y)),
+                                    Float.floatToRawIntBits(nativeTile.getHeight(x, y)));
+                            assertEquals("terrain at " + x + ',' + y,
                                     javaTile.getTerrain(x, y), nativeTile.getTerrain(x, y));
                         }
                     }

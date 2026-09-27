@@ -14,6 +14,7 @@ import org.pepsoft.worldpainter.heightMaps.MinimisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MaximisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MandelbrotHeightMap;
 import org.pepsoft.worldpainter.heightMaps.BandedHeightMap;
+import org.pepsoft.worldpainter.heightMaps.NinePatchHeightMap;
 import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.ShelvingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.BitmapHeightMap;
@@ -166,7 +167,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             if (batchFreshSimpleTheme && Native.isGenEnabled()
                     && buffers.prepareHeightMapProgram(batchHeightMap)
                     && (buffers.heightMapNoiseCount > 0 || buffers.heightMapMandelbrotCount > 0
-                    || buffers.heightMapBandedCount > 0)) {
+                    || buffers.heightMapBandedCount > 0 || buffers.heightMapNinePatchCount > 0)) {
                 final double[] output = buffers.nativeHeights();
                 if (NativeSlices.fillHeightMapTree(heightMapOriginX, heightMapOriginY,
                         TILE_SIZE, TILE_SIZE, buffers.heightMapNodeCount,
@@ -267,7 +268,8 @@ public class HeightMapTileFactory extends AbstractTileFactory {
     private static boolean isBatchSafeHeightMap(HeightMap heightMap) {
         if ((heightMap.getClass() == ConstantHeightMap.class)
                 || (heightMap.getClass() == NoiseHeightMap.class)
-                || (heightMap.getClass() == MandelbrotHeightMap.class)) {
+                || (heightMap.getClass() == MandelbrotHeightMap.class)
+                || (heightMap.getClass() == NinePatchHeightMap.class)) {
             return true;
         }
         if ((heightMap.getClass() == SumHeightMap.class)
@@ -352,6 +354,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         private int heightMapNoiseCount;
         private int heightMapMandelbrotCount;
         private int heightMapBandedCount;
+        private int heightMapNinePatchCount;
         private double[] nativeHeightValues;
 
         private boolean prepareHeightMapProgram(HeightMap heightMap) {
@@ -359,6 +362,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             heightMapNoiseCount = 0;
             heightMapMandelbrotCount = 0;
             heightMapBandedCount = 0;
+            heightMapNinePatchCount = 0;
             return appendHeightMapNode(heightMap);
         }
 
@@ -399,6 +403,20 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 heightMapSeeds[index] = banded.getSegment2Length();
                 heightMapNodeCount++;
                 heightMapBandedCount++;
+                return true;
+            }
+            if (heightMap.getClass() == NinePatchHeightMap.class) {
+                final NinePatchHeightMap ninePatch = (NinePatchHeightMap) heightMap;
+                if (ninePatch.getInnerSizeX() != ninePatch.getInnerSizeY()) {
+                    return false;
+                }
+                heightMapOpcodes[index] = 12;
+                heightMapValues[index] = ninePatch.getHeight();
+                heightMapScales[index] = ninePatch.getCoastSize();
+                heightMapOctaves[index] = ninePatch.getInnerSizeX();
+                heightMapSeeds[index] = ninePatch.getBorderSize();
+                heightMapNodeCount++;
+                heightMapNinePatchCount++;
                 return true;
             }
             if (heightMap.getClass() == ShelvingHeightMap.class) {
