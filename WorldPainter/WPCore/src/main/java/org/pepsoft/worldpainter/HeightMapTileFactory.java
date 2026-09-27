@@ -16,6 +16,7 @@ import org.pepsoft.worldpainter.heightMaps.MandelbrotHeightMap;
 import org.pepsoft.worldpainter.heightMaps.BandedHeightMap;
 import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.ShelvingHeightMap;
+import org.pepsoft.worldpainter.heightMaps.BitmapHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.nativeapi.Native;
@@ -156,10 +157,11 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             final boolean batchFreshSimpleTheme = freshSimpleTheme
                     && (isBatchSafeHeightMap(heightMap) || isNativeBandedHeightMap(heightMap)
                     || (translatedHeightMap != null)
+                    || isBulkReadableBitmapHeightMap(heightMap, worldTileX, worldTileY)
                     || isNativeShelvingHeightMap(heightMap, worldTileX, worldTileY));
             final GenerationBuffers buffers = batchFreshSimpleTheme ? GENERATION_BUFFERS.get() : null;
             double[] nativeHeights = null;
-            boolean nativeHeightMapTreeSucceeded = false;
+            boolean completeHeightMapValuesAvailable = false;
             if (batchFreshSimpleTheme && Native.isGenEnabled()
                     && buffers.prepareHeightMapProgram(batchHeightMap)
                     && (buffers.heightMapNoiseCount > 0 || buffers.heightMapMandelbrotCount > 0
@@ -171,7 +173,16 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                         buffers.heightMapScales, buffers.heightMapOctaves,
                         buffers.heightMapSeeds, output)) {
                     nativeHeights = output;
-                    nativeHeightMapTreeSucceeded = true;
+                    completeHeightMapValuesAvailable = true;
+                }
+            }
+            if (nativeHeights == null && batchFreshSimpleTheme
+                    && heightMap.getClass() == BitmapHeightMap.class) {
+                final double[] output = buffers.nativeHeights();
+                if (((BitmapHeightMap) heightMap).fillSamples(
+                        worldTileX, worldTileY, TILE_SIZE, TILE_SIZE, output)) {
+                    nativeHeights = output;
+                    completeHeightMapValuesAvailable = true;
                 }
             }
             if (nativeNoiseMap != null) {
@@ -198,7 +209,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                         final double rawHeight;
                         if (nativeHeights != null) {
                             final double noise = nativeHeights[y * TILE_SIZE + x];
-                            rawHeight = nativeHeightMapTreeSucceeded || (nativeNoiseMap == heightMap) ? noise
+                            rawHeight = completeHeightMapValuesAvailable || (nativeNoiseMap == heightMap) ? noise
                                     : (nativeConstantFirst ? nativeConstant + noise : noise + nativeConstant);
                         } else {
                             rawHeight = heightMap.getHeight(blockX, blockY);
@@ -227,7 +238,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                     final double rawHeight;
                     if (nativeHeights != null) {
                         final double noise = nativeHeights[y * TILE_SIZE + x];
-                        rawHeight = nativeHeightMapTreeSucceeded || (nativeNoiseMap == heightMap) ? noise
+                        rawHeight = completeHeightMapValuesAvailable || (nativeNoiseMap == heightMap) ? noise
                                 : (nativeConstantFirst ? nativeConstant + noise : noise + nativeConstant);
                     } else {
                         rawHeight = heightMap.getHeight(blockX, blockY);
@@ -274,6 +285,15 @@ public class HeightMapTileFactory extends AbstractTileFactory {
     private static boolean isNativeBandedHeightMap(HeightMap heightMap) {
         return (heightMap.getClass() == BandedHeightMap.class)
                 && ((BandedHeightMap) heightMap).isSmooth();
+    }
+
+    /** Bulk raster reads match BitmapHeightMap only for in-bounds, non-repeating tiles. */
+    private static boolean isBulkReadableBitmapHeightMap(HeightMap heightMap, int originX, int originY) {
+        return (heightMap.getClass() == BitmapHeightMap.class)
+                && !((BitmapHeightMap) heightMap).isRepeat()
+                && (originX >= 0) && (originY >= 0)
+                && ((long) originX + TILE_SIZE <= ((BitmapHeightMap) heightMap).getWidth())
+                && ((long) originY + TILE_SIZE <= ((BitmapHeightMap) heightMap).getHeight());
     }
 
     /** Returns only exact, translation-only wrappers with a batch-safe child. */

@@ -84,6 +84,20 @@ public final class BitmapHeightMap extends AbstractHeightMap {
     }
 
     /**
+     * Bulk-reads a rectangle whose integer coordinates use the bitmap's direct, non-repeating path.
+     * Samples are written in row-major order, matching {@code x | (y << tileSizeBits)} storage.
+     */
+    public boolean fillSamples(int x, int y, int sampleWidth, int sampleHeight, double[] samples) {
+        if (repeat || (x < 0) || (y < 0) || (sampleWidth <= 0) || (sampleHeight <= 0)
+                || ((long) x + sampleWidth > width) || ((long) y + sampleHeight > height)
+                || (samples == null) || ((long) sampleWidth * sampleHeight != samples.length)) {
+            return false;
+        }
+        raster.getSamples(x, y, sampleWidth, sampleHeight, channel, samples);
+        return true;
+    }
+
+    /**
      * Get the theoretical minimum value as determined by the image format, regardless of the actual minimum value.
      */
     public double getMinHeight() {
