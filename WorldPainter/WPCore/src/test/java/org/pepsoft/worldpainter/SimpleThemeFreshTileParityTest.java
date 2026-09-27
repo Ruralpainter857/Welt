@@ -1,13 +1,21 @@
 package org.pepsoft.worldpainter;
 
 import org.junit.Test;
+import org.pepsoft.worldpainter.heightMaps.ConstantHeightMap;
+import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
+import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.layers.Frost;
 import org.pepsoft.worldpainter.layers.Layer;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.themes.Filter;
+import org.pepsoft.worldpainter.themes.HeightFilter;
 import org.pepsoft.worldpainter.themes.SimpleTheme;
 
+import java.util.Map;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.TreeMap;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -15,6 +23,65 @@ import static org.junit.Assume.assumeTrue;
 
 /** Verifies the optimized initialization path against ordinary theme application. */
 public final class SimpleThemeFreshTileParityTest {
+    @Test
+    public void javaNoiseHeightMapSimpleThemeBatchMatchesPerCellFallback() {
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        try {
+            Native.setGenEnabled(false);
+            final HeightMapTileFactory referenceFactory = new HeightMapTileFactory(42L,
+                    new SumHeightMap(new ConstantHeightMap(62), new NoiseHeightMap(20.0, 1.0, 1, 0L)),
+                    0, 256, false, createNoisySimpleTheme(true));
+            final HeightMapTileFactory batchFactory = new HeightMapTileFactory(42L,
+                    new SumHeightMap(new ConstantHeightMap(62), new NoiseHeightMap(20.0, 1.0, 1, 0L)),
+                    0, 256, false, createNoisySimpleTheme(false));
+            final Tile reference = referenceFactory.createTile(-3, 7);
+            final Tile batch = batchFactory.createTile(-3, 7);
+            for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                    assertEquals("height at " + x + ',' + y,
+                            Float.floatToRawIntBits(reference.getHeight(x, y)),
+                            Float.floatToRawIntBits(batch.getHeight(x, y)));
+                    assertEquals("water at " + x + ',' + y,
+                            reference.getWaterLevel(x, y), batch.getWaterLevel(x, y));
+                    assertEquals("terrain at " + x + ',' + y,
+                            reference.getTerrain(x, y), batch.getTerrain(x, y));
+                    assertEquals("Frost at " + x + ',' + y,
+                            reference.getBitLayerValue(Frost.INSTANCE, x, y),
+                            batch.getBitLayerValue(Frost.INSTANCE, x, y));
+                }
+            }
+        } finally {
+            if (previousFlag == null) {
+                System.clearProperty(Native.GEN_KEY);
+            } else {
+                System.setProperty(Native.GEN_KEY, previousFlag);
+            }
+        }
+    }
+
+    @Test
+    public void javaHeightMapSimpleThemeBatchMatchesPerCellFallback() {
+        final HeightMap heightMap = new SumHeightMap(new ConstantHeightMap(30), new ConstantHeightMap(32));
+        final HeightMapTileFactory referenceFactory = new HeightMapTileFactory(42L, heightMap,
+                0, 256, false, createSimpleTheme(true));
+        final HeightMapTileFactory batchFactory = new HeightMapTileFactory(42L,
+                new SumHeightMap(new ConstantHeightMap(30), new ConstantHeightMap(32)),
+                0, 256, false, createSimpleTheme(false));
+        final Tile reference = referenceFactory.createTile(-3, 7);
+        final Tile batch = batchFactory.createTile(-3, 7);
+        for (int x = 0; x < Constants.TILE_SIZE; x++) {
+            for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                assertEquals("height at " + x + ',' + y,
+                        Float.floatToRawIntBits(reference.getHeight(x, y)),
+                        Float.floatToRawIntBits(batch.getHeight(x, y)));
+                assertEquals("water at " + x + ',' + y,
+                        reference.getWaterLevel(x, y), batch.getWaterLevel(x, y));
+                assertEquals("terrain at " + x + ',' + y,
+                        reference.getTerrain(x, y), batch.getTerrain(x, y));
+            }
+        }
+    }
+
     @Test
     public void freshTileApplicationMatchesExistingPath() {
         final SimpleTheme theme = SimpleTheme.createDefault(Terrain.GRASS, 0, 256, 62, true, true);
@@ -187,5 +254,29 @@ public final class SimpleThemeFreshTileParityTest {
         }
         tile.releaseEvents();
         return tile;
+    }
+
+    private static SimpleTheme createSimpleTheme(boolean legacyPerCellPath) {
+        final SortedMap<Integer, Terrain> ranges = new TreeMap<>();
+        ranges.put(-1, Terrain.GRASS);
+        ranges.put(95, Terrain.STONE_MIX);
+        if (legacyPerCellPath) {
+            return new SimpleTheme(0L, 62, ranges, null, 0, 256, false, true) { };
+        }
+        return new SimpleTheme(0L, 62, ranges, null, 0, 256, false, true);
+    }
+
+    private static SimpleTheme createNoisySimpleTheme(boolean legacyPerCellPath) {
+        final SortedMap<Integer, Terrain> ranges = new TreeMap<>();
+        ranges.put(-1, Terrain.GRASS);
+        ranges.put(126, Terrain.PERMADIRT);
+        ranges.put(158, Terrain.STONE_MIX);
+        ranges.put(222, Terrain.DEEP_SNOW);
+        final Map<Filter, Layer> layers = java.util.Collections.singletonMap(
+                new HeightFilter(0, 256, 190, 256, true), Frost.INSTANCE);
+        if (legacyPerCellPath) {
+            return new SimpleTheme(0L, 62, ranges, layers, 0, 256, true, true) { };
+        }
+        return new SimpleTheme(0L, 62, ranges, layers, 0, 256, true, true);
     }
 }

@@ -121,9 +121,9 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             NoiseHeightMap nativeNoiseMap = null;
             double nativeConstant = 0.0;
             boolean nativeConstantFirst = false;
-            if (heightMap instanceof NoiseHeightMap) {
+            if (heightMap.getClass() == NoiseHeightMap.class) {
                 nativeNoiseMap = (NoiseHeightMap) heightMap;
-            } else if (heightMap instanceof SumHeightMap) {
+            } else if (heightMap.getClass() == SumHeightMap.class) {
                 final SumHeightMap sum = (SumHeightMap) heightMap;
                 if ((sum.getHeightMap1() instanceof ConstantHeightMap) && (sum.getHeightMap2() instanceof NoiseHeightMap)) {
                     nativeNoiseMap = (NoiseHeightMap) sum.getHeightMap2();
@@ -138,13 +138,20 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                     ? nativeNoiseMap.getNativeHeights(worldTileX, worldTileY, TILE_SIZE, TILE_SIZE)
                     : null;
             final boolean freshSimpleTheme = (theme.getClass() == SimpleTheme.class) && !floodWithLava;
-            if ((nativeHeights != null) && freshSimpleTheme) {
+            final boolean batchFreshSimpleTheme = freshSimpleTheme && isBatchSafeHeightMap(heightMap);
+            if (batchFreshSimpleTheme) {
                 final float[] heights = new float[TILE_SIZE * TILE_SIZE];
                 for (int x = 0; x < TILE_SIZE; x++) {
                     for (int y = 0; y < TILE_SIZE; y++) {
-                        final double noise = nativeHeights[y * TILE_SIZE + x];
-                        final double rawHeight = (nativeNoiseMap == heightMap) ? noise
-                                : (nativeConstantFirst ? nativeConstant + noise : noise + nativeConstant);
+                        final int blockX = worldTileX + x, blockY = worldTileY + y;
+                        final double rawHeight;
+                        if (nativeHeights != null) {
+                            final double noise = nativeHeights[y * TILE_SIZE + x];
+                            rawHeight = (nativeNoiseMap == heightMap) ? noise
+                                    : (nativeConstantFirst ? nativeConstant + noise : noise + nativeConstant);
+                        } else {
+                            rawHeight = heightMap.getHeight(blockX, blockY);
+                        }
                         heights[x | (y << TILE_SIZE_BITS)] = clamp(minHeight, (float) rawHeight, maxZ);
                     }
                 }
@@ -190,6 +197,19 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         } finally {
             tile.releaseEvents();
         }
+    }
+
+    /** Only batch pure built-in heightmaps; custom implementations may depend on interleaved tile writes. */
+    private static boolean isBatchSafeHeightMap(HeightMap heightMap) {
+        if ((heightMap.getClass() == ConstantHeightMap.class)
+                || (heightMap.getClass() == NoiseHeightMap.class)) {
+            return true;
+        }
+        if (heightMap.getClass() == SumHeightMap.class) {
+            final SumHeightMap sum = (SumHeightMap) heightMap;
+            return isBatchSafeHeightMap(sum.getHeightMap1()) && isBatchSafeHeightMap(sum.getHeightMap2());
+        }
+        return false;
     }
 
     @Override
