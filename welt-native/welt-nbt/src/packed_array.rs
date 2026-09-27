@@ -7,6 +7,14 @@ pub enum PackError {
     OutputTooShort,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnpackError {
+    InvalidWordSize,
+    InvalidPaletteSize,
+    IndexOutOfRange { position: usize, value: u32 },
+    InputTooShort,
+}
+
 /// Pack palette indexes into the layouts used by `PackedArrayCube.pack`.
 pub fn pack_indices(
     indices: &[u32],
@@ -88,9 +96,100 @@ fn set_straddling(
     Ok(())
 }
 
+/// Decode palette indexes using the branches and layouts in `PackedArrayCube`'s Java constructor.
+pub fn unpack_indices(
+    data: &[u64],
+    array_size: usize,
+    bits_per_index: u32,
+    palette_size: usize,
+) -> Result<Vec<u32>, UnpackError> {
+    if !(1..=32).contains(&bits_per_index) {
+        return Err(UnpackError::InvalidWordSize);
+    }
+    if palette_size == 0 {
+        return Err(UnpackError::InvalidPaletteSize);
+    }
+    if array_size == 0 {
+        return Ok(Vec::new());
+    }
+
+    let bits = bits_per_index as usize;
+    let mut indexes = vec![0_u32; array_size];
+    if bits_per_index == 4 {
+        if !array_size.is_multiple_of(16) || data.len() < array_size / 16 {
+            return Err(UnpackError::InputTooShort);
+        }
+        for (position, index) in indexes.iter_mut().enumerate() {
+            *index = ((data[position / 16] >> ((position % 16) * 4)) & 0xf) as u32;
+        }
+    } else {
+        let expected_bytes = bits
+            .checked_mul(array_size)
+            .ok_or(UnpackError::InputTooShort)?
+            / 8;
+        let actual_bytes = data
+            .len()
+            .checked_mul(8)
+            .ok_or(UnpackError::InputTooShort)?;
+        if actual_bytes != expected_bytes {
+            let values_per_long = 64 / bits;
+            let bits_in_use = values_per_long * bits;
+            let mut position = 0;
+            'longs: for &packed in data {
+                for offset in (0..bits_in_use).step_by(bits) {
+                    indexes[position] = ((packed >> offset) & bit_mask(bits_per_index)) as u32;
+                    position += 1;
+                    if position == array_size {
+                        break 'longs;
+                    }
+                }
+            }
+            if position != array_size {
+                return Err(UnpackError::InputTooShort);
+            }
+        } else {
+            for (position, index) in indexes.iter_mut().enumerate() {
+                let bit_offset = position
+                    .checked_mul(bits)
+                    .ok_or(UnpackError::InputTooShort)?;
+                let word = bit_offset / 64;
+                let offset = bit_offset % 64;
+                let Some(&low_word) = data.get(word) else {
+                    return Err(UnpackError::InputTooShort);
+                };
+                let mut value = low_word >> offset;
+                if offset + bits > 64 {
+                    let Some(&high_word) = data.get(word + 1) else {
+                        return Err(UnpackError::InputTooShort);
+                    };
+                    value |= high_word << (64 - offset);
+                }
+                *index = (value & bit_mask(bits_per_index)) as u32;
+            }
+        }
+    }
+
+    if let Some((position, &value)) = indexes
+        .iter()
+        .enumerate()
+        .find(|(_, value)| **value as usize >= palette_size)
+    {
+        return Err(UnpackError::IndexOutOfRange { position, value });
+    }
+    Ok(indexes)
+}
+
+fn bit_mask(bits_per_index: u32) -> u64 {
+    if bits_per_index == 32 {
+        u64::from(u32::MAX)
+    } else {
+        (1_u64 << bits_per_index) - 1
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{pack_indices, PackError};
+    use super::{pack_indices, unpack_indices, PackError, UnpackError};
 
     #[test]
     fn nibble_layout_matches_packed_array_cube() {
@@ -153,6 +252,42 @@ mod tests {
             Err(PackError::IndexOutOfRange {
                 position: 0,
                 value: 4
+            })
+        );
+    }
+
+    #[test]
+    fn unpacks_nibble_layout() {
+        let input: Vec<u32> = (0..4096).map(|index| (index % 16) as u32).collect();
+        let packed = pack_indices(&input, 4, false).unwrap();
+        assert_eq!(unpack_indices(&packed, input.len(), 4, 16).unwrap(), input);
+    }
+
+    #[test]
+    fn unpacks_non_straddling_layout_with_padding_per_long() {
+        let input: Vec<u32> = (0..4096).map(|index| (index % 32) as u32).collect();
+        let packed = pack_indices(&input, 5, false).unwrap();
+        assert_eq!(unpack_indices(&packed, input.len(), 5, 32).unwrap(), input);
+    }
+
+    #[test]
+    fn unpacks_straddling_layout_across_long_boundaries() {
+        let input: Vec<u32> = (0..4096).map(|index| (index % 32) as u32).collect();
+        let packed = pack_indices(&input, 5, true).unwrap();
+        assert_eq!(unpack_indices(&packed, input.len(), 5, 32).unwrap(), input);
+    }
+
+    #[test]
+    fn rejects_short_or_out_of_palette_input_for_java_fallback() {
+        assert_eq!(
+            unpack_indices(&[], 16, 5, 32),
+            Err(UnpackError::InputTooShort)
+        );
+        assert_eq!(
+            unpack_indices(&[u64::MAX; 256], 4096, 4, 15),
+            Err(UnpackError::IndexOutOfRange {
+                position: 0,
+                value: 15
             })
         );
     }

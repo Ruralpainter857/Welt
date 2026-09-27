@@ -56,6 +56,18 @@ public class PackedArrayCube<T> {
         final int wordSize = Math.max(minimumWordSize, (int) Math.ceil(Math.log(palette.length) / Math.log(2)));
         final int expectedPackedDataArrayLengthInBytes = wordSize * arraySize / 8;
         final int dataArrayLengthInBytes = data.length * 8;
+        // The per-long Java loop is faster than JNI for non-straddling arrays on the measured fixture.
+        if ((wordSize == 4 || dataArrayLengthInBytes == expectedPackedDataArrayLengthInBytes)
+                && Native.isExportEnabled() && NativeLoader.areSlicesAvailable()) {
+            final int[] nativeIndexes = NativeSlices.unpackArrayCube(
+                    data, arraySize, wordSize, palette.length);
+            if (nativeIndexes != null) {
+                for (int i = 0; i < arraySize; i++) {
+                    values[i] = palette[nativeIndexes[i]];
+                }
+                return;
+            }
+        }
         if (wordSize == 4) {
             // Optimised special case
             for (int w = 0; w < arraySize; w += 16) {

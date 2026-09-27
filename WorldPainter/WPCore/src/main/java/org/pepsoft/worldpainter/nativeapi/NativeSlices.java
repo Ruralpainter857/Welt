@@ -130,6 +130,24 @@ public final class NativeSlices {
         }
     }
 
+    /** Decodes Minecraft's packed palette indexes or returns null for Java fallback. */
+    public static int[] unpackArrayCube(final long[] data, final int arraySize,
+                                        final int bitsPerIndex, final int paletteSize) {
+        if (!Native.isExportEnabled() || !NativeLoader.areSlicesAvailable()
+                || data == null || data.length > 1_048_576
+                || arraySize < 0 || arraySize > 1_048_576
+                || bitsPerIndex < 1 || bitsPerIndex > 32 || paletteSize <= 0) {
+            return null;
+        }
+        final int[] output = new int[arraySize];
+        try {
+            return nativeUnpackArrayCube(data, arraySize, bitsPerIndex,
+                    paletteSize, output) == 0 ? output : null;
+        } catch (final UnsatisfiedLinkError e) {
+            return null;
+        }
+    }
+
 
     /** False leaves the FrostExporter on its original Java path. */
     public static boolean frostColumn(final int minZ, final int maxZ, final int highestNonAir,
@@ -212,7 +230,11 @@ public final class NativeSlices {
                                                      float[] sourceHeights, float[] output);
 
     private static native int nativePackArrayCube(int[] paletteIndices, int bitsPerIndex,
-                                                  int straddleLongs, long[] output);
+                                                   int straddleLongs, long[] output);
+
+    private static native int nativeUnpackArrayCube(long[] data, int arraySize,
+                                                     int bitsPerIndex, int paletteSize,
+                                                     int[] output);
 
 
     private static native int nativeFrostColumn(int minZ, int maxZ, int highestNonAir,

@@ -12,7 +12,7 @@ use welt_export::frost::{
 };
 use welt_gen::noise_height_map::NoiseHeightMapBulk;
 use welt_gen::theme_terrain::SimpleThemeTerrainBulk;
-use welt_nbt::packed_array::pack_indices;
+use welt_nbt::packed_array::{pack_indices, unpack_indices};
 
 // JNI 17 function-table indices, checked against the JDK's jni.h. The first
 // four entries are reserved; GetArrayLength is 171 and SetDoubleArrayRegion
@@ -20,6 +20,7 @@ use welt_nbt::packed_array::pack_indices;
 const GET_ARRAY_LENGTH: usize = 171;
 const SET_DOUBLE_ARRAY_REGION: usize = 214;
 const GET_INT_ARRAY_REGION: usize = 203;
+const GET_LONG_ARRAY_REGION: usize = 204;
 const GET_FLOAT_ARRAY_REGION: usize = 205;
 const SET_INT_ARRAY_REGION: usize = 211;
 const GET_BYTE_ARRAY_REGION: usize = 200;
@@ -608,6 +609,65 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let set_long_array_region: SetLongArrayRegion = std::mem::transmute(function(env, 212));
             let values: Vec<i64> = packed.into_iter().map(|value| value as i64).collect();
             set_long_array_region(env, output, 0, values.len() as jint, values.as_ptr());
+            WeltError::Ok as jint
+        })
+    }
+}
+
+/// # Safety
+/// `env`, arrays, and output must be valid references for this JVM call.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeUnpackArrayCube(
+    env: *mut JNIEnv,
+    _class: jclass,
+    data: jobject,
+    array_size: jint,
+    bits_per_index: jint,
+    palette_size: jint,
+    output: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if data.is_null()
+                || output.is_null()
+                || array_size < 0
+                || array_size as usize > 1_048_576
+                || !(1..=32).contains(&bits_per_index)
+                || palette_size <= 0
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            let input_length = get_array_length(env, data);
+            if input_length < 0 || input_length as usize > 1_048_576 {
+                return WeltError::IllegalArgument as jint;
+            }
+            type GetLongArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i64);
+            let get_long_array_region: GetLongArrayRegion =
+                std::mem::transmute(function(env, GET_LONG_ARRAY_REGION));
+            let mut raw_data = vec![0_i64; input_length as usize];
+            get_long_array_region(env, data, 0, input_length, raw_data.as_mut_ptr());
+            let packed: Vec<u64> = raw_data.into_iter().map(|value| value as u64).collect();
+            let Ok(indexes) = unpack_indices(
+                &packed,
+                array_size as usize,
+                bits_per_index as u32,
+                palette_size as usize,
+            ) else {
+                return WeltError::IllegalArgument as jint;
+            };
+            if get_array_length(env, output) != indexes.len() as jint {
+                return WeltError::IllegalArgument as jint;
+            }
+            type SetIntArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i32);
+            let set_int_array_region: SetIntArrayRegion =
+                std::mem::transmute(function(env, SET_INT_ARRAY_REGION));
+            let values: Vec<i32> = indexes.into_iter().map(|value| value as i32).collect();
+            set_int_array_region(env, output, 0, values.len() as jint, values.as_ptr());
             WeltError::Ok as jint
         })
     }
