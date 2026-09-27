@@ -103,6 +103,99 @@ public final class ChunkPaletteBuffer {
         }
     }
 
+    /**
+     * Opens the chunk's canonical palette-index arrays for a grouped updater.
+     * No block data is copied. Unsupported chunks, absent sections, single-
+     * material sections, and object-backed cubes return {@code null} so the
+     * caller can use the established Java path for the whole chunk.
+     */
+    public static LivePaletteView openLivePaletteView(Chunk chunk, Material... reservedMaterials) {
+        if (chunk == null || chunk.isReadOnly() || reservedMaterials == null
+                || (chunk.getMinHeight() & 15) != 0 || (chunk.getMaxHeight() & 15) != 0) {
+            return null;
+        }
+        for (Material material : reservedMaterials) {
+            if (material == null) {
+                return null;
+            }
+        }
+
+        final int minY = chunk.getMinHeight();
+        final long worldHeight = (long) chunk.getMaxHeight() - minY;
+        if (worldHeight <= 0 || worldHeight > 4096L || (worldHeight & 15L) != 0) {
+            return null;
+        }
+        final int sectionCount = (int) (worldHeight >> 4);
+        final PackedArrayCube<Material>[] cubes = newCubeArray(sectionCount);
+        if (chunk instanceof MC115AnvilChunk anvil115) {
+            final MC115AnvilChunk.Section[] sections = anvil115.getSections();
+            if (sections.length != sectionCount) {
+                return null;
+            }
+            for (int section = 0; section < sectionCount; section++) {
+                if (sections[section] == null || sections[section].materials == null
+                        || !sections[section].materials.hasPaletteIndexStorage()) {
+                    return null;
+                }
+                cubes[section] = sections[section].materials;
+            }
+        } else if (chunk instanceof MC118AnvilChunk anvil118) {
+            final MC118AnvilChunk.Section[] sections = anvil118.getSections();
+            final int firstSection = (minY >> 4) + anvil118.undergroundSections;
+            if (firstSection < 0 || firstSection + sectionCount > sections.length) {
+                return null;
+            }
+            for (int section = 0; section < sectionCount; section++) {
+                final MC118AnvilChunk.Section source = sections[firstSection + section];
+                if (source == null || source.singleMaterial != null || source.materials == null
+                        || !source.materials.hasPaletteIndexStorage()) {
+                    return null;
+                }
+                cubes[section] = source.materials;
+            }
+        } else {
+            return null;
+        }
+
+        for (PackedArrayCube<Material> cube : cubes) {
+            for (Material material : reservedMaterials) {
+                if (cube.ensurePaletteIndexForBulkUpdate(material) < 0) {
+                    return null;
+                }
+            }
+        }
+        return new LivePaletteView(minY, cubes);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static PackedArrayCube<Material>[] newCubeArray(int length) {
+        return (PackedArrayCube<Material>[]) new PackedArrayCube<?>[length];
+    }
+
+    /** A zero-copy view over compact palette-index storage for one live chunk. */
+    public static final class LivePaletteView {
+        private final int minY;
+        private final PackedArrayCube<Material>[] sections;
+
+        private LivePaletteView(int minY, PackedArrayCube<Material>[] sections) {
+            this.minY = minY;
+            this.sections = sections;
+        }
+
+        public int minY() { return minY; }
+        public int sectionCount() { return sections.length; }
+        public int[] indexes(int section) {
+            return sections[section].getPaletteIndexesForBulkUpdate();
+        }
+        public int paletteSize(int section) { return sections[section].getPaletteIndexCount(); }
+        public Material paletteMaterial(int section, int paletteIndex) {
+            return sections[section].getPaletteValue(paletteIndex);
+        }
+        public int paletteIndex(int section, Material material) {
+            return sections[section].ensurePaletteIndexForBulkUpdate(material);
+        }
+    }
+
     /** Captures a chunk and records the requested Minecraft DataVersion when known. */
     public static View capture(Chunk chunk, int dataVersion, Material... reservedMaterials) {
         if (chunk == null || chunk.isReadOnly() || reservedMaterials == null || dataVersion < -1) {

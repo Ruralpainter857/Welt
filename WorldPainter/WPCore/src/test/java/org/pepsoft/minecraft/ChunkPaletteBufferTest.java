@@ -97,6 +97,48 @@ public final class ChunkPaletteBufferTest {
     }
 
     @Test
+    public void livePaletteViewMutationsReachModernChunksWithoutCopyingBlockData() {
+        final String previousView = System.getProperty("welt.packedArrayCube.compactPaletteStorage");
+        try {
+            System.setProperty("welt.packedArrayCube.compactPaletteStorage", "true");
+
+            final MC115AnvilChunk chunk115 = new MC115AnvilChunk(1, 2, 32);
+            chunk115.setMaterial(3, 2, 5, STONE);
+            chunk115.setMaterial(3, 18, 5, STONE);
+            final ChunkPaletteBuffer.LivePaletteView view115 =
+                    ChunkPaletteBuffer.openLivePaletteView(chunk115, ICE);
+            assertTrue(view115 != null);
+            assertEquals(2, view115.sectionCount());
+            final int ice115 = view115.paletteIndex(1, ICE);
+            view115.indexes(1)[cubeIndex(3, 5, 2)] = ice115;
+            assertEquals(ICE, chunk115.getMaterial(3, 18, 5));
+            final ChunkPaletteBuffer.View capture115 = ChunkPaletteBuffer.capture(chunk115);
+            assertEquals(ICE, capture115.material(capture115.indexAt(3, 18, 5)));
+
+            final MC118AnvilChunk chunk118 = new MC118AnvilChunk(-4, 8, -16, 16);
+            chunk118.setMaterial(4, -1, 7, STONE);
+            chunk118.setMaterial(4, 0, 7, STONE);
+            final ChunkPaletteBuffer.LivePaletteView view118 =
+                    ChunkPaletteBuffer.openLivePaletteView(chunk118, ICE);
+            assertTrue(view118 != null);
+            assertEquals(-16, view118.minY());
+            assertEquals(2, view118.sectionCount());
+            final int ice118 = view118.paletteIndex(0, ICE);
+            view118.indexes(0)[cubeIndex(4, 7, 15)] = ice118;
+            assertEquals(ICE, chunk118.getMaterial(4, -1, 7));
+
+            final MC118AnvilChunk unsupported = new MC118AnvilChunk(0, 0, -16, 16);
+            assertTrue(ChunkPaletteBuffer.openLivePaletteView(unsupported, ICE) == null);
+        } finally {
+            if (previousView == null) {
+                System.clearProperty("welt.packedArrayCube.compactPaletteStorage");
+            } else {
+                System.setProperty("welt.packedArrayCube.compactPaletteStorage", previousView);
+            }
+        }
+    }
+
+    @Test
     public void encodesPaletteIndexesWiderThanOneByte() {
         final MC115AnvilChunk chunk = new MC115AnvilChunk(0, 0, 16);
         final List<Material> reserved = new ArrayList<>();
@@ -138,5 +180,9 @@ public final class ChunkPaletteBufferTest {
                 }
             }
         }
+    }
+
+    private static int cubeIndex(int x, int y, int z) {
+        return x | ((y | (z << 4)) << 4);
     }
 }
