@@ -12,6 +12,7 @@ import org.pepsoft.worldpainter.heightMaps.DifferenceHeightMap;
 import org.pepsoft.worldpainter.heightMaps.ProductHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MinimisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MaximisingHeightMap;
+import org.pepsoft.worldpainter.heightMaps.MandelbrotHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.nativeapi.Native;
@@ -148,7 +149,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             boolean nativeHeightMapTreeSucceeded = false;
             if (batchFreshSimpleTheme && Native.isGenEnabled()
                     && buffers.prepareHeightMapProgram(heightMap)
-                    && buffers.heightMapNoiseCount > 0) {
+                    && (buffers.heightMapNoiseCount > 0 || buffers.heightMapMandelbrotCount > 0)) {
                 final double[] output = buffers.nativeHeights();
                 if (NativeSlices.fillHeightMapTree(worldTileX, worldTileY,
                         TILE_SIZE, TILE_SIZE, buffers.heightMapNodeCount,
@@ -239,7 +240,8 @@ public class HeightMapTileFactory extends AbstractTileFactory {
     /** Only batch pure built-in heightmaps; custom implementations may depend on interleaved tile writes. */
     private static boolean isBatchSafeHeightMap(HeightMap heightMap) {
         if ((heightMap.getClass() == ConstantHeightMap.class)
-                || (heightMap.getClass() == NoiseHeightMap.class)) {
+                || (heightMap.getClass() == NoiseHeightMap.class)
+                || (heightMap.getClass() == MandelbrotHeightMap.class)) {
             return true;
         }
         if ((heightMap.getClass() == SumHeightMap.class)
@@ -265,11 +267,13 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         private final long[] heightMapSeeds = new long[64];
         private int heightMapNodeCount;
         private int heightMapNoiseCount;
+        private int heightMapMandelbrotCount;
         private double[] nativeHeightValues;
 
         private boolean prepareHeightMapProgram(HeightMap heightMap) {
             heightMapNodeCount = 0;
             heightMapNoiseCount = 0;
+            heightMapMandelbrotCount = 0;
             return appendHeightMapNode(heightMap);
         }
 
@@ -293,6 +297,12 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 heightMapSeeds[index] = noise.getSeed() + noise.getSeedOffset();
                 heightMapNoiseCount++;
                 heightMapNodeCount++;
+                return true;
+            }
+            if (heightMap.getClass() == MandelbrotHeightMap.class) {
+                heightMapOpcodes[index] = 8;
+                heightMapNodeCount++;
+                heightMapMandelbrotCount++;
                 return true;
             }
             final int operator;

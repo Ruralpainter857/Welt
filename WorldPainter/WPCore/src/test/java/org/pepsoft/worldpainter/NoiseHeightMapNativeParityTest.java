@@ -6,6 +6,7 @@ import org.pepsoft.worldpainter.heightMaps.DifferenceHeightMap;
 import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MinimisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MaximisingHeightMap;
+import org.pepsoft.worldpainter.heightMaps.MandelbrotHeightMap;
 import org.pepsoft.worldpainter.heightMaps.ProductHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.nativeapi.Native;
@@ -277,6 +278,33 @@ public final class NoiseHeightMapNativeParityTest {
             for (int i = 0; i < output.length; i++) {
                 assertEquals(Double.doubleToRawLongBits(max.getHeight(-9 + i % 7, 17 + i / 7)),
                         Double.doubleToRawLongBits(output[i]));
+            }
+        } finally {
+            if (previousFlag == null) {
+                System.clearProperty(Native.GEN_KEY);
+            } else {
+                System.setProperty(Native.GEN_KEY, previousFlag);
+            }
+        }
+    }
+
+    @Test
+    public void nativeMandelbrotProgramMatchesJavaBitForBit() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        Native.setGenEnabled(true);
+        try {
+            final MandelbrotHeightMap map = new MandelbrotHeightMap();
+            final int[] opcodes = {8};
+            final double[] output = new double[17 * 13];
+            assertTrue(NativeSlices.fillHeightMapTree(-12, -8, 17, 13, 1,
+                    opcodes, new double[1], new double[1], new int[1], new long[1], output));
+            for (int y = 0; y < 13; y++) {
+                for (int x = 0; x < 17; x++) {
+                    assertEquals("Mandelbrot at " + x + ',' + y,
+                            Double.doubleToRawLongBits(map.getHeight(-12 + x, -8 + y)),
+                            Double.doubleToRawLongBits(output[y * 17 + x]));
+                }
             }
         } finally {
             if (previousFlag == null) {

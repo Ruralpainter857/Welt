@@ -575,6 +575,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                         octaves: raw_octaves[index],
                         effective_seed: raw_seeds[index],
                     },
+                    8 => HeightMapNode::Mandelbrot,
                     2 => HeightMapNode::Add,
                     3 => HeightMapNode::Subtract,
                     4 => HeightMapNode::Multiply,

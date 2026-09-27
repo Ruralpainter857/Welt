@@ -6,6 +6,7 @@ import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
 import org.pepsoft.worldpainter.heightMaps.ProductHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MinimisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MaximisingHeightMap;
+import org.pepsoft.worldpainter.heightMaps.MandelbrotHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
@@ -25,10 +26,13 @@ public final class NestedSumHeightMapBenchmark {
         final int rounds = args.length > 1 ? Integer.parseInt(args[1]) : 9;
         final boolean composite = args.length > 2 && "composite".equalsIgnoreCase(args[2]);
         final boolean minmax = args.length > 2 && "minmax".equalsIgnoreCase(args[2]);
+        final boolean mandelbrot = args.length > 2 && "mandelbrot".equalsIgnoreCase(args[2]);
         if (!NativeLoader.areSlicesAvailable()) {
             throw new IllegalStateException("welt_slices is unavailable; build with Maven -Pnative");
         }
-        final org.pepsoft.worldpainter.HeightMap heightMap = minmax
+        final org.pepsoft.worldpainter.HeightMap heightMap = mandelbrot
+                ? new SumHeightMap(new ConstantHeightMap(58.0), new MandelbrotHeightMap())
+                : minmax
                 ? new MaximisingHeightMap(new MinimisingHeightMap(
                         new SumHeightMap(new ConstantHeightMap(48.0),
                                 new NoiseHeightMap(38.0, 0.8, 2, 0x1234_5678L)),
@@ -67,7 +71,7 @@ public final class NestedSumHeightMapBenchmark {
         Arrays.sort(javaSamples);
         Arrays.sort(rustSamples);
         System.out.printf("scenario=%s tiles=%d rounds=%d java_median_ms_per_tile=%.4f rust_median_ms_per_tile=%.4f rust_speedup=%.3f sink=%d%n",
-                minmax ? "minmax" : composite ? "product-difference" : "nested-sum", tiles, rounds,
+                mandelbrot ? "mandelbrot" : minmax ? "minmax" : composite ? "product-difference" : "nested-sum", tiles, rounds,
                 javaSamples[rounds / 2], rustSamples[rounds / 2],
                 javaSamples[rounds / 2] / rustSamples[rounds / 2], sink);
     }

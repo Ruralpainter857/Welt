@@ -14,6 +14,7 @@ pub enum HeightMapNode {
         octaves: i32,
         effective_seed: i64,
     },
+    Mandelbrot,
     Add,
     Subtract,
     Multiply,
@@ -91,6 +92,10 @@ pub fn fill_height_map_tree(
                 parsed.push(ParsedNode::Noise(noise_maps.len() - 1));
                 depth += 1;
             }
+            HeightMapNode::Mandelbrot => {
+                parsed.push(ParsedNode::Mandelbrot);
+                depth += 1;
+            }
             HeightMapNode::Add => {
                 if depth < 2 {
                     return Err(HeightMapTreeError::InvalidProgram);
@@ -164,6 +169,12 @@ pub fn fill_height_map_tree(
                     stack[stack_depth] = noise_values[index * area + cell];
                     stack_depth += 1;
                 }
+                ParsedNode::Mandelbrot => {
+                    let x = origin_x.wrapping_add((cell % width) as i32) as f32;
+                    let y = origin_y.wrapping_add((cell / width) as i32) as f32;
+                    stack[stack_depth] = mandelbrot_height(x, y);
+                    stack_depth += 1;
+                }
                 ParsedNode::Add => {
                     let right = stack[stack_depth - 1];
                     let left = stack[stack_depth - 2];
@@ -205,11 +216,24 @@ pub fn fill_height_map_tree(
 enum ParsedNode {
     Constant(f64),
     Noise(usize),
+    Mandelbrot,
     Add,
     Subtract,
     Multiply,
     Minimum,
     Maximum,
+}
+
+fn mandelbrot_height(x0: f32, y0: f32) -> f64 {
+    let (mut x, mut y) = (0.0_f32, 0.0_f32);
+    let mut iteration = 0;
+    while x * x + y * y < 4.0 && iteration < 255 {
+        let x_temp = x * x - y * y + x0;
+        y = 2.0 * x * y + y0;
+        x = x_temp;
+        iteration += 1;
+    }
+    f64::from(iteration)
 }
 
 fn java_min(left: f64, right: f64) -> f64 {
@@ -347,6 +371,16 @@ mod tests {
         assert!(actual
             .iter()
             .all(|value| value.to_bits() == 0.0_f64.to_bits()));
+    }
+
+    #[test]
+    fn mandelbrot_iteration_limits_match_worldpainter_coordinates() {
+        let nodes = [HeightMapNode::Mandelbrot];
+        let mut output = [0.0];
+        fill_height_map_tree(&nodes, 0, 0, 1, 1, &mut output).unwrap();
+        assert_eq!(output[0], 255.0);
+        fill_height_map_tree(&nodes, 2, 0, 1, 1, &mut output).unwrap();
+        assert_eq!(output[0], 1.0);
     }
 
     #[test]
