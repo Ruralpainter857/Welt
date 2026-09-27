@@ -809,15 +809,7 @@ mod tests {
         let mut expected = vec![0.0; width * height];
 
         fill_height_map_tree_points(&nodes, &x_coordinates, &y_coordinates, &mut actual).unwrap();
-        fill_height_map_tree(
-            &nodes,
-            origin_x,
-            origin_y,
-            width,
-            height,
-            &mut expected,
-        )
-        .unwrap();
+        fill_height_map_tree(&nodes, origin_x, origin_y, width, height, &mut expected).unwrap();
 
         assert_eq!(actual, expected);
     }

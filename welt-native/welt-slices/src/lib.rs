@@ -819,12 +819,8 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 values: output_ptr,
                 length: area as usize,
             };
-            let result = fill_height_map_tree_points(
-                &nodes,
-                &xs,
-                &ys,
-                output_values.as_mut_slice(),
-            );
+            let result =
+                fill_height_map_tree_points(&nodes, &xs, &ys, output_values.as_mut_slice());
             drop(output_values);
             if result.is_err() {
                 return WeltError::IllegalArgument as jint;
