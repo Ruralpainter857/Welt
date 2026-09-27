@@ -11,6 +11,7 @@ use welt_export::frost::{
     FrostUpdate,
 };
 use welt_gen::noise_height_map::NoiseHeightMapBulk;
+use welt_gen::resource_noise::fill_resource_materials;
 use welt_gen::theme_terrain::SimpleThemeTerrainBulk;
 use welt_nbt::packed_array::{pack_indices, unpack_indices};
 
@@ -22,6 +23,7 @@ const SET_DOUBLE_ARRAY_REGION: usize = 214;
 const GET_INT_ARRAY_REGION: usize = 203;
 const GET_LONG_ARRAY_REGION: usize = 204;
 const GET_FLOAT_ARRAY_REGION: usize = 205;
+const GET_DOUBLE_ARRAY_REGION: usize = 206;
 const SET_INT_ARRAY_REGION: usize = 211;
 const GET_BYTE_ARRAY_REGION: usize = 200;
 const SET_BYTE_ARRAY_REGION: usize = 208;
@@ -774,6 +776,180 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let set_int_array_region: SetIntArrayRegion =
                 std::mem::transmute(function(env, SET_INT_ARRAY_REGION));
             set_int_array_region(env, output, 0, expected as jint, values.as_ptr());
+            WeltError::Ok as jint
+        })
+    }
+}
+
+/// Find the first matching Resources material per eligible block. Material
+/// changes remain in Java so platform and deepslate behavior stays unchanged.
+///
+/// # Safety
+/// `env` and all arrays must be valid references supplied by the current JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFillResourceMaterials(
+    env: *mut JNIEnv,
+    _class: jclass,
+    min_z: jint,
+    max_z: jint,
+    tiny_x: jobject,
+    tiny_y: jobject,
+    dirt_x: jobject,
+    dirt_y: jobject,
+    column_min_z: jobject,
+    column_max_z: jobject,
+    resource_values: jobject,
+    seeds: jobject,
+    material_min_z: jobject,
+    material_max_z: jobject,
+    dirt_materials: jobject,
+    chances: jobject,
+    output: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            let arrays = [
+                tiny_x,
+                tiny_y,
+                dirt_x,
+                dirt_y,
+                column_min_z,
+                column_max_z,
+                resource_values,
+                seeds,
+                material_min_z,
+                material_max_z,
+                dirt_materials,
+                chances,
+                output,
+            ];
+            if arrays.iter().any(|array| array.is_null()) || min_z > max_z {
+                return WeltError::IllegalArgument as jint;
+            }
+            let height = i64::from(max_z) - i64::from(min_z) + 1;
+            if height <= 0 || height > 4096 {
+                return WeltError::IllegalArgument as jint;
+            }
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            let columns = get_array_length(env, tiny_x);
+            let materials = get_array_length(env, seeds);
+            if !(1..=256).contains(&columns) || !(0..=64).contains(&materials) {
+                return WeltError::IllegalArgument as jint;
+            }
+            let expected_output = i64::from(columns) * height;
+            if expected_output > 1_048_576
+                || [
+                    tiny_y,
+                    dirt_x,
+                    dirt_y,
+                    column_min_z,
+                    column_max_z,
+                    resource_values,
+                ]
+                .iter()
+                .any(|&array| get_array_length(env, array) != columns)
+                || get_array_length(env, material_min_z) != materials
+                || get_array_length(env, material_max_z) != materials
+                || get_array_length(env, dirt_materials) != materials
+                || i64::from(get_array_length(env, chances)) != i64::from(materials) * 16
+                || i64::from(get_array_length(env, output)) != expected_output
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            type GetDoubleArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut f64);
+            type GetIntArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i32);
+            type GetLongArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i64);
+            type GetByteArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i8);
+            type GetFloatArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut f32);
+            let get_double: GetDoubleArrayRegion =
+                std::mem::transmute(function(env, GET_DOUBLE_ARRAY_REGION));
+            let get_int: GetIntArrayRegion =
+                std::mem::transmute(function(env, GET_INT_ARRAY_REGION));
+            let get_long: GetLongArrayRegion =
+                std::mem::transmute(function(env, GET_LONG_ARRAY_REGION));
+            let get_byte: GetByteArrayRegion =
+                std::mem::transmute(function(env, GET_BYTE_ARRAY_REGION));
+            let get_float: GetFloatArrayRegion =
+                std::mem::transmute(function(env, GET_FLOAT_ARRAY_REGION));
+            let mut tiny_x_values = vec![0.0; columns as usize];
+            let mut tiny_y_values = vec![0.0; columns as usize];
+            let mut dirt_x_values = vec![0.0; columns as usize];
+            let mut dirt_y_values = vec![0.0; columns as usize];
+            let mut column_min_values = vec![0; columns as usize];
+            let mut column_max_values = vec![0; columns as usize];
+            let mut resource_value_values = vec![0; columns as usize];
+            let mut seed_values = vec![0_i64; materials as usize];
+            let mut material_min_values = vec![0; materials as usize];
+            let mut material_max_values = vec![0; materials as usize];
+            let mut raw_dirt_values = vec![0_i8; materials as usize];
+            let chance_count = materials as usize * 16;
+            let mut chance_values = vec![0.0_f32; chance_count];
+            for (array, values) in [
+                (tiny_x, &mut tiny_x_values),
+                (tiny_y, &mut tiny_y_values),
+                (dirt_x, &mut dirt_x_values),
+                (dirt_y, &mut dirt_y_values),
+            ] {
+                get_double(env, array, 0, columns, values.as_mut_ptr());
+            }
+            for (array, values) in [
+                (column_min_z, &mut column_min_values),
+                (column_max_z, &mut column_max_values),
+                (resource_values, &mut resource_value_values),
+                (material_min_z, &mut material_min_values),
+                (material_max_z, &mut material_max_values),
+            ] {
+                get_int(env, array, 0, values.len() as jint, values.as_mut_ptr());
+            }
+            get_long(env, seeds, 0, materials, seed_values.as_mut_ptr());
+            get_byte(
+                env,
+                dirt_materials,
+                0,
+                materials,
+                raw_dirt_values.as_mut_ptr(),
+            );
+            get_float(
+                env,
+                chances,
+                0,
+                chance_count as jint,
+                chance_values.as_mut_ptr(),
+            );
+            let dirt_values: Vec<u8> = raw_dirt_values
+                .into_iter()
+                .map(|value| value as u8)
+                .collect();
+            let Ok(values) = fill_resource_materials(
+                min_z,
+                max_z,
+                &tiny_x_values,
+                &tiny_y_values,
+                &dirt_x_values,
+                &dirt_y_values,
+                &column_min_values,
+                &column_max_values,
+                &resource_value_values,
+                &seed_values,
+                &material_min_values,
+                &material_max_values,
+                &dirt_values,
+                &chance_values,
+            ) else {
+                return WeltError::IllegalArgument as jint;
+            };
+            type SetByteArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i8);
+            let set_byte: SetByteArrayRegion =
+                std::mem::transmute(function(env, SET_BYTE_ARRAY_REGION));
+            set_byte(env, output, 0, values.len() as jint, values.as_ptr());
             WeltError::Ok as jint
         })
     }

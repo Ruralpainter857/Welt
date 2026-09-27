@@ -148,6 +148,39 @@ public final class NativeSlices {
         }
     }
 
+    /** Returns first matching resource material indices per block, or null for Java fallback. */
+    public static byte[] resourceMaterials(final int minZ, final int maxZ,
+                                          final double[] tinyX, final double[] tinyY,
+                                          final double[] dirtX, final double[] dirtY,
+                                          final int[] columnMinZ, final int[] columnMaxZ,
+                                          final int[] resourceValues, final long[] seeds,
+                                          final int[] materialMinZ, final int[] materialMaxZ,
+                                          final byte[] dirtMaterials, final float[] chances) {
+        final long height = (long) maxZ - minZ + 1L;
+        if (!Native.isExportEnabled() || !NativeLoader.areSlicesAvailable()
+                || tinyX == null || tinyY == null || dirtX == null || dirtY == null
+                || columnMinZ == null || columnMaxZ == null || resourceValues == null
+                || seeds == null || materialMinZ == null || materialMaxZ == null
+                || dirtMaterials == null || chances == null || minZ > maxZ
+                || height > 4096L || tinyX.length == 0 || tinyX.length > 256
+                || tinyY.length != tinyX.length || dirtX.length != tinyX.length
+                || dirtY.length != tinyX.length || columnMinZ.length != tinyX.length
+                || columnMaxZ.length != tinyX.length || resourceValues.length != tinyX.length
+                || seeds.length > 64 || materialMinZ.length != seeds.length
+                || materialMaxZ.length != seeds.length || dirtMaterials.length != seeds.length
+                || chances.length != seeds.length * 16L || tinyX.length * height > 1_048_576L) {
+            return null;
+        }
+        final byte[] output = new byte[(int) (tinyX.length * height)];
+        try {
+            return nativeFillResourceMaterials(minZ, maxZ, tinyX, tinyY, dirtX, dirtY,
+                    columnMinZ, columnMaxZ, resourceValues, seeds, materialMinZ,
+                    materialMaxZ, dirtMaterials, chances, output) == 0 ? output : null;
+        } catch (final UnsatisfiedLinkError e) {
+            return null;
+        }
+    }
+
 
     /** False leaves the FrostExporter on its original Java path. */
     public static boolean frostColumn(final int minZ, final int maxZ, final int highestNonAir,
@@ -235,6 +268,15 @@ public final class NativeSlices {
     private static native int nativeUnpackArrayCube(long[] data, int arraySize,
                                                      int bitsPerIndex, int paletteSize,
                                                      int[] output);
+
+    private static native int nativeFillResourceMaterials(int minZ, int maxZ,
+                                                           double[] tinyX, double[] tinyY,
+                                                           double[] dirtX, double[] dirtY,
+                                                           int[] columnMinZ, int[] columnMaxZ,
+                                                           int[] resourceValues, long[] seeds,
+                                                           int[] materialMinZ, int[] materialMaxZ,
+                                                           byte[] dirtMaterials, float[] chances,
+                                                           byte[] output);
 
 
     private static native int nativeFrostColumn(int minZ, int maxZ, int highestNonAir,

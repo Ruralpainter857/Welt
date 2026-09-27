@@ -81,7 +81,7 @@ public final class NativeLoader {
      */
     private static volatile boolean loaded = false;
     private static volatile boolean slicesLoaded = false;
-    private static boolean slicesLoadAttempted = false;
+    private static volatile boolean slicesLoadAttempted = false;
 
     private NativeLoader() {
         // Classe utilitaire : pas d'instanciation.
@@ -147,17 +147,21 @@ public final class NativeLoader {
     }
 
     /** Loads the bulk generation/export bridge when a feature flag needs it. */
-    public static synchronized boolean areSlicesAvailable() {
+    public static boolean areSlicesAvailable() {
         if (!slicesLoadAttempted) {
-            slicesLoadAttempted = true;
-            if (tryLoad("welt_slices")) {
-                try {
-                    slicesLoaded = NativeSlices.nativeAbiVersion() == NativeSlices.ABI_VERSION;
-                    if (!slicesLoaded) {
-                        LOGGER.warning("Version du pont welt_slices incompatible ; chemin Java utilisé");
+            synchronized (NativeLoader.class) {
+                if (!slicesLoadAttempted) {
+                    if (tryLoad("welt_slices")) {
+                        try {
+                            slicesLoaded = NativeSlices.nativeAbiVersion() == NativeSlices.ABI_VERSION;
+                            if (!slicesLoaded) {
+                                LOGGER.warning("Version du pont welt_slices incompatible ; chemin Java utilisé");
+                            }
+                        } catch (final UnsatisfiedLinkError e) {
+                            LOGGER.log(Level.WARNING, "Pont welt_slices incomplet ; chemin Java utilisé", e);
+                        }
                     }
-                } catch (final UnsatisfiedLinkError e) {
-                    LOGGER.log(Level.WARNING, "Pont welt_slices incomplet ; chemin Java utilisé", e);
+                    slicesLoadAttempted = true;
                 }
             }
         }

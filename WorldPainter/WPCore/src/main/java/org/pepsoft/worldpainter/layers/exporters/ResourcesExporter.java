@@ -14,6 +14,9 @@ import org.pepsoft.worldpainter.exporting.AbstractLayerExporter;
 import org.pepsoft.worldpainter.exporting.FirstPassLayerExporter;
 import org.pepsoft.worldpainter.layers.Resources;
 import org.pepsoft.worldpainter.layers.Void;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 
 import java.io.IOException;
 import java.io.ObjectInputStream;
@@ -75,6 +78,9 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
 
     @Override
     public void render(Tile tile, Chunk chunk, HeightMap minHeightField) {
+        if (renderNativeResources(tile, chunk, minHeightField)) {
+            return;
+        }
         final int minimumLevel = ((ResourcesExporterSettings) super.settings).getMinimumLevel();
         final int xOffset = (chunk.getxPos() & 7) << 4;
         final int zOffset = (chunk.getzPos() & 7) << 4;
@@ -139,6 +145,101 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
 //            }
 //        }
 //        System.out.println();
+    }
+
+    /**
+     * Computes the resource-noise decisions in one Rust call. All tile queries
+     * and block mutations remain in Java, preserving the historical exporter
+     * behavior if native code is disabled or unavailable.
+     */
+    private boolean renderNativeResources(Tile tile, Chunk chunk, HeightMap minHeightField) {
+        if (!Native.isExportEnabled() || !NativeLoader.areSlicesAvailable()) {
+            return false;
+        }
+        final int minimumLevel = ((ResourcesExporterSettings) super.settings).getMinimumLevel();
+        final int xOffset = (chunk.getxPos() & 7) << 4;
+        final int zOffset = (chunk.getzPos() & 7) << 4;
+        final int[] columnMinZ = new int[256];
+        final int[] columnMaxZ = new int[256];
+        final int[] resourceValues = new int[256];
+        final double[] tinyX = new double[256], tinyY = new double[256];
+        final double[] dirtX = new double[256], dirtY = new double[256];
+        for (int x = 0; x < 16; x++) {
+            for (int z = 0; z < 16; z++) {
+                final int column = x * 16 + z;
+                final int localX = xOffset + x, localY = zOffset + z;
+                if (tile.getBitLayerValue(Void.INSTANCE, localX, localY)) {
+                    columnMinZ[column] = this.minZ;
+                    columnMaxZ[column] = this.minZ - 1;
+                    continue;
+                }
+                final int resourcesValue = Math.max(minimumLevel,
+                        tile.getLayerValue(Resources.INSTANCE, localX, localY));
+                resourceValues[column] = resourcesValue;
+                if (resourcesValue == 0) {
+                    columnMinZ[column] = this.minZ;
+                    columnMaxZ[column] = this.minZ - 1;
+                    continue;
+                }
+                final int worldX = tile.getX() * TILE_SIZE + localX;
+                final int worldY = tile.getY() * TILE_SIZE + localY;
+                final int terrainheight = tile.getIntHeight(localX, localY);
+                final int topLayerDepth = dimension.getTopLayerDepth(worldX, worldY, terrainheight);
+                int subsurfaceMaxHeight = terrainheight - topLayerDepth;
+                if (dimension.isCoverSteepTerrain()) {
+                    subsurfaceMaxHeight = Math.min(subsurfaceMaxHeight,
+                            Math.min(Math.min(dimension.getIntHeightAt(worldX - 1, worldY, Integer.MAX_VALUE),
+                                            dimension.getIntHeightAt(worldX + 1, worldY, Integer.MAX_VALUE)),
+                                    Math.min(dimension.getIntHeightAt(worldX, worldY - 1, Integer.MAX_VALUE),
+                                            dimension.getIntHeightAt(worldX, worldY + 1, Integer.MAX_VALUE))));
+                }
+                tinyX[column] = worldX / TINY_BLOBS;
+                tinyY[column] = worldY / TINY_BLOBS;
+                dirtX[column] = worldX / SMALL_BLOBS;
+                dirtY[column] = worldY / SMALL_BLOBS;
+                columnMinZ[column] = minHeightField != null
+                        ? (int) floor(minHeightField.getHeight(worldX, worldY)) : this.minZ;
+                columnMaxZ[column] = Math.min(subsurfaceMaxHeight, maxZ);
+            }
+        }
+        final long[] seeds = new long[activeMaterials.length];
+        final int[] materialMinZ = minLevels.clone(), materialMaxZ = maxLevels.clone();
+        final byte[] dirtMaterials = new byte[activeMaterials.length];
+        final float[] flattenedChances = new float[activeMaterials.length * 16];
+        for (int material = 0; material < activeMaterials.length; material++) {
+            seeds[material] = noiseGenerators[material].getSeed();
+            dirtMaterials[material] = (byte) (activeMaterials[material].isNamedOneOf(MC_DIRT, MC_GRAVEL) ? 1 : 0);
+            System.arraycopy(chances[material], 0, flattenedChances, material * 16, 16);
+        }
+        final byte[] selected = NativeSlices.resourceMaterials(this.minZ, this.maxZ,
+                tinyX, tinyY, dirtX, dirtY, columnMinZ, columnMaxZ, resourceValues,
+                seeds, materialMinZ, materialMaxZ, dirtMaterials, flattenedChances);
+        if (selected == null) {
+            return false;
+        }
+        final boolean nether = dimension.getAnchor().dim == DIM_NETHER;
+        final int verticalRange = this.maxZ - this.minZ + 1;
+        for (int x = 0; x < 16; x++) {
+            for (int z = 0; z < 16; z++) {
+                final int column = x * 16 + z;
+                for (int y = Math.min(columnMaxZ[column], this.maxZ);
+                     y >= Math.max(columnMinZ[column], this.minZ); y--) {
+                    final int materialIndex = (selected[column * verticalRange + y - this.minZ] & 0xff) - 1;
+                    if (materialIndex >= 0) {
+                        final Material material = activeMaterials[materialIndex];
+                        final Material existingMaterial = chunk.getMaterial(x, y, z);
+                        if (existingMaterial.isNamed(MC_DEEPSLATE) && ORE_TO_DEEPSLATE_VARIANT.containsKey(material.name)) {
+                            chunk.setMaterial(x, y, z, ORE_TO_DEEPSLATE_VARIANT.get(material.name));
+                        } else if (nether && material.isNamed(MC_GOLD_ORE)) {
+                            chunk.setMaterial(x, y, z, NETHER_GOLD_ORE);
+                        } else {
+                            chunk.setMaterial(x, y, z, material);
+                        }
+                    }
+                }
+            }
+        }
+        return true;
     }
 
 //  TODO: resource frequenties onderzoeken met Statistics tool!
