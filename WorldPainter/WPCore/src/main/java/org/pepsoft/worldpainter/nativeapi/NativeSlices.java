@@ -62,6 +62,25 @@ public final class NativeSlices {
         }
     }
 
+    /** Returns row-major capped Euclidean distances for a packed bit-layer mask. */
+    public static float[] edgeDistances(final int width, final int height,
+                                        final float maxDistance, final byte[] mask) {
+        final long area = (long) width * height;
+        if (!Native.isExportEnabled() || !NativeLoader.areSlicesAvailable()
+                || mask == null || width <= 0 || height <= 0
+                || area > 1_048_576L || mask.length != area
+                || !Float.isFinite(maxDistance) || maxDistance < 0.0f || maxDistance > 512.0f) {
+            return null;
+        }
+        final float[] output = new float[(int) area];
+        try {
+            return nativeBakeEdgeDistances(width, height, maxDistance, mask, output) == 0
+                    ? output : null;
+        } catch (final UnsatisfiedLinkError e) {
+            return null;
+        }
+    }
+
 
     /** False leaves the FrostExporter on its original Java path. */
     public static boolean frostColumn(final int minZ, final int maxZ, final int highestNonAir,
@@ -134,6 +153,10 @@ public final class NativeSlices {
                                                        long seed, int[] heights,
                                                        int[] terrainRangeOrdinals,
                                                        int[] output);
+
+    private static native int nativeBakeEdgeDistances(int width, int height,
+                                                       float maxDistance, byte[] mask,
+                                                       float[] output);
 
 
     private static native int nativeFrostColumn(int minZ, int maxZ, int highestNonAir,

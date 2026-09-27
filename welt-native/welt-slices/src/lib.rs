@@ -4,6 +4,7 @@
 use std::ffi::c_void;
 use welt_core::error::WeltError;
 use welt_core::jni::{jclass, jint, jlong, jni_catch, jobject, JNIEnv};
+use welt_export::edge_distance::bake_edge_distances;
 use welt_export::frost::{
     apply_frost_column, apply_frost_packed_columns, FrostCell, FrostMode, FrostSettings,
     FrostUpdate,
@@ -21,6 +22,7 @@ const GET_FLOAT_ARRAY_REGION: usize = 205;
 const SET_INT_ARRAY_REGION: usize = 211;
 const GET_BYTE_ARRAY_REGION: usize = 200;
 const SET_BYTE_ARRAY_REGION: usize = 208;
+const SET_FLOAT_ARRAY_REGION: usize = 213;
 
 const SLICES_ABI_VERSION: jint = 1;
 
@@ -394,6 +396,73 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let set_double_array_region: SetDoubleArrayRegion =
                 std::mem::transmute(function(env, SET_DOUBLE_ARRAY_REGION));
             set_double_array_region(env, output, 0, expected as jint, values.as_ptr());
+            WeltError::Ok as jint
+        })
+    }
+}
+
+/// Bake capped edge distances for a row-major bit-layer mask.
+///
+/// Java includes a one-pixel empty halo so world boundaries are represented as
+/// ordinary exterior pixels. A nonzero return keeps the Java implementation.
+///
+/// # Safety
+/// `env`, `mask`, and `output` must be valid references for this JVM call.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeBakeEdgeDistances(
+    env: *mut JNIEnv,
+    _class: jclass,
+    width: jint,
+    height: jint,
+    max_distance: f32,
+    mask: jobject,
+    output: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if mask.is_null() || output.is_null() || width <= 0 || height <= 0 {
+                return WeltError::IllegalArgument as jint;
+            }
+            let Some(expected) = (width as usize).checked_mul(height as usize) else {
+                return WeltError::IllegalArgument as jint;
+            };
+            if expected > 1_048_576 {
+                return WeltError::IllegalArgument as jint;
+            }
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            if get_array_length(env, mask) != expected as jint
+                || get_array_length(env, output) != expected as jint
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+
+            type GetByteArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i8);
+            let get_byte_array_region: GetByteArrayRegion =
+                std::mem::transmute(function(env, GET_BYTE_ARRAY_REGION));
+            let mut raw_mask = vec![0_i8; expected];
+            get_byte_array_region(env, mask, 0, expected as jint, raw_mask.as_mut_ptr());
+            let mask: Vec<u8> = raw_mask.into_iter().map(|value| value as u8).collect();
+            let mut values = vec![0.0_f32; expected];
+            if bake_edge_distances(
+                &mask,
+                width as usize,
+                height as usize,
+                max_distance,
+                &mut values,
+            )
+            .is_err()
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+
+            type SetFloatArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const f32);
+            let set_float_array_region: SetFloatArrayRegion =
+                std::mem::transmute(function(env, SET_FLOAT_ARRAY_REGION));
+            set_float_array_region(env, output, 0, expected as jint, values.as_ptr());
             WeltError::Ok as jint
         })
     }

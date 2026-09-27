@@ -28,6 +28,8 @@ import org.pepsoft.worldpainter.layers.*;
 import org.pepsoft.worldpainter.layers.exporters.ExporterSettings;
 import org.pepsoft.worldpainter.layers.exporters.ResourcesExporter.ResourcesExporterSettings;
 import org.pepsoft.worldpainter.layers.tunnel.TunnelLayer;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import org.pepsoft.worldpainter.operations.Filter;
 import org.pepsoft.worldpainter.panels.DefaultFilter;
 import org.pepsoft.worldpainter.selection.SelectionBlock;
@@ -1074,6 +1076,10 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
             distanceCache[tile.getX() - tileXOffset][tile.getY() - tileYOffset] = cacheForTile;
         }
 
+        if (bakeNativeEdgeDistances(tileCache, distanceCache, layer, maxDistance)) {
+            return new TileCacheHeightMap(distanceCache, tileXOffset, tileYOffset, 0.0f, maxDistance);
+        }
+
         // TODO: don't do this separately for every exported region
 
         // Now find all edge pixels and adjust the distances in the cache for the pixels around each one
@@ -1101,6 +1107,89 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
 
         // Return a HeightMap that will return values from the distance cache
         return new TileCacheHeightMap(distanceCache, tileXOffset, tileYOffset, 0.0f, maxDistance);
+    }
+
+    /** Attempts the same capped edge-distance bake in Rust; false preserves the Java fallback. */
+    private boolean bakeNativeEdgeDistances(Tile[][] tileCache, float[][][][] distanceCache,
+                                            Layer layer, float maxDistance) {
+        if (!Native.isExportEnabled()) {
+            return false;
+        }
+        final Layer.DataSize dataSize = layer.getDataSize();
+        if ((dataSize != Layer.DataSize.BIT) && (dataSize != Layer.DataSize.BIT_PER_CHUNK)) {
+            return false;
+        }
+        final int tileColumns = tileCache.length;
+        final int tileRows = tileCache[0].length;
+        final long widthLong = (long) tileColumns * TILE_SIZE + 2L;
+        final long heightLong = (long) tileRows * TILE_SIZE + 2L;
+        if (widthLong > 1_048_576L || heightLong > 1_048_576L
+                || !Float.isFinite(maxDistance)
+                || maxDistance < 0.0f || maxDistance > 512.0f) {
+            return false;
+        }
+        final long area = widthLong * heightLong;
+        if (area > 1_048_576L) {
+            return false;
+        }
+
+        final int width = (int) widthLong;
+        final int height = (int) heightLong;
+        final byte[] mask = new byte[(int) area];
+        for (int tileX = 0; tileX < tileColumns; tileX++) {
+            for (int tileY = 0; tileY < tileRows; tileY++) {
+                final Tile tile = tileCache[tileX][tileY];
+                if (tile == null) {
+                    continue;
+                }
+                synchronized (tile) {
+                    tile.ensureReadable(Tile.TileBuffer.BIT_LAYER_DATA);
+                    final BitSet values = tile.bitLayerData.get(layer);
+                    if (values == null) {
+                        continue;
+                    }
+                    final int baseX = tileX * TILE_SIZE + 1;
+                    final int baseY = tileY * TILE_SIZE + 1;
+                    for (int y = 0; y < TILE_SIZE; y++) {
+                        final int row = (baseY + y) * width + baseX;
+                        final int chunkRow = (y >> 4) * (TILE_SIZE >> 4);
+                        for (int x = 0; x < TILE_SIZE; x++) {
+                            final int bitIndex = (dataSize == Layer.DataSize.BIT)
+                                    ? (x | (y << TILE_SIZE_BITS))
+                                    : ((x >> 4) + chunkRow);
+                            if (values.get(bitIndex)) {
+                                mask[row + x] = 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        final float[] distances = NativeSlices.edgeDistances(width, height, maxDistance, mask);
+        if (distances == null) {
+            return false;
+        }
+        for (int tileX = 0; tileX < tileColumns; tileX++) {
+            for (int tileY = 0; tileY < tileRows; tileY++) {
+                final Tile tile = tileCache[tileX][tileY];
+                final float[][] tileDistances = distanceCache[tileX][tileY];
+                if ((tile == null) || (tileDistances == null)) {
+                    continue;
+                }
+                final int baseX = tileX * TILE_SIZE + 1;
+                final int baseY = tileY * TILE_SIZE + 1;
+                for (int y = 0; y < TILE_SIZE; y++) {
+                    final int row = (baseY + y) * width + baseX;
+                    for (int x = 0; x < TILE_SIZE; x++) {
+                        if (mask[row + x] != 0) {
+                            tileDistances[x][y] = distances[row + x];
+                        }
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     /**
