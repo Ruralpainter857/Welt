@@ -10,6 +10,7 @@ import org.pepsoft.worldpainter.heightMaps.MaximisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MandelbrotHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
+import org.pepsoft.worldpainter.heightMaps.ShelvingHeightMap;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.themes.SimpleTheme;
@@ -32,11 +33,15 @@ public final class NestedSumHeightMapBenchmark {
         final boolean banded = args.length > 2 && args[2].toLowerCase().startsWith("banded");
         final boolean bandedSmooth = banded && !"banded-linear".equalsIgnoreCase(args[2]);
         final boolean translated = args.length > 2 && "translated".equalsIgnoreCase(args[2]);
+        final boolean shelving = args.length > 2 && "shelving".equalsIgnoreCase(args[2]);
         if (!NativeLoader.areSlicesAvailable()) {
             throw new IllegalStateException("welt_slices is unavailable; build with Maven -Pnative");
         }
         final org.pepsoft.worldpainter.HeightMap baseHeightMap = banded
                 ? new BandedHeightMap("banded", 47, 116.5, 29, 88.25, bandedSmooth)
+                : shelving
+                ? new ShelvingHeightMap(new SumHeightMap(new ConstantHeightMap(48.25),
+                        new NoiseHeightMap(38.0, 0.8, 2, 0x1234_5678L)))
                 : mandelbrot
                 ? new SumHeightMap(new ConstantHeightMap(58.0), new MandelbrotHeightMap())
                 : minmax
@@ -82,7 +87,7 @@ public final class NestedSumHeightMapBenchmark {
         Arrays.sort(javaSamples);
         Arrays.sort(rustSamples);
         System.out.printf("scenario=%s tiles=%d rounds=%d java_median_ms_per_tile=%.4f rust_median_ms_per_tile=%.4f rust_speedup=%.3f sink=%d%n",
-                translated ? "translated-noise"
+                translated ? "translated-noise" : shelving ? "shelving-noise"
                         : banded ? bandedSmooth ? "banded-smooth" : "banded-linear"
                         : mandelbrot ? "mandelbrot" : minmax ? "minmax" : composite ? "product-difference" : "nested-sum", tiles, rounds,
                 javaSamples[rounds / 2], rustSamples[rounds / 2],

@@ -15,6 +15,7 @@ import org.pepsoft.worldpainter.heightMaps.MaximisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MandelbrotHeightMap;
 import org.pepsoft.worldpainter.heightMaps.BandedHeightMap;
 import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
+import org.pepsoft.worldpainter.heightMaps.ShelvingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.nativeapi.Native;
@@ -154,7 +155,8 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             final boolean freshSimpleTheme = (theme.getClass() == SimpleTheme.class) && !floodWithLava;
             final boolean batchFreshSimpleTheme = freshSimpleTheme
                     && (isBatchSafeHeightMap(heightMap) || isNativeBandedHeightMap(heightMap)
-                    || (translatedHeightMap != null));
+                    || (translatedHeightMap != null)
+                    || isNativeShelvingHeightMap(heightMap, worldTileX, worldTileY));
             final GenerationBuffers buffers = batchFreshSimpleTheme ? GENERATION_BUFFERS.get() : null;
             double[] nativeHeights = null;
             boolean nativeHeightMapTreeSucceeded = false;
@@ -288,6 +290,22 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         return null;
     }
 
+    /** Requires integral coordinates to survive ShelvingHeightMap's float delegation exactly. */
+    private static boolean isNativeShelvingHeightMap(HeightMap heightMap, int originX, int originY) {
+        if (heightMap.getClass() != ShelvingHeightMap.class) {
+            return false;
+        }
+        final HeightMap base = ((ShelvingHeightMap) heightMap).getHeightMap(0);
+        return (isBatchSafeHeightMap(base) || isNativeBandedHeightMap(base))
+                && areTileCoordinatesExactlyRepresentableAsFloats(originX, originY);
+    }
+
+    private static boolean areTileCoordinatesExactlyRepresentableAsFloats(int originX, int originY) {
+        final int exactFloatLimit = 1 << 24;
+        return (originX >= -exactFloatLimit) && (originX <= exactFloatLimit - TILE_SIZE + 1)
+                && (originY >= -exactFloatLimit) && (originY <= exactFloatLimit - TILE_SIZE + 1);
+    }
+
     private static final class GenerationBuffers {
         private final float[] heights = new float[TILE_SIZE * TILE_SIZE];
         private final int[] intHeights = new int[TILE_SIZE * TILE_SIZE];
@@ -348,6 +366,18 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 heightMapSeeds[index] = banded.getSegment2Length();
                 heightMapNodeCount++;
                 heightMapBandedCount++;
+                return true;
+            }
+            if (heightMap.getClass() == ShelvingHeightMap.class) {
+                final ShelvingHeightMap shelving = (ShelvingHeightMap) heightMap;
+                if (!appendHeightMapNode(shelving.getHeightMap(0))
+                        || heightMapNodeCount >= heightMapOpcodes.length) {
+                    return false;
+                }
+                final int operatorIndex = heightMapNodeCount++;
+                heightMapOpcodes[operatorIndex] = 11;
+                heightMapOctaves[operatorIndex] = shelving.getShelveHeight();
+                heightMapSeeds[operatorIndex] = shelving.getShelveStrength();
                 return true;
             }
             final int operator;

@@ -11,6 +11,7 @@ import org.pepsoft.worldpainter.heightMaps.MandelbrotHeightMap;
 import org.pepsoft.worldpainter.heightMaps.ProductHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
+import org.pepsoft.worldpainter.heightMaps.ShelvingHeightMap;
 import org.pepsoft.worldpainter.layers.Frost;
 import org.pepsoft.worldpainter.layers.Layer;
 import org.pepsoft.worldpainter.nativeapi.Native;
@@ -283,6 +284,50 @@ public final class SimpleThemeFreshTileParityTest {
                         new SumHeightMap(new ConstantHeightMap(42.25),
                                 new NoiseHeightMap(38.0, 0.8, 3, -0x1020_3040L)),
                         1.0f, 1.0f, -13, 29, 0.0f);
+                final HeightMapTileFactory javaFactory = new HeightMapTileFactory(73L, javaMap,
+                        0, 256, false, createSimpleTheme(true));
+                final HeightMapTileFactory nativeFactory = new HeightMapTileFactory(73L, nativeMap,
+                        0, 256, false, createSimpleTheme(false));
+                Native.setGenEnabled(false);
+                final Tile javaTile = javaFactory.createTile(tile[0], tile[1]);
+                Native.setGenEnabled(true);
+                final Tile nativeTile = nativeFactory.createTile(tile[0], tile[1]);
+                for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                    for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                        assertEquals("height at " + x + ',' + y,
+                                Float.floatToRawIntBits(javaTile.getHeight(x, y)),
+                                Float.floatToRawIntBits(nativeTile.getHeight(x, y)));
+                        assertEquals("terrain at " + x + ',' + y,
+                                javaTile.getTerrain(x, y), nativeTile.getTerrain(x, y));
+                    }
+                }
+            }
+        } finally {
+            if (previousFlag == null) {
+                System.clearProperty(Native.GEN_KEY);
+            } else {
+                System.setProperty(Native.GEN_KEY, previousFlag);
+            }
+        }
+    }
+
+    @Test
+    public void nativeShelvingHeightMapMatchesJavaFreshTile() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        try {
+            for (final int[] tile : new int[][] {
+                    {-2, 5}, {1000, -1000}, {131071, -131072}, {131073, -131073}}) {
+                final ShelvingHeightMap javaMap = new ShelvingHeightMap(
+                        new SumHeightMap(new ConstantHeightMap(42.25),
+                                new NoiseHeightMap(38.0, 0.8, 3, -0x1020_3040L)));
+                final ShelvingHeightMap nativeMap = new ShelvingHeightMap(
+                        new SumHeightMap(new ConstantHeightMap(42.25),
+                                new NoiseHeightMap(38.0, 0.8, 3, -0x1020_3040L)));
+                javaMap.setShelveHeight(37);
+                javaMap.setShelveStrength(11);
+                nativeMap.setShelveHeight(37);
+                nativeMap.setShelveStrength(11);
                 final HeightMapTileFactory javaFactory = new HeightMapTileFactory(73L, javaMap,
                         0, 256, false, createSimpleTheme(true));
                 final HeightMapTileFactory nativeFactory = new HeightMapTileFactory(73L, nativeMap,

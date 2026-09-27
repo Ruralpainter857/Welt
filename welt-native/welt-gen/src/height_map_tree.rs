@@ -22,6 +22,10 @@ pub enum HeightMapNode {
         segment2_end_height: f64,
         smooth: bool,
     },
+    Shelving {
+        shelve_height: i32,
+        shelve_strength: i32,
+    },
     Add,
     Subtract,
     Multiply,
@@ -143,6 +147,18 @@ pub fn fill_height_map_tree(
                 });
                 depth += 1;
             }
+            HeightMapNode::Shelving {
+                shelve_height,
+                shelve_strength,
+            } => {
+                if depth < 1 {
+                    return Err(HeightMapTreeError::InvalidProgram);
+                }
+                parsed.push(ParsedNode::Shelving {
+                    shelve_height,
+                    shelve_strength,
+                });
+            }
             HeightMapNode::Add => {
                 if depth < 2 {
                     return Err(HeightMapTreeError::InvalidProgram);
@@ -240,6 +256,15 @@ pub fn fill_height_map_tree(
                     );
                     stack_depth += 1;
                 }
+                ParsedNode::Shelving {
+                    shelve_height,
+                    shelve_strength,
+                } => {
+                    let value = stack[stack_depth - 1];
+                    stack[stack_depth - 1] = value
+                        - (value * std::f64::consts::TAU / f64::from(shelve_height)).sin()
+                            * f64::from(shelve_strength);
+                }
                 ParsedNode::Add => {
                     let right = stack[stack_depth - 1];
                     let left = stack[stack_depth - 2];
@@ -288,6 +313,10 @@ enum ParsedNode {
         segment2_length: i32,
         segment2_end_height: f64,
         smooth: bool,
+    },
+    Shelving {
+        shelve_height: i32,
+        shelve_strength: i32,
     },
     Add,
     Subtract,

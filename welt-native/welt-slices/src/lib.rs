@@ -631,6 +631,10 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                         segment2_end_height: raw_scales[index],
                         smooth: raw_opcodes[index] == 10,
                     },
+                    11 => HeightMapNode::Shelving {
+                        shelve_height: raw_octaves[index],
+                        shelve_strength: raw_seeds[index] as i32,
+                    },
                     2 => HeightMapNode::Add,
                     3 => HeightMapNode::Subtract,
                     4 => HeightMapNode::Multiply,
