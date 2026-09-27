@@ -14,6 +14,7 @@ import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.awt.image.Raster;
 import java.io.File;
+import java.util.Arrays;
 
 import static java.awt.image.DataBuffer.*;
 
@@ -83,17 +84,65 @@ public final class BitmapHeightMap extends AbstractHeightMap {
         return height;
     }
 
-    /**
-     * Bulk-reads an in-bounds rectangle. Even a repeating bitmap uses its direct coordinates inside
-     * the image extent. Samples are written row-major, matching {@code x | (y << tileSizeBits)}.
-     */
-    public boolean fillSamples(int x, int y, int sampleWidth, int sampleHeight, double[] samples) {
-        if ((x < 0) || (y < 0) || (sampleWidth <= 0) || (sampleHeight <= 0)
-                || ((long) x + sampleWidth > width) || ((long) y + sampleHeight > height)
-                || (samples == null) || ((long) sampleWidth * sampleHeight != samples.length)) {
+    /** Bulk-reads a rectangle using the same clipping and repeat rules as {@link #getHeight(int, int)}. */
+    public boolean fillSamples(int x, int y, int sampleWidth, int sampleHeight,
+                               double[] samples, double[] rowSamples) {
+        if ((sampleWidth <= 0) || (sampleHeight <= 0) || (samples == null)
+                || ((long) sampleWidth * sampleHeight != samples.length)) {
             return false;
         }
-        raster.getSamples(x, y, sampleWidth, sampleHeight, channel, samples);
+        if ((x >= 0) && (y >= 0)
+                && ((long) x + sampleWidth <= width) && ((long) y + sampleHeight <= height)) {
+            raster.getSamples(x, y, sampleWidth, sampleHeight, channel, samples);
+            return true;
+        }
+        if ((rowSamples == null) || (rowSamples.length < sampleWidth)) {
+            return false;
+        }
+        Arrays.fill(samples, minHeight);
+        for (int row = 0; row < sampleHeight; row++) {
+            final int worldY = y + row;
+            final int sourceY;
+            if (repeat) {
+                sourceY = MathUtils.mod(worldY, height);
+            } else {
+                if ((worldY < 0) || (worldY >= height)) {
+                    continue;
+                }
+                sourceY = worldY;
+            }
+            final int outputRow = row * sampleWidth;
+            if (repeat && (width <= sampleWidth)) {
+                raster.getSamples(0, sourceY, width, 1, channel, rowSamples);
+                for (int column = 0; column < sampleWidth; column++) {
+                    samples[outputRow + column] = rowSamples[MathUtils.mod(x + column, width)];
+                }
+                continue;
+            }
+            int column = 0;
+            while (column < sampleWidth) {
+                final int worldX = x + column;
+                final int sourceX;
+                final int runLength;
+                if (repeat) {
+                    sourceX = MathUtils.mod(worldX, width);
+                    final int beforeOverflow = (int) Math.min(Integer.MAX_VALUE - (long) worldX + 1L,
+                            Integer.MAX_VALUE);
+                    runLength = Math.min(Math.min(sampleWidth - column, width - sourceX), beforeOverflow);
+                } else if (worldX < 0) {
+                    column += (int) Math.min(sampleWidth - column, -(long) worldX);
+                    continue;
+                } else if (worldX >= width) {
+                    break;
+                } else {
+                    sourceX = worldX;
+                    runLength = Math.min(sampleWidth - column, width - sourceX);
+                }
+                raster.getSamples(sourceX, sourceY, runLength, 1, channel, rowSamples);
+                System.arraycopy(rowSamples, 0, samples, outputRow + column, runLength);
+                column += runLength;
+            }
+        }
         return true;
     }
 

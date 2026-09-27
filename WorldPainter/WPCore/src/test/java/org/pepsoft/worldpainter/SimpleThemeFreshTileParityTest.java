@@ -433,41 +433,44 @@ public final class SimpleThemeFreshTileParityTest {
                 {BufferedImage.TYPE_BYTE_GRAY, 0},
                 {BufferedImage.TYPE_USHORT_GRAY, 0},
                 {BufferedImage.TYPE_3BYTE_BGR, 2}}) {
-            final BufferedImage image = new BufferedImage(256, 256, imageTypeAndChannel[0]);
-            for (int x = 0; x < image.getWidth(); x++) {
-                for (int y = 0; y < image.getHeight(); y++) {
-                    final int red = (x * 17 + y * 3) & 0xff;
-                    final int green = (x * 5 + y * 11) & 0xff;
-                    final int blue = (x * 7 + y * 13) & 0xff;
-                    image.setRGB(x, y, 0xff000000 | (red << 16) | (green << 8) | blue);
+            for (final int[] dimensions : new int[][] {{260, 259}, {64, 73}}) {
+                final BufferedImage image = new BufferedImage(dimensions[0], dimensions[1], imageTypeAndChannel[0]);
+                for (int x = 0; x < image.getWidth(); x++) {
+                    for (int y = 0; y < image.getHeight(); y++) {
+                        final int red = (x * 17 + y * 3) & 0xff;
+                        final int green = (x * 5 + y * 11) & 0xff;
+                        final int blue = (x * 7 + y * 13) & 0xff;
+                        image.setRGB(x, y, 0xff000000 | (red << 16) | (green << 8) | blue);
+                    }
                 }
-            }
-            for (final boolean repeat : new boolean[] {false, true}) {
-                for (final boolean bicubic : new boolean[] {false, true}) {
-                    final BitmapHeightMap legacyBitmap = BitmapHeightMap.build()
-                        .withImage(image).withChannel(imageTypeAndChannel[1]).withRepeat(repeat).now();
-                    final BitmapHeightMap batchBitmap = BitmapHeightMap.build()
-                        .withImage(image).withChannel(imageTypeAndChannel[1]).withRepeat(repeat).now();
-                    final HeightMap legacyMap = bicubic ? new BicubicHeightMap(legacyBitmap) : legacyBitmap;
-                    final HeightMap batchMap = bicubic ? new BicubicHeightMap(batchBitmap) : batchBitmap;
-                    final HeightMapTileFactory legacyFactory = new HeightMapTileFactory(42L, legacyMap,
-                            0, 256, false, createSimpleTheme(true));
-                    final HeightMapTileFactory batchFactory = new HeightMapTileFactory(42L, batchMap,
-                            0, 256, false, createSimpleTheme(false));
-                    for (final int[] tile : new int[][] {{0, 0}, {1, 1}, {-1, 0}}) {
-                        final Tile legacy = legacyFactory.createTile(tile[0], tile[1]);
-                        final Tile batch = batchFactory.createTile(tile[0], tile[1]);
-                        for (int x = 0; x < Constants.TILE_SIZE; x++) {
-                            for (int y = 0; y < Constants.TILE_SIZE; y++) {
-                                assertEquals("height for image type " + imageTypeAndChannel[0]
-                                                + " repeat=" + repeat + " bicubic=" + bicubic
-                                                + " at " + x + ',' + y,
-                                        Float.floatToRawIntBits(legacy.getHeight(x, y)),
-                                        Float.floatToRawIntBits(batch.getHeight(x, y)));
-                                assertEquals("water at " + x + ',' + y,
-                                        legacy.getWaterLevel(x, y), batch.getWaterLevel(x, y));
-                                assertEquals("terrain at " + x + ',' + y,
-                                        legacy.getTerrain(x, y), batch.getTerrain(x, y));
+                for (final boolean repeat : new boolean[] {false, true}) {
+                    for (final boolean bicubic : new boolean[] {false, true}) {
+                        final BitmapHeightMap legacyBitmap = BitmapHeightMap.build()
+                                .withImage(image).withChannel(imageTypeAndChannel[1]).withRepeat(repeat).now();
+                        final BitmapHeightMap batchBitmap = BitmapHeightMap.build()
+                                .withImage(image).withChannel(imageTypeAndChannel[1]).withRepeat(repeat).now();
+                        final HeightMap legacyMap = bicubic ? new BicubicHeightMap(legacyBitmap) : legacyBitmap;
+                        final HeightMap batchMap = bicubic ? new BicubicHeightMap(batchBitmap) : batchBitmap;
+                        final HeightMapTileFactory legacyFactory = new HeightMapTileFactory(42L, legacyMap,
+                                0, 256, false, createSimpleTheme(true));
+                        final HeightMapTileFactory batchFactory = new HeightMapTileFactory(42L, batchMap,
+                                0, 256, false, createSimpleTheme(false));
+                        for (final int[] tile : new int[][] {
+                                {0, 0}, {1, 1}, {2, 2}, {-1, 0}, {0, -1}, {-1, -1}}) {
+                            final Tile legacy = legacyFactory.createTile(tile[0], tile[1]);
+                            final Tile batch = batchFactory.createTile(tile[0], tile[1]);
+                            for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                                for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                                    assertEquals("height for image type " + imageTypeAndChannel[0]
+                                                    + " repeat=" + repeat + " bicubic=" + bicubic
+                                                    + " at " + x + ',' + y,
+                                            Float.floatToRawIntBits(legacy.getHeight(x, y)),
+                                            Float.floatToRawIntBits(batch.getHeight(x, y)));
+                                    assertEquals("water at " + x + ',' + y,
+                                            legacy.getWaterLevel(x, y), batch.getWaterLevel(x, y));
+                                    assertEquals("terrain at " + x + ',' + y,
+                                            legacy.getTerrain(x, y), batch.getTerrain(x, y));
+                                }
                             }
                         }
                     }

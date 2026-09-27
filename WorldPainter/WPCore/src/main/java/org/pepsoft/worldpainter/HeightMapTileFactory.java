@@ -158,7 +158,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             final boolean batchFreshSimpleTheme = freshSimpleTheme
                     && (isBatchSafeHeightMap(heightMap) || isNativeBandedHeightMap(heightMap)
                     || (translatedHeightMap != null)
-                    || isBulkReadableBitmapHeightMap(heightMap, worldTileX, worldTileY)
+                    || isBulkReadableBitmapHeightMap(heightMap)
                     || isNativeShelvingHeightMap(heightMap, worldTileX, worldTileY));
             final GenerationBuffers buffers = batchFreshSimpleTheme ? GENERATION_BUFFERS.get() : null;
             double[] nativeHeights = null;
@@ -181,7 +181,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             if (nativeHeights == null && batchFreshSimpleTheme && (bitmapHeightMap != null)) {
                 final double[] output = buffers.nativeHeights();
                 if (bitmapHeightMap.fillSamples(
-                        worldTileX, worldTileY, TILE_SIZE, TILE_SIZE, output)) {
+                        worldTileX, worldTileY, TILE_SIZE, TILE_SIZE, output, buffers.bitmapRowSamples)) {
                     nativeHeights = output;
                     completeHeightMapValuesAvailable = true;
                 }
@@ -288,13 +288,9 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 && ((BandedHeightMap) heightMap).isSmooth();
     }
 
-    /** Bulk raster reads match BitmapHeightMap while the tile coordinates remain inside the image. */
-    private static boolean isBulkReadableBitmapHeightMap(HeightMap heightMap, int originX, int originY) {
-        final BitmapHeightMap bitmap = getBulkReadableBitmapBase(heightMap);
-        return (bitmap != null)
-                && (originX >= 0) && (originY >= 0)
-                && ((long) originX + TILE_SIZE <= bitmap.getWidth())
-                && ((long) originY + TILE_SIZE <= bitmap.getHeight());
+    /** BitmapHeightMap supplies a bulk reader that preserves clipping and repeat semantics. */
+    private static boolean isBulkReadableBitmapHeightMap(HeightMap heightMap) {
+        return getBulkReadableBitmapBase(heightMap) != null;
     }
 
     /** Integer sampling of non-repeating BicubicHeightMap delegates directly to its bitmap child. */
@@ -351,6 +347,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         private final double[] heightMapScales = new double[64];
         private final int[] heightMapOctaves = new int[64];
         private final long[] heightMapSeeds = new long[64];
+        private final double[] bitmapRowSamples = new double[TILE_SIZE];
         private int heightMapNodeCount;
         private int heightMapNoiseCount;
         private int heightMapMandelbrotCount;
