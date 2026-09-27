@@ -14,6 +14,7 @@ use welt_gen::noise_height_map::NoiseHeightMapBulk;
 use welt_gen::resource_noise::fill_resource_materials;
 use welt_gen::theme_terrain::SimpleThemeTerrainBulk;
 use welt_nbt::packed_array::{pack_indices, unpack_indices};
+use welt_render::shade::shade_pixels;
 
 // JNI 17 function-table indices, checked against the JDK's jni.h. The first
 // four entries are reserved; GetArrayLength is 171 and SetDoubleArrayRegion
@@ -39,6 +40,57 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
     _class: jclass,
 ) -> jint {
     unsafe { jni_catch(env, || SLICES_ABI_VERSION) }
+}
+
+/// Applies WorldPainter's two integer RGB brightness multiplications to one
+/// tile's ARGB pixels. Packed `jlong` amounts contain terrain in the low 32
+/// bits and fluid in the high 32 bits.
+///
+/// # Safety
+/// All references and `env` must be supplied by the current JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeShadeColours(
+    env: *mut JNIEnv,
+    _class: jclass,
+    colours: jobject,
+    packed_amounts: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if colours.is_null() || packed_amounts.is_null() {
+                return WeltError::IllegalArgument as jint;
+            }
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            let length = get_array_length(env, colours);
+            if !(1..=1_048_576).contains(&length) || get_array_length(env, packed_amounts) != length
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            type GetIntArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i32);
+            type GetLongArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i64);
+            let get_int: GetIntArrayRegion =
+                std::mem::transmute(function(env, GET_INT_ARRAY_REGION));
+            let get_long: GetLongArrayRegion =
+                std::mem::transmute(function(env, GET_LONG_ARRAY_REGION));
+            let mut colour_values = vec![0_i32; length as usize];
+            let mut amount_values = vec![0_i64; length as usize];
+            get_int(env, colours, 0, length, colour_values.as_mut_ptr());
+            get_long(env, packed_amounts, 0, length, amount_values.as_mut_ptr());
+            if shade_pixels(&mut colour_values, &amount_values).is_err() {
+                return WeltError::IllegalArgument as jint;
+            }
+            type SetIntArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i32);
+            let set_int: SetIntArrayRegion =
+                std::mem::transmute(function(env, SET_INT_ARRAY_REGION));
+            set_int(env, colours, 0, length, colour_values.as_ptr());
+            WeltError::Ok as jint
+        })
+    }
 }
 
 /// # Safety

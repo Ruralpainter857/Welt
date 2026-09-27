@@ -14,6 +14,9 @@ import org.pepsoft.worldpainter.layers.Void;
 import org.pepsoft.worldpainter.layers.renderers.*;
 import org.pepsoft.worldpainter.layers.tunnel.TunnelLayer;
 import org.pepsoft.worldpainter.layers.tunnel.TunnelLayerHelper;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import org.pepsoft.worldpainter.ramps.ColourRamp;
 
 import java.awt.*;
@@ -219,6 +222,8 @@ public final class TileRenderer {
         }
 
         final int scale = 1 << -zoom;
+        final boolean nativeShading = (zoom == 0) && Native.isRenderEnabled()
+                && NativeLoader.areSlicesAvailable();
         final Graphics2D g2 = (Graphics2D) image.getGraphics();
         try {
             g2.setComposite(AlphaComposite.Src);
@@ -227,22 +232,40 @@ public final class TileRenderer {
                     for (int y = 0; y < TILE_SIZE; y++) {
                         final int worldX = (tileX << TILE_SIZE_BITS) | x, worldY = (tileY << TILE_SIZE_BITS) | y;
                         if (notAllBlocksPresent && (tile.getBitLayerValue(NotPresent.INSTANCE, x, y) || tile.getBitLayerValue(NotPresentBlock.INSTANCE, x, y))) {
-                            renderBuffer[x | (y << TILE_SIZE_BITS)] = notPresentColour;
+                            final int offset = x | (y << TILE_SIZE_BITS);
+                            renderBuffer[offset] = notPresentColour;
+                            if (nativeShading) renderShadeAmounts[offset] = packShadeAmounts(256, 256);
                         } else if ((! noOpposites) && oppositesOverlap[x | (y << TILE_SIZE_BITS)] && CEILING_PATTERN[x & 0x7][y & 0x7]) {
-                            renderBuffer[x | (y << TILE_SIZE_BITS)] = 0xff000000;
+                            final int offset = x | (y << TILE_SIZE_BITS);
+                            renderBuffer[offset] = 0xff000000;
+                            if (nativeShading) renderShadeAmounts[offset] = packShadeAmounts(256, 256);
                         } else if (_void && tile.getBitLayerValue(org.pepsoft.worldpainter.layers.Void.INSTANCE, x, y)) {
-                            renderBuffer[x | (y << TILE_SIZE_BITS)] = voidColour;
+                            final int offset = x | (y << TILE_SIZE_BITS);
+                            renderBuffer[offset] = voidColour;
+                            if (nativeShading) renderShadeAmounts[offset] = packShadeAmounts(256, 256);
                             // TODO still render ReadOnly, and layers which might still be exported over Void
                         } else {
                             int colour = getPixelColour(tile, worldX, worldY, layers, renderers, contourLines, hideTerrain, hideFluids, bottomless, topLayersRelativeToTerrain, seed);
-                            colour = ColourUtils.multiply(colour, getTerrainBrightenAmount());
                             final int offset = x + y * TILE_SIZE;
-                            if (intFluidHeightCache[offset] > intHeightCache[offset]) {
-                                colour = ColourUtils.multiply(colour, getFluidBrightenAmount());
+                            if (nativeShading) {
+                                final int terrainAmount = getTerrainBrightenAmount();
+                                final int fluidAmount = (intFluidHeightCache[offset] > intHeightCache[offset])
+                                        ? getFluidBrightenAmount() : 256;
+                                renderShadeAmounts[offset] = packShadeAmounts(terrainAmount, fluidAmount);
+                                renderBuffer[offset] = 0xff000000 | colour;
+                            } else {
+                                colour = ColourUtils.multiply(colour, getTerrainBrightenAmount());
+                                if (intFluidHeightCache[offset] > intHeightCache[offset]) {
+                                    colour = ColourUtils.multiply(colour, getFluidBrightenAmount());
+                                }
+                                renderBuffer[offset] = 0xff000000 | colour;
                             }
-                            renderBuffer[x | (y << TILE_SIZE_BITS)] = 0xff000000 | colour;
                         }
                     }
+                }
+
+                if (nativeShading && !NativeSlices.shadeColours(renderBuffer, renderShadeAmounts)) {
+                    applyJavaShading();
                 }
 
                 g2.drawImage(bufferedImage, dx, dy, null);
@@ -318,6 +341,25 @@ public final class TileRenderer {
             default:
                 throw new InternalError();
         }
+    }
+
+    private void applyJavaShading() {
+        for (int index = 0; index < renderBuffer.length; index++) {
+            final long packed = renderShadeAmounts[index];
+            final int terrainAmount = (int) packed;
+            final int fluidAmount = (int) (packed >>> 32);
+            if (terrainAmount == 256 && fluidAmount == 256) {
+                continue;
+            }
+            final int alpha = renderBuffer[index] & 0xff000000;
+            int colour = ColourUtils.multiply(renderBuffer[index], terrainAmount);
+            colour = ColourUtils.multiply(colour, fluidAmount);
+            renderBuffer[index] = colour | alpha;
+        }
+    }
+
+    private static long packShadeAmounts(int terrainAmount, int fluidAmount) {
+        return ((long) fluidAmount << 32) | (terrainAmount & 0xffffffffL);
     }
 
     public LightOrigin getLightOrigin() {
@@ -497,6 +539,7 @@ public final class TileRenderer {
 
     private final Set<Layer> hiddenLayers = new HashSet<>(Collections.singletonList(FloodWithLava.INSTANCE));
     private final int[] intHeightCache = new int[TILE_SIZE * TILE_SIZE], intFluidHeightCache = new int[TILE_SIZE * TILE_SIZE];
+    private final long[] renderShadeAmounts = new long[TILE_SIZE * TILE_SIZE];
     private final float[] floatHeightCache = new float[TILE_SIZE * TILE_SIZE];
     private final BufferedImage bufferedImage;
     private final int[] renderBuffer;

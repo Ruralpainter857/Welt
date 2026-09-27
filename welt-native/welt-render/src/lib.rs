@@ -1,1 +1,3 @@
-//! Welt — volet rendu/peinture (wp-render) — squelette Phase 0 (voir docs/welt/CHARTE-ORCHESTRATION.md).
+//! Kernels du volet rendu/peinture Welt.
+
+pub mod shade;
