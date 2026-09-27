@@ -2,6 +2,7 @@ package org.pepsoft.worldpainter;
 
 import org.junit.Test;
 import org.pepsoft.worldpainter.heightMaps.ConstantHeightMap;
+import org.pepsoft.worldpainter.heightMaps.BandedHeightMap;
 import org.pepsoft.worldpainter.heightMaps.DifferenceHeightMap;
 import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MinimisingHeightMap;
@@ -219,6 +220,43 @@ public final class SimpleThemeFreshTileParityTest {
                             javaTile.getWaterLevel(x, y), nativeTile.getWaterLevel(x, y));
                     assertEquals("terrain at " + x + ',' + y,
                             javaTile.getTerrain(x, y), nativeTile.getTerrain(x, y));
+                }
+            }
+        } finally {
+            if (previousFlag == null) {
+                System.clearProperty(Native.GEN_KEY);
+            } else {
+                System.setProperty(Native.GEN_KEY, previousFlag);
+            }
+        }
+    }
+
+    @Test
+    public void nativeBandedHeightMapsMatchJavaFreshTile() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        try {
+            for (final boolean smooth : new boolean[] {false, true}) {
+                for (final int[] tile : new int[][] {{-2, 5}, {1000, -1000}}) {
+                    final HeightMap javaMap = new BandedHeightMap("banded", 9, 116.5, 7, 88.25, smooth);
+                    final HeightMap nativeMap = new BandedHeightMap("banded", 9, 116.5, 7, 88.25, smooth);
+                    final HeightMapTileFactory javaFactory = new HeightMapTileFactory(73L, javaMap,
+                            0, 256, false, createSimpleTheme(true));
+                    final HeightMapTileFactory nativeFactory = new HeightMapTileFactory(73L, nativeMap,
+                            0, 256, false, createSimpleTheme(false));
+                    Native.setGenEnabled(false);
+                    final Tile javaTile = javaFactory.createTile(tile[0], tile[1]);
+                    Native.setGenEnabled(true);
+                    final Tile nativeTile = nativeFactory.createTile(tile[0], tile[1]);
+                    for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                        for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                            assertEquals("height at " + x + ',' + y + " smooth=" + smooth,
+                                    Float.floatToRawIntBits(javaTile.getHeight(x, y)),
+                                    Float.floatToRawIntBits(nativeTile.getHeight(x, y)));
+                            assertEquals("terrain at " + x + ',' + y + " smooth=" + smooth,
+                                    javaTile.getTerrain(x, y), nativeTile.getTerrain(x, y));
+                        }
+                    }
                 }
             }
         } finally {

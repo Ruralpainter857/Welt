@@ -13,6 +13,7 @@ import org.pepsoft.worldpainter.heightMaps.ProductHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MinimisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MaximisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MandelbrotHeightMap;
+import org.pepsoft.worldpainter.heightMaps.BandedHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.nativeapi.Native;
@@ -143,13 +144,15 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 }
             }
             final boolean freshSimpleTheme = (theme.getClass() == SimpleTheme.class) && !floodWithLava;
-            final boolean batchFreshSimpleTheme = freshSimpleTheme && isBatchSafeHeightMap(heightMap);
+            final boolean batchFreshSimpleTheme = freshSimpleTheme
+                    && (isBatchSafeHeightMap(heightMap) || isNativeBandedHeightMap(heightMap));
             final GenerationBuffers buffers = batchFreshSimpleTheme ? GENERATION_BUFFERS.get() : null;
             double[] nativeHeights = null;
             boolean nativeHeightMapTreeSucceeded = false;
             if (batchFreshSimpleTheme && Native.isGenEnabled()
                     && buffers.prepareHeightMapProgram(heightMap)
-                    && (buffers.heightMapNoiseCount > 0 || buffers.heightMapMandelbrotCount > 0)) {
+                    && (buffers.heightMapNoiseCount > 0 || buffers.heightMapMandelbrotCount > 0
+                    || buffers.heightMapBandedCount > 0)) {
                 final double[] output = buffers.nativeHeights();
                 if (NativeSlices.fillHeightMapTree(worldTileX, worldTileY,
                         TILE_SIZE, TILE_SIZE, buffers.heightMapNodeCount,
@@ -256,6 +259,12 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         return false;
     }
 
+    /** The measured Rust fast path currently specializes a standalone smooth banded map. */
+    private static boolean isNativeBandedHeightMap(HeightMap heightMap) {
+        return (heightMap.getClass() == BandedHeightMap.class)
+                && ((BandedHeightMap) heightMap).isSmooth();
+    }
+
     private static final class GenerationBuffers {
         private final float[] heights = new float[TILE_SIZE * TILE_SIZE];
         private final int[] intHeights = new int[TILE_SIZE * TILE_SIZE];
@@ -268,12 +277,14 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         private int heightMapNodeCount;
         private int heightMapNoiseCount;
         private int heightMapMandelbrotCount;
+        private int heightMapBandedCount;
         private double[] nativeHeightValues;
 
         private boolean prepareHeightMapProgram(HeightMap heightMap) {
             heightMapNodeCount = 0;
             heightMapNoiseCount = 0;
             heightMapMandelbrotCount = 0;
+            heightMapBandedCount = 0;
             return appendHeightMapNode(heightMap);
         }
 
@@ -303,6 +314,17 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 heightMapOpcodes[index] = 8;
                 heightMapNodeCount++;
                 heightMapMandelbrotCount++;
+                return true;
+            }
+            if (heightMap.getClass() == BandedHeightMap.class) {
+                final BandedHeightMap banded = (BandedHeightMap) heightMap;
+                heightMapOpcodes[index] = banded.isSmooth() ? 10 : 9;
+                heightMapValues[index] = banded.getSegment1EndHeight();
+                heightMapScales[index] = banded.getSegment2EndHeight();
+                heightMapOctaves[index] = banded.getSegment1Length();
+                heightMapSeeds[index] = banded.getSegment2Length();
+                heightMapNodeCount++;
+                heightMapBandedCount++;
                 return true;
             }
             final int operator;

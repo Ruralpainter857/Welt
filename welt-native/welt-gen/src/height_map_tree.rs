@@ -15,6 +15,13 @@ pub enum HeightMapNode {
         effective_seed: i64,
     },
     Mandelbrot,
+    Banded {
+        segment1_length: i32,
+        segment1_end_height: f64,
+        segment2_length: i32,
+        segment2_end_height: f64,
+        smooth: bool,
+    },
     Add,
     Subtract,
     Multiply,
@@ -63,6 +70,30 @@ pub fn fill_height_map_tree(
         });
     }
 
+    if let [HeightMapNode::Banded {
+        segment1_length,
+        segment1_end_height,
+        segment2_length,
+        segment2_end_height,
+        smooth,
+    }] = nodes
+    {
+        for x in 0..width {
+            let banded_value = banded_height(
+                origin_x.wrapping_add(x as i32) as f32,
+                *segment1_length,
+                *segment1_end_height,
+                *segment2_length,
+                *segment2_end_height,
+                *smooth,
+            );
+            for y in 0..height {
+                output[y * width + x] = banded_value;
+            }
+        }
+        return Ok(());
+    }
+
     let mut depth = 0_usize;
     let mut noise_maps = Vec::new();
     let mut parsed = Vec::with_capacity(nodes.len());
@@ -94,6 +125,22 @@ pub fn fill_height_map_tree(
             }
             HeightMapNode::Mandelbrot => {
                 parsed.push(ParsedNode::Mandelbrot);
+                depth += 1;
+            }
+            HeightMapNode::Banded {
+                segment1_length,
+                segment1_end_height,
+                segment2_length,
+                segment2_end_height,
+                smooth,
+            } => {
+                parsed.push(ParsedNode::Banded {
+                    segment1_length,
+                    segment1_end_height,
+                    segment2_length,
+                    segment2_end_height,
+                    smooth,
+                });
                 depth += 1;
             }
             HeightMapNode::Add => {
@@ -175,6 +222,24 @@ pub fn fill_height_map_tree(
                     stack[stack_depth] = mandelbrot_height(x, y);
                     stack_depth += 1;
                 }
+                ParsedNode::Banded {
+                    segment1_length,
+                    segment1_end_height,
+                    segment2_length,
+                    segment2_end_height,
+                    smooth,
+                } => {
+                    let x = origin_x.wrapping_add((cell % width) as i32) as f32;
+                    stack[stack_depth] = banded_height(
+                        x,
+                        segment1_length,
+                        segment1_end_height,
+                        segment2_length,
+                        segment2_end_height,
+                        smooth,
+                    );
+                    stack_depth += 1;
+                }
                 ParsedNode::Add => {
                     let right = stack[stack_depth - 1];
                     let left = stack[stack_depth - 2];
@@ -217,6 +282,13 @@ enum ParsedNode {
     Constant(f64),
     Noise(usize),
     Mandelbrot,
+    Banded {
+        segment1_length: i32,
+        segment1_end_height: f64,
+        segment2_length: i32,
+        segment2_end_height: f64,
+        smooth: bool,
+    },
     Add,
     Subtract,
     Multiply,
@@ -234,6 +306,48 @@ fn mandelbrot_height(x0: f32, y0: f32) -> f64 {
         iteration += 1;
     }
     f64::from(iteration)
+}
+
+fn banded_height(
+    x: f32,
+    segment1_length: i32,
+    segment1_end_height: f64,
+    segment2_length: i32,
+    segment2_end_height: f64,
+    smooth: bool,
+) -> f64 {
+    let total_length = segment1_length.wrapping_add(segment2_length) as f32;
+    let d = java_mod_f32(x, total_length);
+    let segment1_end_delta = segment1_end_height - segment2_end_height;
+    let segment2_end_delta = segment2_end_height - segment1_end_height;
+    if d < segment1_length as f32 {
+        if smooth {
+            segment2_end_height
+                + (0.5 - ((d as f64 * std::f64::consts::PI) / segment1_length as f64).cos() / 2.0)
+                    * segment1_end_delta
+        } else {
+            segment2_end_height + (d / segment1_length as f32) as f64 * segment1_end_delta
+        }
+    } else if smooth {
+        let phase =
+            (d - segment1_length as f32) as f64 * std::f64::consts::PI / segment2_length as f64;
+        segment1_end_height + (0.5 - phase.cos() / 2.0) * segment2_end_delta
+    } else {
+        segment1_end_height
+            + ((d - segment1_length as f32) / segment2_length as f32) as f64 * segment2_end_delta
+    }
+}
+
+fn java_mod_f32(value: f32, modulus: f32) -> f32 {
+    if value < 0.0 {
+        let quotient = ((-value / modulus) as f64).ceil() as f32;
+        value + quotient * modulus
+    } else if value >= modulus {
+        let quotient = ((value / modulus) as f64).floor() as f32;
+        value - quotient * modulus
+    } else {
+        value
+    }
 }
 
 fn java_min(left: f64, right: f64) -> f64 {

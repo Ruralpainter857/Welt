@@ -1,6 +1,7 @@
 import org.pepsoft.worldpainter.HeightMapTileFactory;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.heightMaps.ConstantHeightMap;
+import org.pepsoft.worldpainter.heightMaps.BandedHeightMap;
 import org.pepsoft.worldpainter.heightMaps.DifferenceHeightMap;
 import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
 import org.pepsoft.worldpainter.heightMaps.ProductHeightMap;
@@ -27,10 +28,14 @@ public final class NestedSumHeightMapBenchmark {
         final boolean composite = args.length > 2 && "composite".equalsIgnoreCase(args[2]);
         final boolean minmax = args.length > 2 && "minmax".equalsIgnoreCase(args[2]);
         final boolean mandelbrot = args.length > 2 && "mandelbrot".equalsIgnoreCase(args[2]);
+        final boolean banded = args.length > 2 && args[2].toLowerCase().startsWith("banded");
+        final boolean bandedSmooth = banded && !"banded-linear".equalsIgnoreCase(args[2]);
         if (!NativeLoader.areSlicesAvailable()) {
             throw new IllegalStateException("welt_slices is unavailable; build with Maven -Pnative");
         }
-        final org.pepsoft.worldpainter.HeightMap heightMap = mandelbrot
+        final org.pepsoft.worldpainter.HeightMap heightMap = banded
+                ? new BandedHeightMap("banded", 47, 116.5, 29, 88.25, bandedSmooth)
+                : mandelbrot
                 ? new SumHeightMap(new ConstantHeightMap(58.0), new MandelbrotHeightMap())
                 : minmax
                 ? new MaximisingHeightMap(new MinimisingHeightMap(
@@ -71,7 +76,8 @@ public final class NestedSumHeightMapBenchmark {
         Arrays.sort(javaSamples);
         Arrays.sort(rustSamples);
         System.out.printf("scenario=%s tiles=%d rounds=%d java_median_ms_per_tile=%.4f rust_median_ms_per_tile=%.4f rust_speedup=%.3f sink=%d%n",
-                mandelbrot ? "mandelbrot" : minmax ? "minmax" : composite ? "product-difference" : "nested-sum", tiles, rounds,
+                banded ? bandedSmooth ? "banded-smooth" : "banded-linear"
+                        : mandelbrot ? "mandelbrot" : minmax ? "minmax" : composite ? "product-difference" : "nested-sum", tiles, rounds,
                 javaSamples[rounds / 2], rustSamples[rounds / 2],
                 javaSamples[rounds / 2] / rustSamples[rounds / 2], sink);
     }
