@@ -1,3 +1,5 @@
+
+## DISCLAIMER; We are helped by generative AI agents to develop Welt; This doesn't means Welt is vibecoded, we use AI especially in order to make the development faster!
 # Welt
 
 Welt is a WorlPainter fork, aiming to modernize the software's architecture, using a Java/Rust hybrid structure in order to optimize the software. Welt intends to modernize the Worldpainter UI and add fast terrain generation tools such as terrain generation from splines, auto terrain population with various POI, map generation from a custom terrain generator, etc.
