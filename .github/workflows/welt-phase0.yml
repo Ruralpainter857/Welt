@@ -62,3 +62,23 @@ jobs:
             welt-native/golden/java-random-golden.txt \
             welt-native/golden/java-random-edge.txt \
             docs/welt/golden-tools/example-golden.txt
+
+  java-native-linux:
+    name: Java 17 ↔ Rust JNI integration (Linux x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Configure the Maven JDK 17 toolchain
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.m2"
+          printf '<toolchains><toolchain><type>jdk</type><provides><version>17</version></provides><configuration><jdkHome>%s</jdkHome></configuration></toolchain></toolchains>\n' "$JAVA_HOME" > "$HOME/.m2/toolchains.xml"
+      - name: Build native libraries and run WPCore JNI parity tests
+        working-directory: WorldPainter
+        run: mvn --batch-mode --no-transfer-progress -Pnative -pl WPCore -am test
