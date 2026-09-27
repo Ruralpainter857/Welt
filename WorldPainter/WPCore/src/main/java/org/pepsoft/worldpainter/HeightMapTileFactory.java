@@ -9,6 +9,7 @@ import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
 import org.pepsoft.worldpainter.heightMaps.ConstantHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
+import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.themes.SimpleTheme;
 import org.pepsoft.worldpainter.themes.Theme;
 
@@ -134,13 +135,26 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                     nativeConstant = ((ConstantHeightMap) sum.getHeightMap2()).getHeight();
                 }
             }
-            final double[] nativeHeights = (nativeNoiseMap != null)
-                    ? nativeNoiseMap.getNativeHeights(worldTileX, worldTileY, TILE_SIZE, TILE_SIZE)
-                    : null;
             final boolean freshSimpleTheme = (theme.getClass() == SimpleTheme.class) && !floodWithLava;
             final boolean batchFreshSimpleTheme = freshSimpleTheme && isBatchSafeHeightMap(heightMap);
+            final GenerationBuffers buffers = batchFreshSimpleTheme ? GENERATION_BUFFERS.get() : null;
+            double[] nativeHeights = null;
+            if (nativeNoiseMap != null) {
+                if (batchFreshSimpleTheme) {
+                    if (Native.isGenEnabled()) {
+                        final double[] output = buffers.nativeHeights();
+                        if (nativeNoiseMap.fillNativeHeights(worldTileX, worldTileY,
+                                TILE_SIZE, TILE_SIZE, output)) {
+                            nativeHeights = output;
+                        }
+                    }
+                } else {
+                    nativeHeights = nativeNoiseMap.getNativeHeights(
+                            worldTileX, worldTileY, TILE_SIZE, TILE_SIZE);
+                }
+            }
             if (batchFreshSimpleTheme) {
-                final float[] heights = new float[TILE_SIZE * TILE_SIZE];
+                final float[] heights = buffers.heights;
                 for (int x = 0; x < TILE_SIZE; x++) {
                     for (int y = 0; y < TILE_SIZE; y++) {
                         final int blockX = worldTileX + x, blockY = worldTileY + y;
@@ -155,9 +169,10 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                         heights[x | (y << TILE_SIZE_BITS)] = clamp(minHeight, (float) rawHeight, maxZ);
                     }
                 }
-                final int[] intHeights = tile.initializeHeightAndWaterLevels(heights, myWaterHeight);
+                final int[] intHeights = tile.initializeHeightAndWaterLevels(
+                        heights, myWaterHeight, buffers.intHeights);
                 final SimpleTheme simpleTheme = (SimpleTheme) theme;
-                final byte[] terrainOrdinals = new byte[TILE_SIZE * TILE_SIZE];
+                final byte[] terrainOrdinals = buffers.terrainOrdinals;
                 for (int x = 0; x < TILE_SIZE; x++) {
                     for (int y = 0; y < TILE_SIZE; y++) {
                         final int index = x | (y << TILE_SIZE_BITS);
@@ -211,6 +226,23 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         }
         return false;
     }
+
+    private static final class GenerationBuffers {
+        private final float[] heights = new float[TILE_SIZE * TILE_SIZE];
+        private final int[] intHeights = new int[TILE_SIZE * TILE_SIZE];
+        private final byte[] terrainOrdinals = new byte[TILE_SIZE * TILE_SIZE];
+        private double[] nativeHeightValues;
+
+        private double[] nativeHeights() {
+            if (nativeHeightValues == null) {
+                nativeHeightValues = new double[TILE_SIZE * TILE_SIZE];
+            }
+            return nativeHeightValues;
+        }
+    }
+
+    private static final ThreadLocal<GenerationBuffers> GENERATION_BUFFERS =
+            ThreadLocal.withInitial(GenerationBuffers::new);
 
     @Override
     public Rectangle getExtent() {

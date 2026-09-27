@@ -48,6 +48,26 @@ public final class NativeSlices {
         }
     }
 
+    /** Fills caller-owned row-major output, allowing tile workers to reuse scratch storage. */
+    public static boolean fillNoiseHeights(final int originX, final int originY,
+                                          final int width, final int height,
+                                          final double dHeight, final double scale,
+                                          final int octaves, final long effectiveSeed,
+                                          final double[] output) {
+        final long area = (long) width * height;
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || width <= 0 || height <= 0 || area > 1_048_576L
+                || output == null || output.length != area) {
+            return false;
+        }
+        try {
+            return nativeFillNoiseHeights(originX, originY, width, height,
+                    dHeight, scale, octaves, effectiveSeed, output) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     /** Returns native terrain ordinals for one already-quantised SimpleTheme tile. */
     public static int[] simpleThemeTerrains(final int originX, final int originY,
                                             final int width, final int height,

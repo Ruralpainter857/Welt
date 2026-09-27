@@ -227,13 +227,21 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
      * notifications that individual setters would produce.
      */
     int[] initializeHeightAndWaterLevels(float[] heights, int waterLevel) {
+        return initializeHeightAndWaterLevels(heights, waterLevel,
+                new int[TILE_SIZE * TILE_SIZE]);
+    }
+
+    /** Batch height initialisation with caller-owned scratch for the quantised heights. */
+    int[] initializeHeightAndWaterLevels(float[] heights, int waterLevel, int[] intHeights) {
         if (eventInhibitionCounter == 0) {
             throw new IllegalStateException("Bulk tile initialisation requires inhibited events");
         }
         if ((heights == null) || (heights.length != TILE_SIZE * TILE_SIZE)) {
             throw new IllegalArgumentException("Expected one height for every tile cell");
         }
-        final int[] intHeights = new int[heights.length];
+        if ((intHeights == null) || (intHeights.length != heights.length)) {
+            throw new IllegalArgumentException("Expected one integer height for every tile cell");
+        }
         synchronized (this) {
             if (tall) {
                 ensureWriteable(TALL_HEIGHTMAP);

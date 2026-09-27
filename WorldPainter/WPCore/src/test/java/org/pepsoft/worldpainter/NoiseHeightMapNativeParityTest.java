@@ -5,8 +5,11 @@ import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 
+import java.util.Arrays;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeTrue;
 
 /** Compares the production JNI bulk path with NoiseHeightMap's Java output. */
@@ -33,12 +36,20 @@ public final class NoiseHeightMapNativeParityTest {
                 final int originY = origins[caseIndex][1];
                 final double[] nativeValues = map.getNativeHeights(originX, originY, 128, 128);
                 assertNotNull("native bridge must be active for case " + caseIndex, nativeValues);
+                final double[] reusedValues = new double[128 * 128];
+                Arrays.fill(reusedValues, Double.NaN);
+                assertTrue("caller-owned native buffer should be filled", map.fillNativeHeights(
+                        originX, originY, 128, 128, reusedValues));
                 for (int y = 0; y < 128; y++) {
                     for (int x = 0; x < 128; x++) {
                         final double javaValue = map.getHeight(originX + x, originY + y);
                         assertEquals("case=" + caseIndex + " x=" + (originX + x) + " y=" + (originY + y),
                                 Double.doubleToRawLongBits(javaValue),
                                 Double.doubleToRawLongBits(nativeValues[y * 128 + x]));
+                        assertEquals("reused buffer case=" + caseIndex + " x=" + (originX + x)
+                                        + " y=" + (originY + y),
+                                Double.doubleToRawLongBits(javaValue),
+                                Double.doubleToRawLongBits(reusedValues[y * 128 + x]));
                     }
                 }
             }

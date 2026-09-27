@@ -2,6 +2,7 @@
 //! library only when a native feature flag is enabled.
 
 use std::ffi::c_void;
+use std::slice;
 use welt_core::error::WeltError;
 use welt_core::jni::{jclass, jint, jlong, jni_catch, jobject, JNIEnv};
 use welt_export::edge_distance::bake_edge_distances;
@@ -16,15 +17,16 @@ use welt_gen::theme_terrain::SimpleThemeTerrainBulk;
 use welt_nbt::packed_array::{pack_indices, unpack_indices};
 use welt_render::shade::shade_pixels;
 
-// JNI 17 function-table indices, checked against the JDK's jni.h. The first
-// four entries are reserved; GetArrayLength is 171 and SetDoubleArrayRegion
-// is 214. Keeping these calls here avoids a third-party JNI dependency.
+// JNI function-table indices, checked against the JDK's jni.h. The first four
+// entries are reserved; GetArrayLength is 171, GetDoubleArrayElements is 190,
+// and ReleaseDoubleArrayElements is 198. Keeping calls here avoids a JNI crate.
 const GET_ARRAY_LENGTH: usize = 171;
-const SET_DOUBLE_ARRAY_REGION: usize = 214;
 const GET_INT_ARRAY_REGION: usize = 203;
 const GET_LONG_ARRAY_REGION: usize = 204;
 const GET_FLOAT_ARRAY_REGION: usize = 205;
 const GET_DOUBLE_ARRAY_REGION: usize = 206;
+const GET_DOUBLE_ARRAY_ELEMENTS: usize = 190;
+const RELEASE_DOUBLE_ARRAY_ELEMENTS: usize = 198;
 const SET_INT_ARRAY_REGION: usize = 211;
 const GET_BYTE_ARRAY_REGION: usize = 200;
 const SET_BYTE_ARRAY_REGION: usize = 208;
@@ -97,6 +99,29 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// `env` must be the JNI environment supplied to this native method.
 unsafe fn function(env: *mut JNIEnv, index: usize) -> *const c_void {
     unsafe { *(*env).functions.cast::<*const c_void>().add(index) }
+}
+
+struct DoubleArrayOutput {
+    env: *mut JNIEnv,
+    array: jobject,
+    values: *mut f64,
+    length: usize,
+}
+
+impl DoubleArrayOutput {
+    fn as_mut_slice(&mut self) -> &mut [f64] {
+        unsafe { slice::from_raw_parts_mut(self.values, self.length) }
+    }
+}
+
+impl Drop for DoubleArrayOutput {
+    fn drop(&mut self) {
+        type ReleaseDoubleArrayElements =
+            unsafe extern "system" fn(*mut JNIEnv, jobject, *mut f64, jint);
+        let release: ReleaseDoubleArrayElements =
+            unsafe { std::mem::transmute(function(self.env, RELEASE_DOUBLE_ARRAY_ELEMENTS)) };
+        unsafe { release(self.env, self.array, self.values, 0) };
+    }
 }
 
 /// Applies the FrostExporter decision to a whole vertical column. For random
@@ -435,24 +460,31 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let Ok(map) = NoiseHeightMapBulk::new(d_height, scale, octaves, effective_seed) else {
                 return WeltError::IllegalArgument as jint;
             };
-            let mut values = vec![0.0; expected];
-            if map
-                .fill_bulk(
-                    origin_x,
-                    origin_y,
-                    width as usize,
-                    height as usize,
-                    &mut values,
-                )
-                .is_err()
-            {
+            type GetDoubleArrayElements =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, *mut u8) -> *mut f64;
+            let get_elements: GetDoubleArrayElements =
+                std::mem::transmute(function(env, GET_DOUBLE_ARRAY_ELEMENTS));
+            let values = get_elements(env, output, std::ptr::null_mut());
+            if values.is_null() {
+                return WeltError::Internal as jint;
+            }
+            let mut output_values = DoubleArrayOutput {
+                env,
+                array: output,
+                values,
+                length: expected,
+            };
+            let fill_result = map.fill_bulk(
+                origin_x,
+                origin_y,
+                width as usize,
+                height as usize,
+                output_values.as_mut_slice(),
+            );
+            drop(output_values);
+            if fill_result.is_err() {
                 return WeltError::IllegalArgument as jint;
             }
-            type SetDoubleArrayRegion =
-                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const f64);
-            let set_double_array_region: SetDoubleArrayRegion =
-                std::mem::transmute(function(env, SET_DOUBLE_ARRAY_REGION));
-            set_double_array_region(env, output, 0, expected as jint, values.as_ptr());
             WeltError::Ok as jint
         })
     }

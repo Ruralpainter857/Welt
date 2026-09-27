@@ -88,6 +88,12 @@ public final class NoiseHeightMap extends AbstractHeightMap {
                 dHeight, scale, octaves, getSeed() + seedOffset);
     }
 
+    /** Fills a caller-owned tile buffer when the native generation path is enabled. */
+    public boolean fillNativeHeights(int originX, int originY, int width, int height, double[] output) {
+        return NativeSlices.fillNoiseHeights(originX, originY, width, height,
+                dHeight, scale, octaves, getSeed() + seedOffset, output);
+    }
+
     // HeightMap
 
     @Override
