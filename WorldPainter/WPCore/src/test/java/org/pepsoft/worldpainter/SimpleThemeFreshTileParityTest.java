@@ -3,6 +3,7 @@ package org.pepsoft.worldpainter;
 import org.junit.Test;
 import org.pepsoft.worldpainter.heightMaps.ConstantHeightMap;
 import org.pepsoft.worldpainter.heightMaps.BitmapHeightMap;
+import org.pepsoft.worldpainter.heightMaps.BicubicHeightMap;
 import org.pepsoft.worldpainter.heightMaps.BandedHeightMap;
 import org.pepsoft.worldpainter.heightMaps.DifferenceHeightMap;
 import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
@@ -442,27 +443,32 @@ public final class SimpleThemeFreshTileParityTest {
                 }
             }
             for (final boolean repeat : new boolean[] {false, true}) {
-                final BitmapHeightMap legacyMap = BitmapHeightMap.build()
+                for (final boolean bicubic : new boolean[] {false, true}) {
+                    final BitmapHeightMap legacyBitmap = BitmapHeightMap.build()
                         .withImage(image).withChannel(imageTypeAndChannel[1]).withRepeat(repeat).now();
-                final BitmapHeightMap batchMap = BitmapHeightMap.build()
+                    final BitmapHeightMap batchBitmap = BitmapHeightMap.build()
                         .withImage(image).withChannel(imageTypeAndChannel[1]).withRepeat(repeat).now();
-                final HeightMapTileFactory legacyFactory = new HeightMapTileFactory(42L, legacyMap,
-                        0, 256, false, createSimpleTheme(true));
-                final HeightMapTileFactory batchFactory = new HeightMapTileFactory(42L, batchMap,
-                        0, 256, false, createSimpleTheme(false));
-                for (final int[] tile : new int[][] {{0, 0}, {1, 1}, {-1, 0}}) {
-                    final Tile legacy = legacyFactory.createTile(tile[0], tile[1]);
-                    final Tile batch = batchFactory.createTile(tile[0], tile[1]);
-                    for (int x = 0; x < Constants.TILE_SIZE; x++) {
-                        for (int y = 0; y < Constants.TILE_SIZE; y++) {
-                            assertEquals("height for image type " + imageTypeAndChannel[0]
-                                            + " repeat=" + repeat + " at " + x + ',' + y,
-                                    Float.floatToRawIntBits(legacy.getHeight(x, y)),
-                                    Float.floatToRawIntBits(batch.getHeight(x, y)));
-                            assertEquals("water at " + x + ',' + y,
-                                    legacy.getWaterLevel(x, y), batch.getWaterLevel(x, y));
-                            assertEquals("terrain at " + x + ',' + y,
-                                    legacy.getTerrain(x, y), batch.getTerrain(x, y));
+                    final HeightMap legacyMap = bicubic ? new BicubicHeightMap(legacyBitmap) : legacyBitmap;
+                    final HeightMap batchMap = bicubic ? new BicubicHeightMap(batchBitmap) : batchBitmap;
+                    final HeightMapTileFactory legacyFactory = new HeightMapTileFactory(42L, legacyMap,
+                            0, 256, false, createSimpleTheme(true));
+                    final HeightMapTileFactory batchFactory = new HeightMapTileFactory(42L, batchMap,
+                            0, 256, false, createSimpleTheme(false));
+                    for (final int[] tile : new int[][] {{0, 0}, {1, 1}, {-1, 0}}) {
+                        final Tile legacy = legacyFactory.createTile(tile[0], tile[1]);
+                        final Tile batch = batchFactory.createTile(tile[0], tile[1]);
+                        for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                            for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                                assertEquals("height for image type " + imageTypeAndChannel[0]
+                                                + " repeat=" + repeat + " bicubic=" + bicubic
+                                                + " at " + x + ',' + y,
+                                        Float.floatToRawIntBits(legacy.getHeight(x, y)),
+                                        Float.floatToRawIntBits(batch.getHeight(x, y)));
+                                assertEquals("water at " + x + ',' + y,
+                                        legacy.getWaterLevel(x, y), batch.getWaterLevel(x, y));
+                                assertEquals("terrain at " + x + ',' + y,
+                                        legacy.getTerrain(x, y), batch.getTerrain(x, y));
+                            }
                         }
                     }
                 }

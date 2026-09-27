@@ -84,11 +84,11 @@ public final class BitmapHeightMap extends AbstractHeightMap {
     }
 
     /**
-     * Bulk-reads a rectangle whose integer coordinates use the bitmap's direct, non-repeating path.
-     * Samples are written in row-major order, matching {@code x | (y << tileSizeBits)} storage.
+     * Bulk-reads an in-bounds rectangle. Even a repeating bitmap uses its direct coordinates inside
+     * the image extent. Samples are written row-major, matching {@code x | (y << tileSizeBits)}.
      */
     public boolean fillSamples(int x, int y, int sampleWidth, int sampleHeight, double[] samples) {
-        if (repeat || (x < 0) || (y < 0) || (sampleWidth <= 0) || (sampleHeight <= 0)
+        if ((x < 0) || (y < 0) || (sampleWidth <= 0) || (sampleHeight <= 0)
                 || ((long) x + sampleWidth > width) || ((long) y + sampleHeight > height)
                 || (samples == null) || ((long) sampleWidth * sampleHeight != samples.length)) {
             return false;

@@ -17,6 +17,7 @@ import org.pepsoft.worldpainter.heightMaps.BandedHeightMap;
 import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.ShelvingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.BitmapHeightMap;
+import org.pepsoft.worldpainter.heightMaps.BicubicHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.nativeapi.Native;
@@ -176,10 +177,10 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                     completeHeightMapValuesAvailable = true;
                 }
             }
-            if (nativeHeights == null && batchFreshSimpleTheme
-                    && heightMap.getClass() == BitmapHeightMap.class) {
+            final BitmapHeightMap bitmapHeightMap = getBulkReadableBitmapBase(heightMap);
+            if (nativeHeights == null && batchFreshSimpleTheme && (bitmapHeightMap != null)) {
                 final double[] output = buffers.nativeHeights();
-                if (((BitmapHeightMap) heightMap).fillSamples(
+                if (bitmapHeightMap.fillSamples(
                         worldTileX, worldTileY, TILE_SIZE, TILE_SIZE, output)) {
                     nativeHeights = output;
                     completeHeightMapValuesAvailable = true;
@@ -287,13 +288,28 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 && ((BandedHeightMap) heightMap).isSmooth();
     }
 
-    /** Bulk raster reads match BitmapHeightMap only for in-bounds, non-repeating tiles. */
+    /** Bulk raster reads match BitmapHeightMap while the tile coordinates remain inside the image. */
     private static boolean isBulkReadableBitmapHeightMap(HeightMap heightMap, int originX, int originY) {
-        return (heightMap.getClass() == BitmapHeightMap.class)
-                && !((BitmapHeightMap) heightMap).isRepeat()
+        final BitmapHeightMap bitmap = getBulkReadableBitmapBase(heightMap);
+        return (bitmap != null)
                 && (originX >= 0) && (originY >= 0)
-                && ((long) originX + TILE_SIZE <= ((BitmapHeightMap) heightMap).getWidth())
-                && ((long) originY + TILE_SIZE <= ((BitmapHeightMap) heightMap).getHeight());
+                && ((long) originX + TILE_SIZE <= bitmap.getWidth())
+                && ((long) originY + TILE_SIZE <= bitmap.getHeight());
+    }
+
+    /** Integer sampling of non-repeating BicubicHeightMap delegates directly to its bitmap child. */
+    private static BitmapHeightMap getBulkReadableBitmapBase(HeightMap heightMap) {
+        if (heightMap.getClass() == BitmapHeightMap.class) {
+            return (BitmapHeightMap) heightMap;
+        }
+        if ((heightMap.getClass() == BicubicHeightMap.class)
+                && !((BicubicHeightMap) heightMap).isRepeat()) {
+            final HeightMap base = ((BicubicHeightMap) heightMap).getHeightMap(0);
+            if (base.getClass() == BitmapHeightMap.class) {
+                return (BitmapHeightMap) base;
+            }
+        }
+        return null;
     }
 
     /** Returns only exact, translation-only wrappers with a batch-safe child. */

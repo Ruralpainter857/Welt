@@ -2,6 +2,7 @@ import org.pepsoft.worldpainter.HeightMapTileFactory;
 import org.pepsoft.worldpainter.Terrain;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.heightMaps.BitmapHeightMap;
+import org.pepsoft.worldpainter.heightMaps.BicubicHeightMap;
 import org.pepsoft.worldpainter.themes.SimpleTheme;
 
 import java.awt.image.BufferedImage;
@@ -17,9 +18,10 @@ public final class BitmapHeightMapTileFactoryBenchmark {
     public static void main(String[] args) {
         final int tiles = args.length > 0 ? Integer.parseInt(args[0]) : 48;
         final int rounds = args.length > 1 ? Integer.parseInt(args[1]) : 9;
+        final boolean bicubic = args.length > 2 && "bicubic".equalsIgnoreCase(args[2]);
         final BufferedImage image = createImage();
-        final HeightMapTileFactory legacy = factory(image, true);
-        final HeightMapTileFactory batch = factory(image, false);
+        final HeightMapTileFactory legacy = factory(image, true, bicubic);
+        final HeightMapTileFactory batch = factory(image, false, bicubic);
         final double[] legacySamples = new double[rounds];
         final double[] batchSamples = new double[rounds];
         for (int warmup = 0; warmup < 10; warmup++) {
@@ -37,8 +39,9 @@ public final class BitmapHeightMapTileFactoryBenchmark {
         }
         Arrays.sort(legacySamples);
         Arrays.sort(batchSamples);
-        System.out.printf("tiles=%d rounds=%d legacy_ms_per_tile=%.4f batch_ms_per_tile=%.4f speedup=%.3f sink=%d%n",
-                tiles, rounds, legacySamples[rounds / 2], batchSamples[rounds / 2],
+        System.out.printf("scenario=%s tiles=%d rounds=%d legacy_ms_per_tile=%.4f batch_ms_per_tile=%.4f speedup=%.3f sink=%d%n",
+                bicubic ? "bitmap-bicubic" : "bitmap", tiles, rounds,
+                legacySamples[rounds / 2], batchSamples[rounds / 2],
                 legacySamples[rounds / 2] / batchSamples[rounds / 2], sink);
     }
 
@@ -52,8 +55,9 @@ public final class BitmapHeightMapTileFactoryBenchmark {
         return image;
     }
 
-    private static HeightMapTileFactory factory(BufferedImage image, boolean legacy) {
-        final BitmapHeightMap heightMap = BitmapHeightMap.build().withImage(image).withChannel(0).now();
+    private static HeightMapTileFactory factory(BufferedImage image, boolean legacy, boolean bicubic) {
+        final BitmapHeightMap bitmap = BitmapHeightMap.build().withImage(image).withChannel(0).now();
+        final org.pepsoft.worldpainter.HeightMap heightMap = bicubic ? new BicubicHeightMap(bitmap) : bitmap;
         final SimpleTheme theme = SimpleTheme.createDefault(Terrain.GRASS, 0, 256, 62, false, true);
         final SimpleTheme selectedTheme = legacy
                 ? new SimpleTheme(theme.getSeed(), theme.getWaterHeight(), theme.getTerrainRanges(),
