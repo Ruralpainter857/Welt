@@ -16,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Random;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assume.assumeTrue;
@@ -39,6 +40,64 @@ public final class FrostExporterGoldenTest {
     public void nativeProductionFrostExporterMatchesCheckedInReference() throws Exception {
         assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
         assertProductionOutputMatchesGolden(true);
+    }
+
+    @Test
+    public void nativeRandomSnowMatchesJavaAcrossBatchedColumns() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        assertEquals(runRandomBatch(false), runRandomBatch(true));
+    }
+
+    private static String runRandomBatch(boolean nativeEnabled) {
+        final String previousFlag = System.getProperty(Native.EXPORT_KEY);
+        Native.setExportEnabled(nativeEnabled);
+        try {
+            final Rectangle area = new Rectangle(0, 0, 4, 3);
+            final Dimension dimension = TestData.createDimension(DIMENSION_AREA, 62);
+            final MinecraftWorld world = TestData.createMinecraftWorld(area, 62, GRASS_BLOCK);
+            // This column freezes before drawing snow, so it checks that later
+            // columns consume the same Java Random values in both traversal paths.
+            world.setMaterialAt(1, 0, 63, WATER);
+
+            final FrostExporter.FrostSettings settings = new FrostExporter.FrostSettings();
+            settings.setFrostEverywhere(true);
+            settings.setMode(FrostExporter.FrostSettings.MODE_RANDOM);
+            final FrostExporter exporter = new FrostExporter(dimension, TestData.PLATFORM, settings) {
+                @Override
+                protected Random createRandom() {
+                    return new Random(0x57656c745f47354cL);
+                }
+            };
+            exporter.addFeatures(area, area, world);
+
+            final StringBuilder result = new StringBuilder();
+            for (int x = area.x; x < area.x + area.width; x++) {
+                for (int y = area.y; y < area.y + area.height; y++) {
+                    result.append(x).append(',').append(y).append(':');
+                    for (int z = 60; z <= 64; z++) {
+                        final Material material = world.getMaterialAt(x, y, z);
+                        if (material.isNamed(MC_SNOW)) {
+                            result.append('S').append(material.getProperty(LAYERS, 1));
+                        } else if (material.isNamed(MC_ICE)) {
+                            result.append('I');
+                        } else if (material.isNamed(MC_AIR)) {
+                            result.append('A');
+                        } else {
+                            result.append('G');
+                        }
+                        result.append(',');
+                    }
+                    result.append('\n');
+                }
+            }
+            return result.toString();
+        } finally {
+            if (previousFlag == null) {
+                System.clearProperty(Native.EXPORT_KEY);
+            } else {
+                System.setProperty(Native.EXPORT_KEY, previousFlag);
+            }
+        }
     }
 
     private static void assertProductionOutputMatchesGolden(boolean nativeEnabled) throws Exception {

@@ -47,7 +47,7 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
         final boolean frostEverywhere = settings.isFrostEverywhere();
         final int mode = settings.getMode();
         final boolean snowUnderTrees = settings.isSnowUnderTrees();
-        final Random random = new Random(); // Only used for random snow height, so it's not a big deal if it's different every time
+        final Random random = createRandom(); // Only used for random snow height, so it's not a big deal if it's different every time
         String customNoSnowOnIds = System.getProperty("org.pepsoft.worldpainter.noSnowOn");
         if ((customNoSnowOnIds != null) && (! customNoSnowOnIds.trim().isEmpty())) {
             throw new IllegalArgumentException("The org.pepsoft.worldpainter.noSnowOn property is no longer supported; please let the author know if you need it");
@@ -74,6 +74,11 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
             }
         }
         return null;
+    }
+
+    /** Random source seam for reproducible exporter tests; production keeps the historical seed source. */
+    protected Random createRandom() {
+        return new Random();
     }
 
     private static boolean hasSafeBatchBounds(Rectangle area) {
