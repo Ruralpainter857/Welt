@@ -47,6 +47,7 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
     private static final AtomicLong NATIVE_PROFILE_RUST_NANOS = new AtomicLong();
     private static final AtomicLong NATIVE_PROFILE_APPLY_NANOS = new AtomicLong();
     private static final AtomicLong NATIVE_PROFILE_CHUNKS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_PALETTE_CHUNKS = new AtomicLong();
 
     /** Resets optional, out-of-band timings for the native Resources path. */
     public static void resetNativeProfile() {
@@ -56,13 +57,15 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
         NATIVE_PROFILE_RUST_NANOS.set(0);
         NATIVE_PROFILE_APPLY_NANOS.set(0);
         NATIVE_PROFILE_CHUNKS.set(0);
+        NATIVE_PROFILE_PALETTE_CHUNKS.set(0);
     }
 
     /** Returns preparation, JNI-call, result-application nanoseconds and chunk count. */
     public static long[] nativeProfileSnapshot() {
         return new long[]{NATIVE_PROFILE_PREP_NANOS.get(), NATIVE_PROFILE_CALL_NANOS.get(),
                 NATIVE_PROFILE_APPLY_NANOS.get(), NATIVE_PROFILE_CHUNKS.get(),
-                NATIVE_PROFILE_COPY_NANOS.get(), NATIVE_PROFILE_RUST_NANOS.get()};
+                NATIVE_PROFILE_COPY_NANOS.get(), NATIVE_PROFILE_RUST_NANOS.get(),
+                NATIVE_PROFILE_PALETTE_CHUNKS.get()};
     }
 
     public ResourcesExporter(Dimension dimension, Platform platform, ExporterSettings settings) {
@@ -329,6 +332,7 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
                     NATIVE_PROFILE_RUST_NANOS.addAndGet(buffers.nativeProfileNanos[1]);
                     NATIVE_PROFILE_APPLY_NANOS.addAndGet(buffers.nativeApplyNanos[0]);
                     NATIVE_PROFILE_CHUNKS.incrementAndGet();
+                    NATIVE_PROFILE_PALETTE_CHUNKS.incrementAndGet();
                 }
                 return true;
             }

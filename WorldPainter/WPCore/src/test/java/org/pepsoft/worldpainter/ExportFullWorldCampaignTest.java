@@ -4,6 +4,8 @@ import jdk.jfr.Recording;
 import org.junit.Test;
 import org.pepsoft.minecraft.ChunkFactory;
 import org.pepsoft.minecraft.ChunkPaletteBuffer;
+import org.jnbt.NBTInputStream;
+import org.jnbt.Tag;
 import org.pepsoft.util.TextProgressReceiver;
 import org.pepsoft.worldpainter.exporting.WorldExportSettings;
 import org.pepsoft.worldpainter.exporting.WorldExporter;
@@ -202,6 +204,8 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
     public void compareAlternatingFullWorldExports() throws Exception {
         assumeTrue(Boolean.getBoolean("welt.export.campaign"));
         assumeTrue("welt_slices must be available for native campaigns", NativeLoader.areSlicesAvailable());
+        final boolean modernChunkCampaign = Boolean.getBoolean("welt.export.modernChunkCampaign");
+        final int workerCount = modernChunkCampaign ? 1 : 4;
         final String oldHome = System.getProperty("user.home");
         final String oldThreads = System.getProperty("org.pepsoft.worldpainter.threads");
         final String oldExport = System.getProperty(Native.EXPORT_KEY);
@@ -214,7 +218,7 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
         final Path root = Files.createTempDirectory("welt-full-export-campaign-");
         try {
             System.setProperty("user.home", root.resolve("home").toString());
-            System.setProperty("org.pepsoft.worldpainter.threads", "4");
+            System.setProperty("org.pepsoft.worldpainter.threads", Integer.toString(workerCount));
             Files.createDirectories(root.resolve("home"));
             initialisePlatform();
             final File fixture = new File("../WPGUI/src/test/resources/Generated World.world").getCanonicalFile();
@@ -224,10 +228,17 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 worldIO.load(input);
                 world = worldIO.getWorld();
             }
+            final Mode[] modes = modernChunkCampaign
+                    ? new Mode[]{MODES[0], MODES[1], new Mode("resources", true, false, true)}
+                    : MODES;
+            if (modernChunkCampaign) {
+                world.setPlatform(DefaultPlugin.JAVA_ANVIL_1_15);
+            }
             for (int i = 0; i < Terrain.CUSTOM_TERRAIN_COUNT; i++) {
                 Terrain.setCustomMaterial(i, world.getMixedMaterial(i));
             }
 
+            if (!Boolean.getBoolean("welt.export.modernChunkCampaign")) {
             // Measure the exact changed-cell frontier against the existing
             // rectangular scan on complete exports, and compare decompressed
             // chunk NBT before including the candidate in the main campaign.
@@ -349,6 +360,9 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 System.setProperty("welt.export.profileBlockPropertiesFrontier", oldBlockPropertiesFrontierProfile);
             }
             System.setProperty("welt.export.blockPropertiesFrontier", "true");
+            } else {
+                System.setProperty("welt.export.blockPropertiesFrontier", "false");
+            }
             if (Boolean.getBoolean("welt.export.frontierOnly")) {
                 return;
             }
@@ -359,7 +373,7 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
             final Map<String, List<Long>> measuredRssPeaks = new LinkedHashMap<>();
             final Map<String, List<Long>> measuredRssGrowth = new LinkedHashMap<>();
             final Map<String, Path> parityOutputs = new LinkedHashMap<>();
-            for (Mode mode : MODES) {
+            for (Mode mode : modes) {
                 measuredWallNanos.put(mode.name, new ArrayList<>());
                 measuredHeapPeaks.put(mode.name, new ArrayList<>());
                 measuredHeapGrowth.put(mode.name, new ArrayList<>());
@@ -370,7 +384,7 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
             // Two complete exports per mode warm class loading, JIT code and
             // native library paths before any campaign timing is retained.
             for (int warmup = 0; warmup < 2; warmup++) {
-                final Mode[] order = MODES.clone();
+                final Mode[] order = modes.clone();
                 if ((warmup & 1) != 0) reverse(order);
                 for (Mode mode : order) {
                     runExport(world, root, mode, "warmup-" + warmup, false);
@@ -391,17 +405,23 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 System.setProperty("welt.export.profileResourcesNative", "true");
                 ResourcesExporter.resetNativeProfile();
                 final RunResult resourceProfile = runExport(world, root,
-                        new Mode("resources-profile", true, false, true), "profile-resources", false);
+                        new Mode("resources-profile", true, false, true),
+                        "profile-resources", false);
                 printTimings("resources-profile", -1, resourceProfile);
                 final long[] nativeProfile = ResourcesExporter.nativeProfileSnapshot();
                 System.out.printf("Resources native split over %d chunks: Java preparation %.3f s, "
                                 + "JNI+copy+Rust %.3f s (input copies %.3f s, Rust kernel %.3f s), "
-                                + "Java apply %.3f s%n",
+                                + "application %.3f s; in-place palette chunks %d%n",
                         nativeProfile[3], nativeProfile[0] / 1_000_000_000.0,
                         nativeProfile[1] / 1_000_000_000.0,
                         nativeProfile[4] / 1_000_000_000.0,
                         nativeProfile[5] / 1_000_000_000.0,
-                        nativeProfile[2] / 1_000_000_000.0);
+                        nativeProfile[2] / 1_000_000_000.0,
+                        nativeProfile[6]);
+                if (modernChunkCampaign) {
+                    org.junit.Assert.assertTrue("modern campaign must exercise in-place palette updates",
+                            nativeProfile[6] > 0);
+                }
             } finally {
                 if (previousResourceProfile == null) {
                     System.clearProperty("welt.export.profileResourcesNative");
@@ -412,7 +432,7 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
 
             // Reverse the order on alternating rounds to limit thermal and cache bias.
             for (int round = 0; round < 5; round++) {
-                final Mode[] order = MODES.clone();
+                final Mode[] order = modes.clone();
                 if ((round & 1) != 0) reverse(order);
                 for (Mode mode : order) {
                     final RunResult result = runExport(world, root, mode,
@@ -427,12 +447,13 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 }
             }
 
-            final Path javaOutput = parityOutputs.get("java");
-            final Map<String, Map<Integer, byte[]>> javaChunks = readRegions(javaOutput);
-            for (Mode mode : MODES) {
+            final String comparisonBase = modes[0].name;
+            final Map<String, Map<Integer, byte[]>> baselineChunks =
+                    readRegions(parityOutputs.get(comparisonBase));
+            for (Mode mode : modes) {
                 final Map<String, Map<Integer, byte[]>> candidate = readRegions(parityOutputs.get(mode.name));
-                assertRegionsEqual("Java/" + mode.name, javaChunks, candidate);
-                System.out.println("Parity Java/" + mode.name + ": " + countChunks(candidate)
+                assertRegionsEqual(comparisonBase + "/" + mode.name, baselineChunks, candidate);
+                System.out.println("Parity " + comparisonBase + "/" + mode.name + ": " + countChunks(candidate)
                         + " chunks NBT décompressés identiques.");
             }
 
@@ -483,14 +504,14 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                         profiledBytes, profiledFallbacks);
             }
 
-            final long javaMedian = median(measuredWallNanos.get("java"));
-            System.out.println("Résultats exports complets (5 mesures, 4 workers fixes) :");
-            for (Mode mode : MODES) {
+            final long javaMedian = median(measuredWallNanos.get(comparisonBase));
+            System.out.printf("Résultats exports complets (5 mesures, %d worker(s) fixes) :%n", workerCount);
+            for (Mode mode : modes) {
                 final long modeMedian = median(measuredWallNanos.get(mode.name));
-                System.out.printf("  %-16s médiane %.3f s; ratio Java/Welt %.3fx; "
+                System.out.printf("  %-16s médiane %.3f s; ratio %s/Welt %.3fx; "
                                 + "heap pic/hausse %.1f/%.1f MiB; RSS pic/hausse %s/%s; essais %s%n",
                         mode.name, modeMedian / 1_000_000_000.0,
-                        (double) javaMedian / modeMedian,
+                        comparisonBase, (double) javaMedian / modeMedian,
                         median(measuredHeapPeaks.get(mode.name)) / 1048576.0,
                         median(measuredHeapGrowth.get(mode.name)) / 1048576.0,
                         formatMiB(medianAvailable(measuredRssPeaks.get(mode.name))),
@@ -735,9 +756,71 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
             final Map<Integer, byte[]> actualChunks = actual.get(region);
             assertEquals(comparison + " " + region + " indexes", expectedChunks.keySet(), actualChunks.keySet());
             for (int chunk : expectedChunks.keySet()) {
+                final byte[] expectedNbt = expectedChunks.get(chunk);
+                final byte[] actualNbt = actualChunks.get(chunk);
+                if (!Arrays.equals(expectedNbt, actualNbt)) {
+                    try {
+                        final List<String> differences = new ArrayList<>();
+                        compareNbtTags(readNbtTag(expectedNbt), readNbtTag(actualNbt), "", differences);
+                        differences.stream().limit(12).forEach(difference ->
+                                System.err.println("NBT field difference: " + difference));
+                    } catch (IOException | ReflectiveOperationException diagnosticFailure) {
+                        System.err.println("Could not decode NBT difference: " + diagnosticFailure.getClass().getSimpleName());
+                    }
+                }
                 assertArrayEquals(comparison + " " + region + " chunk=" + chunk,
-                        expectedChunks.get(chunk), actualChunks.get(chunk));
+                        expectedNbt, actualNbt);
             }
+        }
+    }
+
+    private static Tag readNbtTag(byte[] nbt) throws IOException {
+        try (NBTInputStream input = new NBTInputStream(new ByteArrayInputStream(nbt))) {
+            return input.readTag();
+        }
+    }
+
+    private static void compareNbtTags(Object expected, Object actual, String path,
+                                       List<String> differences)
+            throws ReflectiveOperationException {
+        if (expected instanceof Tag expectedTag && actual instanceof Tag actualTag) {
+            final String tagPath = path + "/" + expectedTag.getName();
+            compareNbtTags(expectedTag.getClass().getMethod("getValue").invoke(expectedTag),
+                    actualTag.getClass().getMethod("getValue").invoke(actualTag), tagPath, differences);
+        } else if (expected instanceof Map<?, ?> expectedMap && actual instanceof Map<?, ?> actualMap) {
+            for (Object key : expectedMap.keySet()) {
+                if (!actualMap.containsKey(key)) {
+                    differences.add(path + "/" + key + " missing from actual NBT");
+                } else {
+                    compareNbtTags(expectedMap.get(key), actualMap.get(key), path + "/" + key, differences);
+                }
+            }
+            for (Object key : actualMap.keySet()) {
+                if (!expectedMap.containsKey(key)) differences.add(path + "/" + key + " added in actual NBT");
+            }
+        } else if (expected instanceof List<?> expectedList && actual instanceof List<?> actualList) {
+            if (expectedList.size() != actualList.size()) {
+                differences.add(path + " list size " + expectedList.size() + " vs " + actualList.size());
+            }
+            for (int index = 0; index < Math.min(expectedList.size(), actualList.size())
+                    && differences.size() < 12; index++) {
+                compareNbtTags(expectedList.get(index), actualList.get(index), path + "[" + index + "]", differences);
+            }
+        } else if (expected != null && actual != null
+                && expected.getClass().isArray() && actual.getClass().isArray()) {
+            final int expectedLength = java.lang.reflect.Array.getLength(expected);
+            final int actualLength = java.lang.reflect.Array.getLength(actual);
+            if (expectedLength != actualLength) differences.add(path + " array size " + expectedLength + " vs " + actualLength);
+            for (int index = 0; index < Math.min(expectedLength, actualLength)
+                    && differences.size() < 12; index++) {
+                final Object expectedValue = java.lang.reflect.Array.get(expected, index);
+                final Object actualValue = java.lang.reflect.Array.get(actual, index);
+                if (!java.util.Objects.equals(expectedValue, actualValue)) {
+                    differences.add(path + "[" + index + "] " + expectedValue + " vs " + actualValue);
+                }
+            }
+        } else if (!java.util.Objects.equals(expected, actual) && differences.size() < 12) {
+            differences.add(path + " " + expected + " vs " + actual);
         }
     }
 
