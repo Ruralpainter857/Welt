@@ -703,9 +703,18 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if [opcodes, values, scales, octaves, seeds, x_coordinates, y_coordinates, output]
-                .iter()
-                .any(|array| array.is_null())
+            if [
+                opcodes,
+                values,
+                scales,
+                octaves,
+                seeds,
+                x_coordinates,
+                y_coordinates,
+                output,
+            ]
+            .iter()
+            .any(|array| array.is_null())
             {
                 return WeltError::IllegalArgument as jint;
             }

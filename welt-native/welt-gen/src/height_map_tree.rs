@@ -797,12 +797,14 @@ mod tests {
             HeightMapNode::Add,
         ];
         let (origin_x, origin_y, width, height) = (-19_i32, 37_i32, 5_usize, 4_usize);
-        let x_coordinates: Vec<_> = (0..height)
-            .flat_map(|_| (0..width).map(|x| (origin_x + x as i32) as f32))
-            .collect();
-        let y_coordinates: Vec<_> = (0..height)
-            .flat_map(|y| (0..width).map(move |_| (origin_y + y as i32) as f32))
-            .collect();
+        let mut x_coordinates = Vec::with_capacity(width * height);
+        let mut y_coordinates = Vec::with_capacity(width * height);
+        for y in 0..height {
+            for x in 0..width {
+                x_coordinates.push((origin_x + x as i32) as f32);
+                y_coordinates.push((origin_y + y as i32) as f32);
+            }
+        }
         let mut actual = vec![0.0; width * height];
         let mut expected = vec![0.0; width * height];
 
@@ -840,14 +842,12 @@ mod tests {
         fill_height_map_tree_points(&nodes, &x_coordinates, &y_coordinates, &mut actual).unwrap();
 
         for index in 0..actual.len() {
-            assert_eq!(
-                actual[index].to_bits(),
-                (-7.5 + noise.get_value(
+            let expected = -7.5
+                + noise.get_value(
                     f64::from(x_coordinates[index]),
                     f64::from(y_coordinates[index]),
-                ))
-                .to_bits()
-            );
+                );
+            assert_eq!(actual[index].to_bits(), expected.to_bits());
         }
     }
 
