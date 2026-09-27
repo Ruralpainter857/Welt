@@ -5,6 +5,7 @@ use std::ffi::c_void;
 use welt_core::error::WeltError;
 use welt_core::jni::{jclass, jint, jlong, jni_catch, jobject, JNIEnv};
 use welt_export::edge_distance::bake_edge_distances;
+use welt_export::edge_height::bake_edge_heights;
 use welt_export::frost::{
     apply_frost_column, apply_frost_packed_columns, FrostCell, FrostMode, FrostSettings,
     FrostUpdate,
@@ -458,6 +459,89 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 return WeltError::IllegalArgument as jint;
             }
 
+            type SetFloatArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const f32);
+            let set_float_array_region: SetFloatArrayRegion =
+                std::mem::transmute(function(env, SET_FLOAT_ARRAY_REGION));
+            set_float_array_region(env, output, 0, expected as jint, values.as_ptr());
+            WeltError::Ok as jint
+        })
+    }
+}
+
+/// # Safety
+/// `env`, arrays, and output must be valid references for this JVM call.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeBakeEdgeHeights(
+    env: *mut JNIEnv,
+    _class: jclass,
+    width: jint,
+    height: jint,
+    radius: jint,
+    min_height: f32,
+    sources: jobject,
+    source_heights: jobject,
+    output: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if sources.is_null()
+                || source_heights.is_null()
+                || output.is_null()
+                || width <= 0
+                || height <= 0
+                || !(0..=512).contains(&radius)
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            let Some(expected) = (width as usize).checked_mul(height as usize) else {
+                return WeltError::IllegalArgument as jint;
+            };
+            if expected > 1_048_576 {
+                return WeltError::IllegalArgument as jint;
+            }
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            if [sources, source_heights, output]
+                .iter()
+                .any(|array| get_array_length(env, *array) != expected as jint)
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            type GetByteArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i8);
+            type GetFloatArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut f32);
+            let get_byte_array_region: GetByteArrayRegion =
+                std::mem::transmute(function(env, GET_BYTE_ARRAY_REGION));
+            let get_float_array_region: GetFloatArrayRegion =
+                std::mem::transmute(function(env, GET_FLOAT_ARRAY_REGION));
+            let mut raw_sources = vec![0_i8; expected];
+            let mut heights = vec![0.0_f32; expected];
+            get_byte_array_region(env, sources, 0, expected as jint, raw_sources.as_mut_ptr());
+            get_float_array_region(
+                env,
+                source_heights,
+                0,
+                expected as jint,
+                heights.as_mut_ptr(),
+            );
+            let source_mask: Vec<u8> = raw_sources.into_iter().map(|value| value as u8).collect();
+            let mut values = vec![0.0_f32; expected];
+            if bake_edge_heights(
+                &source_mask,
+                &heights,
+                width as usize,
+                height as usize,
+                radius as usize,
+                min_height,
+                &mut values,
+            )
+            .is_err()
+            {
+                return WeltError::IllegalArgument as jint;
+            }
             type SetFloatArrayRegion =
                 unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const f32);
             let set_float_array_region: SetFloatArrayRegion =

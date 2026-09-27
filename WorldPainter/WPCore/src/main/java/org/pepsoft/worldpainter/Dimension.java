@@ -1268,6 +1268,10 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
 
         // Now find all edge pixels and adjust the distances in the cache for the pixels around each one
         final Dimension floorDimension = world.getDimension(new Anchor(anchor.dim, (layer.getLayerMode() == CAVE) ? CAVE_FLOOR : FLOATING_FLOOR, anchor.invert, layer.getFloorDimensionId()));
+        if (bakeNativeEdgeHeights(tileCache, heightCache, tileXOffset, tileYOffset,
+                layer, floorDimension, maxDistance)) {
+            return new TileCacheHeightMap(heightCache, tileXOffset, tileYOffset, 0.0f, maxDistance);
+        }
         for (Point tileCoords: tileCoordsToProcess) {
             for (int x = 0; x < TILE_SIZE; x++) {
                 for (int y = 0; y < TILE_SIZE; y++) {
@@ -1290,6 +1294,112 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
 
         // Return a HeightMap that will return values from the height cache
         return new TileCacheHeightMap(heightCache, tileXOffset, tileYOffset, 0.0f, maxDistance);
+    }
+
+    /** Attempts the same edge-height bake in Rust; false preserves the Java fallback. */
+    private boolean bakeNativeEdgeHeights(Tile[][] tileCache, float[][][][] heightCache,
+                                          int tileXOffset, int tileYOffset, TunnelLayer layer,
+                                          Dimension floorDimension, float maxDistance) {
+        if (!Native.isExportEnabled() || floorDimension == null
+                || ((layer.getDataSize() != Layer.DataSize.BIT)
+                && (layer.getDataSize() != Layer.DataSize.BIT_PER_CHUNK))
+                || !Float.isFinite(maxDistance) || maxDistance < 0.0f || maxDistance > 512.0f
+                || !Float.isFinite(minHeight)) {
+            return false;
+        }
+        final int tileColumns = tileCache.length;
+        final int tileRows = tileCache[0].length;
+        final long widthLong = (long) tileColumns * TILE_SIZE + 2L;
+        final long heightLong = (long) tileRows * TILE_SIZE + 2L;
+        final long area = widthLong * heightLong;
+        if (widthLong > Integer.MAX_VALUE || heightLong > Integer.MAX_VALUE
+                || area > 1_048_576L) {
+            return false;
+        }
+
+        final int width = (int) widthLong;
+        final int height = (int) heightLong;
+        final byte[] mask = new byte[(int) area];
+        final Layer.DataSize dataSize = layer.getDataSize();
+        for (int tileX = 0; tileX < tileColumns; tileX++) {
+            for (int tileY = 0; tileY < tileRows; tileY++) {
+                final Tile tile = tileCache[tileX][tileY];
+                if (tile == null) {
+                    continue;
+                }
+                synchronized (tile) {
+                    tile.ensureReadable(Tile.TileBuffer.BIT_LAYER_DATA);
+                    final BitSet values = tile.bitLayerData.get(layer);
+                    if (values == null) {
+                        continue;
+                    }
+                    final int baseX = tileX * TILE_SIZE + 1;
+                    final int baseY = tileY * TILE_SIZE + 1;
+                    final int chunkStride = TILE_SIZE >> 4;
+                    for (int y = 0; y < TILE_SIZE; y++) {
+                        final int row = (baseY + y) * width + baseX;
+                        final int chunkRow = (y >> 4) * chunkStride;
+                        for (int x = 0; x < TILE_SIZE; x++) {
+                            final int bitIndex = (dataSize == Layer.DataSize.BIT)
+                                    ? (x | (y << TILE_SIZE_BITS))
+                                    : ((x >> 4) + chunkRow);
+                            if (values.get(bitIndex)) {
+                                mask[row + x] = 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        final byte[] sources = new byte[(int) area];
+        final float[] sourceHeights = new float[(int) area];
+        for (int tileX = 0; tileX < tileColumns; tileX++) {
+            for (int tileY = 0; tileY < tileRows; tileY++) {
+                if (tileCache[tileX][tileY] == null) {
+                    continue;
+                }
+                final int baseX = tileX * TILE_SIZE + 1;
+                final int baseY = tileY * TILE_SIZE + 1;
+                final int worldTileX = (tileX + tileXOffset) << TILE_SIZE_BITS;
+                final int worldTileY = (tileY + tileYOffset) << TILE_SIZE_BITS;
+                for (int y = 0; y < TILE_SIZE; y++) {
+                    final int row = (baseY + y) * width + baseX;
+                    for (int x = 0; x < TILE_SIZE; x++) {
+                        final int index = row + x;
+                        if ((mask[index] != 0)
+                                && ((mask[index - 1] == 0) || (mask[index - width] == 0)
+                                || (mask[index + 1] == 0) || (mask[index + width] == 0))) {
+                            sources[index] = 1;
+                            sourceHeights[index] = floorDimension.getHeightAt(worldTileX + x, worldTileY + y);
+                        }
+                    }
+                }
+            }
+        }
+
+        final float[] heights = NativeSlices.edgeHeights(width, height, (int) ceil(maxDistance),
+                minHeight, sources, sourceHeights);
+        if (heights == null) {
+            return false;
+        }
+        for (int tileX = 0; tileX < tileColumns; tileX++) {
+            for (int tileY = 0; tileY < tileRows; tileY++) {
+                final float[][] tileHeights = heightCache[tileX][tileY];
+                if (tileHeights == null) {
+                    continue;
+                }
+                final int baseX = tileX * TILE_SIZE + 1;
+                final int baseY = tileY * TILE_SIZE + 1;
+                for (int y = 0; y < TILE_SIZE; y++) {
+                    final int row = (baseY + y) * width + baseX;
+                    for (int x = 0; x < TILE_SIZE; x++) {
+                        tileHeights[x][y] = heights[row + x];
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     protected final float doGetDistanceToEdge(final Layer layer, final int x, final int y, final float maxDistance) {

@@ -3,6 +3,7 @@ package org.pepsoft.worldpainter;
 import org.junit.Test;
 import org.pepsoft.worldpainter.layers.Frost;
 import org.pepsoft.worldpainter.layers.NotPresent;
+import org.pepsoft.worldpainter.layers.tunnel.TunnelLayer;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.nativeapi.NativeSlices;
@@ -36,6 +37,36 @@ public final class EdgeDistanceNativeParityTest {
             assertNotNull(nativeValues);
             final float[] javaValues = javaEdgeDistances(width, height, maxDistance, mask);
             assertEquals(javaValues.length, nativeValues.length);
+            for (int i = 0; i < javaValues.length; i++) {
+                assertEquals("index=" + i, Float.floatToRawIntBits(javaValues[i]),
+                        Float.floatToRawIntBits(nativeValues[i]));
+            }
+        } finally {
+            restoreFlag(previousFlag);
+        }
+    }
+
+    @Test
+    public void edgeHeightKernelMatchesGeometryUtilRasterizationBitForBit() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.EXPORT_KEY);
+        Native.setExportEnabled(true);
+        try {
+            final int width = 23, height = 19, radius = 7;
+            final byte[] sources = new byte[width * height];
+            final float[] sourceHeights = new float[width * height];
+            sources[8 * width + 9] = 1;
+            sourceHeights[8 * width + 9] = 72.25f;
+            sources[10 * width + 12] = 1;
+            sourceHeights[10 * width + 12] = 81.5f;
+            sources[0] = 1;
+            sourceHeights[0] = -20.0f;
+
+            final float[] nativeValues = NativeSlices.edgeHeights(width, height, radius,
+                    -64.0f, sources, sourceHeights);
+            assertNotNull(nativeValues);
+            final float[] javaValues = javaEdgeHeights(width, height, radius, -64.0f,
+                    sources, sourceHeights);
             for (int i = 0; i < javaValues.length; i++) {
                 assertEquals("index=" + i, Float.floatToRawIntBits(javaValues[i]),
                         Float.floatToRawIntBits(nativeValues[i]));
@@ -113,6 +144,50 @@ public final class EdgeDistanceNativeParityTest {
         }
     }
 
+    @Test
+    public void floatingTunnelEdgeHeightBakeMatchesJavaAcrossLayerHoles() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.EXPORT_KEY);
+        try {
+            final TileFactory terrainFactory = TestData.createTileFactory(62);
+            final World2 world = new World2(TestData.PLATFORM, TestData.SEED, terrainFactory);
+            final Dimension dimension = world.getDimension(Dimension.Anchor.NORMAL_DETAIL);
+            dimension.addTile(terrainFactory.createTile(0, 0));
+
+            final int floorId = 7;
+            final TileFactory floorFactory = TestData.createTileFactory(41);
+            final Dimension floor = new Dimension(world, "Floating floor", TestData.SEED, floorFactory,
+                    new Dimension.Anchor(Constants.DIM_NORMAL, Dimension.Role.FLOATING_FLOOR, false, floorId));
+            floor.addTile(floorFactory.createTile(0, 0));
+            world.addDimension(floor);
+
+            final TunnelLayer layer = new TunnelLayer("Floating parity", TunnelLayer.LayerMode.FLOATING,
+                    null, TestData.PLATFORM);
+            layer.setFloorDimensionId(floorId);
+            for (int y = 18; y < 106; y++) {
+                for (int x = 21; x < 109; x++) {
+                    if (!((x >= 49 && x <= 68) && (y >= 43 && y <= 79))) {
+                        dimension.setBitLayerValueAt(layer, x, y, true);
+                    }
+                }
+            }
+
+            Native.setExportEnabled(true);
+            final HeightMap nativeMap = dimension.getEdgeHeights(layer, 6.25f);
+            Native.setExportEnabled(false);
+            final HeightMap javaMap = dimension.getEdgeHeights(layer, 6.25f);
+            for (int y = 0; y < 128; y++) {
+                for (int x = 0; x < 128; x++) {
+                    assertEquals("x=" + x + " y=" + y,
+                            Double.doubleToRawLongBits(javaMap.getHeight(x, y)),
+                            Double.doubleToRawLongBits(nativeMap.getHeight(x, y)));
+                }
+            }
+        } finally {
+            restoreFlag(previousFlag);
+        }
+    }
+
     private static float[] javaEdgeDistances(int width, int height, float maxDistance, byte[] mask) {
         final int radius = (int) Math.ceil(maxDistance);
         final float[] distances = new float[width * height];
@@ -145,6 +220,30 @@ public final class EdgeDistanceNativeParityTest {
             }
         }
         return distances;
+    }
+
+    private static float[] javaEdgeHeights(int width, int height, int radius, float minHeight,
+                                           byte[] sources, float[] sourceHeights) {
+        final float[] values = new float[width * height];
+        java.util.Arrays.fill(values, minHeight);
+        for (int i = 0; i < sources.length; i++) {
+            if (sources[i] == 0) {
+                continue;
+            }
+            final int sourceIndex = i;
+            final int sourceX = i % width, sourceY = i / width;
+            org.pepsoft.worldpainter.util.GeometryUtil.visitFilledCircle(radius, (dx, dy, distance) -> {
+                final int x = sourceX + dx, y = sourceY + dy;
+                if ((x >= 0) && (x < width) && (y >= 0) && (y < height)) {
+                    final int target = y * width + x;
+                    if (sourceHeights[sourceIndex] > values[target]) {
+                        values[target] = sourceHeights[sourceIndex];
+                    }
+                }
+                return true;
+            });
+        }
+        return values;
     }
 
     private static boolean hasPaintedNeighbour(byte[] mask, int width, int height, int x, int y) {

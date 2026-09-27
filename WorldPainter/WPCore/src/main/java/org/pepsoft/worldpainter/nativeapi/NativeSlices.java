@@ -81,6 +81,26 @@ public final class NativeSlices {
         }
     }
 
+    /** Returns the max floor height propagated from edge pixels over the integer rasterized disk. */
+    public static float[] edgeHeights(final int width, final int height, final int radius,
+                                      final float minHeight, final byte[] sources,
+                                      final float[] sourceHeights) {
+        final long area = (long) width * height;
+        if (!Native.isExportEnabled() || !NativeLoader.areSlicesAvailable()
+                || sources == null || sourceHeights == null || width <= 0 || height <= 0
+                || area > 1_048_576L || sources.length != area || sourceHeights.length != area
+                || radius < 0 || radius > 512 || !Float.isFinite(minHeight)) {
+            return null;
+        }
+        final float[] output = new float[(int) area];
+        try {
+            return nativeBakeEdgeHeights(width, height, radius, minHeight,
+                    sources, sourceHeights, output) == 0 ? output : null;
+        } catch (final UnsatisfiedLinkError e) {
+            return null;
+        }
+    }
+
 
     /** False leaves the FrostExporter on its original Java path. */
     public static boolean frostColumn(final int minZ, final int maxZ, final int highestNonAir,
@@ -157,6 +177,10 @@ public final class NativeSlices {
     private static native int nativeBakeEdgeDistances(int width, int height,
                                                        float maxDistance, byte[] mask,
                                                        float[] output);
+
+    private static native int nativeBakeEdgeHeights(int width, int height, int radius,
+                                                     float minHeight, byte[] sources,
+                                                     float[] sourceHeights, float[] output);
 
 
     private static native int nativeFrostColumn(int minZ, int maxZ, int highestNonAir,
