@@ -2,7 +2,9 @@ package org.pepsoft.worldpainter;
 
 import org.junit.Test;
 import org.pepsoft.worldpainter.heightMaps.ConstantHeightMap;
+import org.pepsoft.worldpainter.heightMaps.DifferenceHeightMap;
 import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
+import org.pepsoft.worldpainter.heightMaps.ProductHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
@@ -169,6 +171,52 @@ public final class NoiseHeightMapNativeParityTest {
             for (int y = 0; y < height; y++) {
                 for (int x = 0; x < width; x++) {
                     assertEquals("nested sum at " + x + ',' + y,
+                            Double.doubleToRawLongBits(tree.getHeight(originX + x, originY + y)),
+                            Double.doubleToRawLongBits(output[y * width + x]));
+                }
+            }
+        } finally {
+            if (previousFlag == null) {
+                System.clearProperty(Native.GEN_KEY);
+            } else {
+                System.setProperty(Native.GEN_KEY, previousFlag);
+            }
+        }
+    }
+
+    @Test
+    public void nativeProductAndDifferenceProgramMatchesJavaBitForBit() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        Native.setGenEnabled(true);
+        try {
+            final NoiseHeightMap firstNoise = new NoiseHeightMap(83.5, 0.375, 2, -0x0123_4567L);
+            final NoiseHeightMap secondNoise = new NoiseHeightMap(24.0, 2.75, 6, 0x3141_5926L);
+            final DifferenceHeightMap tree = new DifferenceHeightMap(
+                    new ProductHeightMap(
+                            new SumHeightMap(new ConstantHeightMap(20.1), firstNoise),
+                            secondNoise),
+                    new ConstantHeightMap(12.5));
+            tree.setSeed(0x7fff_ffffL);
+
+            // Post-order: ((constant + firstNoise) * secondNoise) - constant.
+            final int[] opcodes = {0, 1, 2, 1, 4, 0, 3};
+            final double[] values = {20.1, firstNoise.getHeight(), 0.0,
+                    secondNoise.getHeight(), 0.0, 12.5, 0.0};
+            final double[] scales = {0.0, firstNoise.getScale(), 0.0,
+                    secondNoise.getScale(), 0.0, 0.0, 0.0};
+            final int[] octaves = {0, firstNoise.getOctaves(), 0,
+                    secondNoise.getOctaves(), 0, 0, 0};
+            final long[] seeds = {0L, firstNoise.getSeed() + firstNoise.getSeedOffset(), 0L,
+                    secondNoise.getSeed() + secondNoise.getSeedOffset(), 0L, 0L, 0L};
+            final int originX = -257, originY = Integer.MAX_VALUE - 12;
+            final int width = 17, height = 11;
+            final double[] output = new double[width * height];
+            assertTrue(NativeSlices.fillHeightMapTree(originX, originY, width, height,
+                    opcodes.length, opcodes, values, scales, octaves, seeds, output));
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    assertEquals("composite at " + x + ',' + y,
                             Double.doubleToRawLongBits(tree.getHeight(originX + x, originY + y)),
                             Double.doubleToRawLongBits(output[y * width + x]));
                 }

@@ -7,6 +7,9 @@ package org.pepsoft.worldpainter;
 
 import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
 import org.pepsoft.worldpainter.heightMaps.ConstantHeightMap;
+import org.pepsoft.worldpainter.heightMaps.CombiningHeightMap;
+import org.pepsoft.worldpainter.heightMaps.DifferenceHeightMap;
+import org.pepsoft.worldpainter.heightMaps.ProductHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.nativeapi.Native;
@@ -237,9 +240,12 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 || (heightMap.getClass() == NoiseHeightMap.class)) {
             return true;
         }
-        if (heightMap.getClass() == SumHeightMap.class) {
-            final SumHeightMap sum = (SumHeightMap) heightMap;
-            return isBatchSafeHeightMap(sum.getHeightMap1()) && isBatchSafeHeightMap(sum.getHeightMap2());
+        if ((heightMap.getClass() == SumHeightMap.class)
+                || (heightMap.getClass() == DifferenceHeightMap.class)
+                || (heightMap.getClass() == ProductHeightMap.class)) {
+            final CombiningHeightMap combining = (CombiningHeightMap) heightMap;
+            return isBatchSafeHeightMap(combining.getHeightMap1())
+                    && isBatchSafeHeightMap(combining.getHeightMap2());
         }
         return false;
     }
@@ -285,14 +291,24 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 heightMapNodeCount++;
                 return true;
             }
+            final int operator;
             if (heightMap.getClass() == SumHeightMap.class) {
-                final SumHeightMap sum = (SumHeightMap) heightMap;
-                if (!appendHeightMapNode(sum.getHeightMap1())
-                        || !appendHeightMapNode(sum.getHeightMap2())
+                operator = 2;
+            } else if (heightMap.getClass() == DifferenceHeightMap.class) {
+                operator = 3;
+            } else if (heightMap.getClass() == ProductHeightMap.class) {
+                operator = 4;
+            } else {
+                return false;
+            }
+            if (heightMap instanceof CombiningHeightMap) {
+                final CombiningHeightMap combining = (CombiningHeightMap) heightMap;
+                if (!appendHeightMapNode(combining.getHeightMap1())
+                        || !appendHeightMapNode(combining.getHeightMap2())
                         || heightMapNodeCount >= heightMapOpcodes.length) {
                     return false;
                 }
-                heightMapOpcodes[heightMapNodeCount++] = 2;
+                heightMapOpcodes[heightMapNodeCount++] = operator;
                 return true;
             }
             return false;

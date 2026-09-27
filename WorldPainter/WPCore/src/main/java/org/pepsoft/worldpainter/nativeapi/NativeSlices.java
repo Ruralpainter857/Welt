@@ -68,7 +68,7 @@ public final class NativeSlices {
         }
     }
 
-    /** Fills a post-order Constant/Noise/Sum expression into a caller-owned buffer. */
+    /** Fills a post-order expression of pure built-in heightmaps into caller-owned output. */
     public static boolean fillHeightMapTree(final int originX, final int originY,
                                             final int width, final int height,
                                             final int nodeCount,

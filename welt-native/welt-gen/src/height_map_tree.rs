@@ -1,4 +1,4 @@
-//! Bulk evaluator for pure constant/noise/sum height-map expression trees.
+//! Bulk evaluator for pure constant/noise/composite height-map expression trees.
 
 use crate::noise_height_map::{NoiseHeightMapBulk, NoiseHeightMapError};
 
@@ -15,6 +15,8 @@ pub enum HeightMapNode {
         effective_seed: i64,
     },
     Add,
+    Subtract,
+    Multiply,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -94,6 +96,20 @@ pub fn fill_height_map_tree(
                 depth -= 1;
                 parsed.push(ParsedNode::Add);
             }
+            HeightMapNode::Subtract => {
+                if depth < 2 {
+                    return Err(HeightMapTreeError::InvalidProgram);
+                }
+                depth -= 1;
+                parsed.push(ParsedNode::Subtract);
+            }
+            HeightMapNode::Multiply => {
+                if depth < 2 {
+                    return Err(HeightMapTreeError::InvalidProgram);
+                }
+                depth -= 1;
+                parsed.push(ParsedNode::Multiply);
+            }
         }
     }
     if depth != 1 {
@@ -138,6 +154,18 @@ pub fn fill_height_map_tree(
                     stack_depth -= 1;
                     stack[stack_depth - 1] = left + right;
                 }
+                ParsedNode::Subtract => {
+                    let right = stack[stack_depth - 1];
+                    let left = stack[stack_depth - 2];
+                    stack_depth -= 1;
+                    stack[stack_depth - 1] = left - right;
+                }
+                ParsedNode::Multiply => {
+                    let right = stack[stack_depth - 1];
+                    let left = stack[stack_depth - 2];
+                    stack_depth -= 1;
+                    stack[stack_depth - 1] = if left == 0.0 { 0.0 } else { left * right };
+                }
             }
         }
         output[cell] = stack[0];
@@ -150,6 +178,8 @@ enum ParsedNode {
     Constant(f64),
     Noise(usize),
     Add,
+    Subtract,
+    Multiply,
 }
 
 #[cfg(test)]
@@ -204,5 +234,60 @@ mod tests {
             fill_height_map_tree(&nodes, 0, 0, 1024, 1024, &mut output),
             Err(HeightMapTreeError::TooManyNoiseValues)
         );
+    }
+
+    #[test]
+    fn difference_and_product_preserve_java_order_and_zero_short_circuit() {
+        let first = NoiseHeightMapBulk::new(128.0, 1.25, 3, -42).unwrap();
+        let second = NoiseHeightMapBulk::new(64.0, 0.75, 2, 91).unwrap();
+        let (origin_x, origin_y, width, height) = (-12, 39, 11, 7);
+        let mut noise_a = vec![0.0; width * height];
+        let mut noise_b = vec![0.0; width * height];
+        first
+            .fill_bulk(origin_x, origin_y, width, height, &mut noise_a)
+            .unwrap();
+        second
+            .fill_bulk(origin_x, origin_y, width, height, &mut noise_b)
+            .unwrap();
+        let nodes = [
+            HeightMapNode::Constant(0.1),
+            HeightMapNode::Noise {
+                d_height: 128.0,
+                scale: 1.25,
+                octaves: 3,
+                effective_seed: -42,
+            },
+            HeightMapNode::Add,
+            HeightMapNode::Noise {
+                d_height: 64.0,
+                scale: 0.75,
+                octaves: 2,
+                effective_seed: 91,
+            },
+            HeightMapNode::Multiply,
+            HeightMapNode::Constant(12.5),
+            HeightMapNode::Subtract,
+        ];
+        let mut actual = vec![f64::NAN; width * height];
+        fill_height_map_tree(&nodes, origin_x, origin_y, width, height, &mut actual).unwrap();
+        for index in 0..actual.len() {
+            let java_order = (0.1_f64 + noise_a[index]) * noise_b[index] - 12.5_f64;
+            assert_eq!(actual[index].to_bits(), java_order.to_bits());
+        }
+
+        let zero_nodes = [
+            HeightMapNode::Constant(-0.0),
+            HeightMapNode::Noise {
+                d_height: 64.0,
+                scale: 0.75,
+                octaves: 2,
+                effective_seed: 91,
+            },
+            HeightMapNode::Multiply,
+        ];
+        fill_height_map_tree(&zero_nodes, origin_x, origin_y, width, height, &mut actual).unwrap();
+        assert!(actual
+            .iter()
+            .all(|value| value.to_bits() == 0.0_f64.to_bits()));
     }
 }

@@ -576,6 +576,8 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                         effective_seed: raw_seeds[index],
                     },
                     2 => HeightMapNode::Add,
+                    3 => HeightMapNode::Subtract,
+                    4 => HeightMapNode::Multiply,
                     _ => return WeltError::IllegalArgument as jint,
                 });
             }

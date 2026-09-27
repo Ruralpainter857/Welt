@@ -1,7 +1,9 @@
 import org.pepsoft.worldpainter.HeightMapTileFactory;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.heightMaps.ConstantHeightMap;
+import org.pepsoft.worldpainter.heightMaps.DifferenceHeightMap;
 import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
+import org.pepsoft.worldpainter.heightMaps.ProductHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
@@ -19,14 +21,22 @@ public final class NestedSumHeightMapBenchmark {
     public static void main(String[] args) {
         final int tiles = args.length > 0 ? Integer.parseInt(args[0]) : 48;
         final int rounds = args.length > 1 ? Integer.parseInt(args[1]) : 9;
+        final boolean composite = args.length > 2 && "composite".equalsIgnoreCase(args[2]);
         if (!NativeLoader.areSlicesAvailable()) {
             throw new IllegalStateException("welt_slices is unavailable; build with Maven -Pnative");
         }
-        final HeightMapTileFactory factory = new HeightMapTileFactory(0x57454c54L,
-                new SumHeightMap(
+        final org.pepsoft.worldpainter.HeightMap heightMap = composite
+                ? new DifferenceHeightMap(new ProductHeightMap(
+                        new SumHeightMap(new ConstantHeightMap(20.1),
+                                new NoiseHeightMap(38.0, 0.8, 2, 0x1234_5678L)),
+                        new NoiseHeightMap(0.35, 2.1, 5, -0x2468_1357L)),
+                        new ConstantHeightMap(1.75))
+                : new SumHeightMap(
                         new SumHeightMap(new ConstantHeightMap(48.25),
                                 new NoiseHeightMap(38.0, 0.8, 2, 0x1234_5678L)),
-                        new NoiseHeightMap(12.0, 2.1, 5, -0x2468_1357L)),
+                        new NoiseHeightMap(12.0, 2.1, 5, -0x2468_1357L));
+        final HeightMapTileFactory factory = new HeightMapTileFactory(0x57454c54L,
+                heightMap,
                 0, 256, false,
                 SimpleTheme.createSingleTerrain(org.pepsoft.worldpainter.Terrain.GRASS, 0, 256, 62));
         final double[] javaSamples = new double[rounds];
@@ -47,8 +57,9 @@ public final class NestedSumHeightMapBenchmark {
         }
         Arrays.sort(javaSamples);
         Arrays.sort(rustSamples);
-        System.out.printf("tiles=%d rounds=%d java_median_ms_per_tile=%.4f rust_median_ms_per_tile=%.4f rust_speedup=%.3f sink=%d%n",
-                tiles, rounds, javaSamples[rounds / 2], rustSamples[rounds / 2],
+        System.out.printf("scenario=%s tiles=%d rounds=%d java_median_ms_per_tile=%.4f rust_median_ms_per_tile=%.4f rust_speedup=%.3f sink=%d%n",
+                composite ? "product-difference" : "nested-sum", tiles, rounds,
+                javaSamples[rounds / 2], rustSamples[rounds / 2],
                 javaSamples[rounds / 2] / rustSamples[rounds / 2], sink);
     }
 
