@@ -9,6 +9,7 @@ import org.pepsoft.worldpainter.heightMaps.MinimisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MaximisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MandelbrotHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
+import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.themes.SimpleTheme;
@@ -30,10 +31,11 @@ public final class NestedSumHeightMapBenchmark {
         final boolean mandelbrot = args.length > 2 && "mandelbrot".equalsIgnoreCase(args[2]);
         final boolean banded = args.length > 2 && args[2].toLowerCase().startsWith("banded");
         final boolean bandedSmooth = banded && !"banded-linear".equalsIgnoreCase(args[2]);
+        final boolean translated = args.length > 2 && "translated".equalsIgnoreCase(args[2]);
         if (!NativeLoader.areSlicesAvailable()) {
             throw new IllegalStateException("welt_slices is unavailable; build with Maven -Pnative");
         }
-        final org.pepsoft.worldpainter.HeightMap heightMap = banded
+        final org.pepsoft.worldpainter.HeightMap baseHeightMap = banded
                 ? new BandedHeightMap("banded", 47, 116.5, 29, 88.25, bandedSmooth)
                 : mandelbrot
                 ? new SumHeightMap(new ConstantHeightMap(58.0), new MandelbrotHeightMap())
@@ -53,6 +55,10 @@ public final class NestedSumHeightMapBenchmark {
                         new SumHeightMap(new ConstantHeightMap(48.25),
                                 new NoiseHeightMap(38.0, 0.8, 2, 0x1234_5678L)),
                         new NoiseHeightMap(12.0, 2.1, 5, -0x2468_1357L));
+        final org.pepsoft.worldpainter.HeightMap heightMap = translated
+                ? new TransformingHeightMap("translated", baseHeightMap,
+                        1.0f, 1.0f, -13, 29, 0.0f)
+                : baseHeightMap;
         final HeightMapTileFactory factory = new HeightMapTileFactory(0x57454c54L,
                 heightMap,
                 0, 256, false,
@@ -76,7 +82,8 @@ public final class NestedSumHeightMapBenchmark {
         Arrays.sort(javaSamples);
         Arrays.sort(rustSamples);
         System.out.printf("scenario=%s tiles=%d rounds=%d java_median_ms_per_tile=%.4f rust_median_ms_per_tile=%.4f rust_speedup=%.3f sink=%d%n",
-                banded ? bandedSmooth ? "banded-smooth" : "banded-linear"
+                translated ? "translated-noise"
+                        : banded ? bandedSmooth ? "banded-smooth" : "banded-linear"
                         : mandelbrot ? "mandelbrot" : minmax ? "minmax" : composite ? "product-difference" : "nested-sum", tiles, rounds,
                 javaSamples[rounds / 2], rustSamples[rounds / 2],
                 javaSamples[rounds / 2] / rustSamples[rounds / 2], sink);

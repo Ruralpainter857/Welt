@@ -14,6 +14,7 @@ import org.pepsoft.worldpainter.heightMaps.MinimisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MaximisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MandelbrotHeightMap;
 import org.pepsoft.worldpainter.heightMaps.BandedHeightMap;
+import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.nativeapi.Native;
@@ -127,6 +128,13 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         tile.inhibitEvents();
         final int worldTileX = tileX * TILE_SIZE, worldTileY = tileY * TILE_SIZE;
         try {
+            final TransformingHeightMap translatedHeightMap = getBatchSafeTranslation(heightMap);
+            final HeightMap batchHeightMap = (translatedHeightMap != null)
+                    ? translatedHeightMap.getBaseHeightMap() : heightMap;
+            final int heightMapOriginX = (translatedHeightMap != null)
+                    ? worldTileX - translatedHeightMap.getOffsetX() : worldTileX;
+            final int heightMapOriginY = (translatedHeightMap != null)
+                    ? worldTileY - translatedHeightMap.getOffsetY() : worldTileY;
             NoiseHeightMap nativeNoiseMap = null;
             double nativeConstant = 0.0;
             boolean nativeConstantFirst = false;
@@ -145,16 +153,17 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             }
             final boolean freshSimpleTheme = (theme.getClass() == SimpleTheme.class) && !floodWithLava;
             final boolean batchFreshSimpleTheme = freshSimpleTheme
-                    && (isBatchSafeHeightMap(heightMap) || isNativeBandedHeightMap(heightMap));
+                    && (isBatchSafeHeightMap(heightMap) || isNativeBandedHeightMap(heightMap)
+                    || (translatedHeightMap != null));
             final GenerationBuffers buffers = batchFreshSimpleTheme ? GENERATION_BUFFERS.get() : null;
             double[] nativeHeights = null;
             boolean nativeHeightMapTreeSucceeded = false;
             if (batchFreshSimpleTheme && Native.isGenEnabled()
-                    && buffers.prepareHeightMapProgram(heightMap)
+                    && buffers.prepareHeightMapProgram(batchHeightMap)
                     && (buffers.heightMapNoiseCount > 0 || buffers.heightMapMandelbrotCount > 0
                     || buffers.heightMapBandedCount > 0)) {
                 final double[] output = buffers.nativeHeights();
-                if (NativeSlices.fillHeightMapTree(worldTileX, worldTileY,
+                if (NativeSlices.fillHeightMapTree(heightMapOriginX, heightMapOriginY,
                         TILE_SIZE, TILE_SIZE, buffers.heightMapNodeCount,
                         buffers.heightMapOpcodes, buffers.heightMapValues,
                         buffers.heightMapScales, buffers.heightMapOctaves,
@@ -263,6 +272,20 @@ public class HeightMapTileFactory extends AbstractTileFactory {
     private static boolean isNativeBandedHeightMap(HeightMap heightMap) {
         return (heightMap.getClass() == BandedHeightMap.class)
                 && ((BandedHeightMap) heightMap).isSmooth();
+    }
+
+    /** Returns only exact, translation-only wrappers with a batch-safe child. */
+    private static TransformingHeightMap getBatchSafeTranslation(HeightMap heightMap) {
+        if ((heightMap.getClass() == TransformingHeightMap.class)) {
+            final TransformingHeightMap transforming = (TransformingHeightMap) heightMap;
+            final HeightMap base = transforming.getBaseHeightMap();
+            if ((transforming.getScaleX() == 1.0f) && (transforming.getScaleY() == 1.0f)
+                    && (transforming.getRotation() == 0.0f)
+                    && (isBatchSafeHeightMap(base) || isNativeBandedHeightMap(base))) {
+                return transforming;
+            }
+        }
+        return null;
     }
 
     private static final class GenerationBuffers {
