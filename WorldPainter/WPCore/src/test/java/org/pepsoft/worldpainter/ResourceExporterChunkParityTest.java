@@ -36,6 +36,7 @@ public final class ResourceExporterChunkParityTest extends AbstractTool {
         final String oldUserHome = System.getProperty("user.home");
         final String oldThreads = System.getProperty("org.pepsoft.worldpainter.threads");
         final String oldFlag = System.getProperty(Native.EXPORT_KEY);
+        final String oldResourcesFlag = System.getProperty(Native.RESOURCES_EXPORT_KEY);
         final Path root = Files.createTempDirectory("welt-resource-chunk-parity-");
         try {
             System.setProperty("user.home", root.resolve("home").toString());
@@ -58,6 +59,7 @@ public final class ResourceExporterChunkParityTest extends AbstractTool {
             Native.setExportEnabled(false);
             export(world, javaRoot.toFile());
             Native.setExportEnabled(true);
+            System.setProperty(Native.RESOURCES_EXPORT_KEY, "true");
             export(world, nativeRoot.toFile());
 
             final Map<String, Map<Integer, byte[]>> javaRegions = readRegions(javaRoot);
@@ -73,6 +75,7 @@ public final class ResourceExporterChunkParityTest extends AbstractTool {
             restore("user.home", oldUserHome);
             restore("org.pepsoft.worldpainter.threads", oldThreads);
             restore(Native.EXPORT_KEY, oldFlag);
+            restore(Native.RESOURCES_EXPORT_KEY, oldResourcesFlag);
         }
     }
 

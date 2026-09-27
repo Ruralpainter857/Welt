@@ -26,4 +26,6 @@ Welt adds an optional native (Rust) acceleration layer. To build with it, use th
 
 Without `-Pnative`, nothing changes: the build remains 100% Java and WorldPainter behaves exactly as before (native acceleration is opt-in at runtime via the `wp.native.gen`, `wp.native.render` and `wp.native.export` system properties, which default to `false` and fall back silently to the Java code path).
 
+The native Frost and Resources exporters currently require an additional explicit switch (`-Dwp.native.export.frost=true` or `-Dwp.native.export.resources=true`, respectively) alongside `-Dwp.native.export=true`. Their measured export paths remain slower than Java, so the general export switch keeps them on Java while enabling the other native export operations.
+
 For the Rust toolchain setup, exact build commands and details, see `docs/welt/` (start with `docs/welt/README.md` and `docs/welt/CHARTE-ORCHESTRATION.md`).

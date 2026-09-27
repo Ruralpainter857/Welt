@@ -53,7 +53,7 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
             throw new IllegalArgumentException("The org.pepsoft.worldpainter.noSnowOn property is no longer supported; please let the author know if you need it");
         }
         final long nativeColumnLength = (long) maxZ - minHeight + 1L;
-        final boolean nativeFrost = Native.isExportEnabled()
+        final boolean nativeFrost = Native.isFrostExportEnabled()
                 && nativeColumnLength > 0 && nativeColumnLength <= 4096
                 && (mode == FrostSettings.MODE_FLAT || mode == FrostSettings.MODE_RANDOM
                     || mode == FrostSettings.MODE_SMOOTH
@@ -87,7 +87,7 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
                 && (long) area.y + area.height <= Integer.MAX_VALUE;
     }
 
-    /** Packs eligible columns, invokes Rust once per chunk, then applies results in Java order. */
+    /** Packs eligible columns, invokes Rust once per batch, then applies results in Java order. */
     private void applyNativeBatches(MinecraftWorld world, Rectangle area,
                                     boolean frostEverywhere, boolean snowUnderTrees, int mode,
                                     Random random, int columnLength) {
@@ -99,6 +99,7 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
         final float[] heightsFloat = new float[batchCapacity];
         final int[] heightsInt = new int[batchCapacity];
         final int[] frostBitCounts = new int[batchCapacity];
+        final int[] lowestVisitedZ = new int[batchCapacity];
         final int[] packedMaxZ = new int[batchCapacity];
         final int[] packedOffsets = new int[batchCapacity];
         final int[] packedSlots = new int[batchCapacity];
@@ -111,7 +112,6 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
             java.util.Arrays.fill(packedSlots, 0, currentCount, -1);
             java.util.Arrays.fill(active, 0, currentCount, false);
             int nativeCount = 0;
-            int packedCellCount = 0;
             for (int local = 0; local < currentCount; local++) {
                 final long index = batchStart + local;
                 final int x = area.x + (int) (index / area.height);
@@ -124,19 +124,33 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
                 highestByColumn[local] = highestNonAir;
                 final int segmentMaxZ = (highestNonAir < maxZ) ? highestNonAir + 1 : maxZ;
                 final int segmentLength = segmentMaxZ - minHeight + 1;
-                if (snapshotNativeColumn(world, x, y, highestNonAir, mode, nativeCount,
-                        packedCellCount, segmentLength, flags, snowLayers, highest, heightsFloat,
-                        heightsInt, frostBitCounts)) {
+                if (snapshotNativeColumn(world, x, y, highestNonAir, mode, snowUnderTrees, nativeCount,
+                        nativeCount * columnLength, segmentLength, flags, snowLayers, highest, heightsFloat,
+                        heightsInt, frostBitCounts, lowestVisitedZ)) {
                     packedSlots[local] = nativeCount;
                     packedMaxZ[nativeCount] = segmentMaxZ;
-                    packedOffsets[nativeCount] = packedCellCount;
-                    packedCellCount += segmentLength;
                     nativeCount++;
                 }
             }
 
+            int batchMinZ = maxZ;
+            for (int slot = 0; slot < nativeCount; slot++) {
+                batchMinZ = Math.min(batchMinZ, lowestVisitedZ[slot]);
+            }
+            // Omit the depths none of the descending Java scans would reach.
+            // The zeroed prefixes cover columns whose scan stopped higher.
+            int packedCellCount = 0;
+            for (int slot = 0; slot < nativeCount; slot++) {
+                final int length = packedMaxZ[slot] - batchMinZ + 1;
+                final int source = slot * columnLength + batchMinZ - minHeight;
+                packedOffsets[slot] = packedCellCount;
+                System.arraycopy(flags, source, flags, packedCellCount, length);
+                System.arraycopy(snowLayers, source, snowLayers, packedCellCount, length);
+                packedCellCount += length;
+            }
+
             final boolean nativeBatchSucceeded = nativeCount > 0
-                    && NativeSlices.frostColumns(minHeight, maxZ, nativeCount,
+                    && NativeSlices.frostColumns(batchMinZ, maxZ, nativeCount,
                     packedMaxZ, frostEverywhere, snowUnderTrees, mode, flags, snowLayers,
                     highest, heightsFloat, heightsInt, frostBitCounts, updates);
 
@@ -152,7 +166,7 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
                 if (nativeBatchSucceeded && slot >= 0) {
                     applyNativeColumnResult(world, x, y, highestByColumn[local],
                             heightsInt[slot], mode, random, packedOffsets[slot],
-                            packedMaxZ[slot],
+                            batchMinZ, packedMaxZ[slot],
                             flags, snowLayers, updates);
                 } else {
                     applyJavaColumn(world, x, y, highestByColumn[local],
@@ -164,16 +178,17 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
 
     /** Snapshots one column into the next packed slot; mixed columns use Java. */
     private boolean snapshotNativeColumn(MinecraftWorld world, int x, int y, int highestNonAir,
-                                         int mode, int slot, int base, int segmentLength,
+                                         int mode, boolean snowUnderTrees, int slot, int base, int segmentLength,
                                          byte[] flags, byte[] snowLayers, int[] highest,
                                          float[] heightsFloat, int[] heightsInt,
-                                         int[] frostBitCounts) {
+                                         int[] frostBitCounts, int[] lowestVisitedZ) {
         if (highestNonAir < minHeight || highestNonAir > maxZ) {
             return false;
         }
-        boolean hasLeaf = false;
+        int leafBlocksEncountered = 0;
         boolean hasFreezableWater = false;
-        for (int offset = 0; offset < segmentLength; offset++) {
+        int lowest = minHeight;
+        for (int offset = segmentLength - 1; offset >= 0; offset--) {
             final int z = minHeight + offset;
             final int cell = base + offset;
             if (z > highestNonAir) {
@@ -193,9 +208,13 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
             if (material.empty) bits |= 1 << 6;
             if (material == GRASS || material == FERN) bits |= 1 << 7;
             flags[cell] = (byte) bits;
-            hasLeaf |= material.canSupportSnow && (material.leafBlock || material.sustainsLeaves);
+            final boolean leafSupport = material.canSupportSnow
+                    && (material.leafBlock || material.sustainsLeaves);
+            if (leafSupport) {
+                leafBlocksEncountered++;
+            }
             hasFreezableWater |= (bits & 1) != 0 || ((bits & 6) == 6);
-            if (hasLeaf && hasFreezableWater) {
+            if (leafBlocksEncountered > 0 && hasFreezableWater) {
                 // A prior leaf placement can change what a later water pass
                 // clears. Let the original Java scan preserve write order.
                 return false;
@@ -205,6 +224,15 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
             }
             if (material == SNOW) {
                 snowLayers[cell] |= (byte) 0x80;
+            }
+            // The Java scan cannot observe cells below this point. Clearing the
+            // unused prefix also prevents stale data from a previous batch.
+            if (hasFreezableWater || (material.canSupportSnow
+                    && (!leafSupport || (!snowUnderTrees && leafBlocksEncountered > 1)))) {
+                java.util.Arrays.fill(flags, base, cell, (byte) 0);
+                java.util.Arrays.fill(snowLayers, base, cell, (byte) 0);
+                lowest = z;
+                break;
             }
         }
         final int heightInt = dimension.getIntHeightAt(x, y);
@@ -218,17 +246,18 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
         heightsFloat[slot] = heightFloat;
         heightsInt[slot] = heightInt;
         frostBitCounts[slot] = frostBitCount;
+        lowestVisitedZ[slot] = lowest;
         return true;
     }
 
     private void applyNativeColumnResult(MinecraftWorld world, int x, int y, int highestNonAir,
                                          int heightInt, int mode, Random random, int base,
-                                         int segmentMaxZ, byte[] flags, byte[] snowLayers,
+                                         int segmentMinZ, int segmentMaxZ, byte[] flags, byte[] snowLayers,
                                          byte[] updates) {
         if (mode == FrostSettings.MODE_RANDOM) {
             final long snowZ = (long) heightInt + 1L;
-            if (snowZ > minHeight && snowZ <= segmentMaxZ) {
-                final int snowOffset = (int) snowZ - minHeight;
+            if (snowZ > segmentMinZ && snowZ <= segmentMaxZ) {
+                final int snowOffset = (int) snowZ - segmentMinZ;
                 final int snowCell = base + snowOffset;
                 final int supportFlags = flags[base + snowOffset - 1] & 0xff;
                 if ((updates[snowCell] & 0xff) >= 3
@@ -241,11 +270,11 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
                 }
             }
         }
-        for (int z = minHeight; z <= Math.min(highestNonAir, segmentMaxZ - 1); z++) {
-            if (updates[base + z - minHeight] == 2) {
+        for (int z = segmentMinZ; z <= Math.min(highestNonAir, segmentMaxZ - 1); z++) {
+            if (updates[base + z - segmentMinZ] == 2) {
                 world.setMaterialAt(x, y, z, ICE);
                 for (int above = z + 1; above <= highestNonAir; above++) {
-                    if (updates[base + above - minHeight] == 1) {
+                    if (updates[base + above - segmentMinZ] == 1) {
                         world.setMaterialAt(x, y, above, AIR);
                     } else {
                         break;
@@ -254,10 +283,10 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
                 return;
             }
         }
-        for (int z = segmentMaxZ; z >= minHeight; z--) {
-            final int update = updates[base + z - minHeight] & 0xff;
+        for (int z = segmentMaxZ; z >= segmentMinZ; z--) {
+            final int update = updates[base + z - segmentMinZ] & 0xff;
             if (update >= 3 && update <= 10) {
-                final int below = z - minHeight - 1;
+                final int below = z - segmentMinZ - 1;
                 final int belowFlags = (below >= 0) ? flags[base + below] & 0xff : 0;
                 final boolean onLeaves = ((belowFlags & 0x08) != 0) && ((belowFlags & 0x30) != 0);
                 world.setMaterialAt(x, y, z,

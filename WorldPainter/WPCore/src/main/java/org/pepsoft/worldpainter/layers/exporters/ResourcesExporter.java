@@ -161,7 +161,7 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
      * behavior if native code is disabled or unavailable.
      */
     private boolean renderNativeResources(Tile tile, Chunk chunk, HeightMap minHeightField) {
-        if (!Native.isExportEnabled() || !NativeLoader.areSlicesAvailable()) {
+        if (!Native.isResourcesExportEnabled() || !NativeLoader.areSlicesAvailable()) {
             return false;
         }
         final int minimumLevel = ((ResourcesExporterSettings) super.settings).getMinimumLevel();
@@ -173,6 +173,8 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
         final int[] resourceValues = buffers.resourceValues;
         final double[] tinyX = buffers.tinyX, tinyY = buffers.tinyY;
         final double[] dirtX = buffers.dirtX, dirtY = buffers.dirtY;
+        int effectiveMinZ = Integer.MAX_VALUE;
+        int effectiveMaxZ = Integer.MIN_VALUE;
         for (int x = 0; x < 16; x++) {
             for (int z = 0; z < 16; z++) {
                 final int column = x * 16 + z;
@@ -210,27 +212,35 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
                 columnMinZ[column] = minHeightField != null
                         ? (int) floor(minHeightField.getHeight(worldX, worldY)) : this.minZ;
                 columnMaxZ[column] = Math.min(subsurfaceMaxHeight, maxZ);
+                final int startZ = Math.max(columnMinZ[column], this.minZ);
+                if (startZ <= columnMaxZ[column]) {
+                    effectiveMinZ = Math.min(effectiveMinZ, startZ);
+                    effectiveMaxZ = Math.max(effectiveMaxZ, columnMaxZ[column]);
+                }
             }
         }
-        final long outputLengthLong = 256L * ((long) this.maxZ - this.minZ + 1L);
+        if (effectiveMinZ > effectiveMaxZ) {
+            return true;
+        }
+        final long outputLengthLong = 256L * ((long) effectiveMaxZ - effectiveMinZ + 1L);
         if (outputLengthLong <= 0L || outputLengthLong > 1_048_576L) {
             return false;
         }
         final int outputLength = (int) outputLengthLong;
         final byte[] selected = buffers.output(outputLength);
-        if (!NativeSlices.resourceMaterialsInto(this.minZ, this.maxZ,
+        if (!NativeSlices.resourceMaterialsInto(effectiveMinZ, effectiveMaxZ,
                 tinyX, tinyY, dirtX, dirtY, columnMinZ, columnMaxZ, resourceValues,
                 nativeSeeds, minLevels, maxLevels, nativeDirtMaterials, nativeFlattenedChances, selected)) {
             return false;
         }
         final boolean nether = dimension.getAnchor().dim == DIM_NETHER;
-        final int verticalRange = this.maxZ - this.minZ + 1;
+        final int verticalRange = effectiveMaxZ - effectiveMinZ + 1;
         for (int x = 0; x < 16; x++) {
             for (int z = 0; z < 16; z++) {
                 final int column = x * 16 + z;
-                for (int y = Math.min(columnMaxZ[column], this.maxZ);
-                     y >= Math.max(columnMinZ[column], this.minZ); y--) {
-                    final int materialIndex = (selected[column * verticalRange + y - this.minZ] & 0xff) - 1;
+                for (int y = Math.min(columnMaxZ[column], effectiveMaxZ);
+                     y >= Math.max(columnMinZ[column], effectiveMinZ); y--) {
+                    final int materialIndex = (selected[column * verticalRange + y - effectiveMinZ] & 0xff) - 1;
                     if (materialIndex >= 0) {
                         final Material material = activeMaterials[materialIndex];
                         final Material existingMaterial = chunk.getMaterial(x, y, z);
@@ -266,12 +276,17 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
         private final int[] resourceValues = new int[256];
         private final double[] tinyX = new double[256], tinyY = new double[256];
         private final double[] dirtX = new double[256], dirtY = new double[256];
-        private byte[] output = new byte[0];
+        private final byte[][] outputs = new byte[8][];
+        private int nextOutputSlot;
 
         private byte[] output(int length) {
-            if (output.length != length) {
-                output = new byte[length];
+            for (byte[] candidate : outputs) {
+                if (candidate != null && candidate.length == length) {
+                    return candidate;
+                }
             }
+            final byte[] output = new byte[length];
+            outputs[nextOutputSlot++ & 7] = output;
             return output;
         }
     }

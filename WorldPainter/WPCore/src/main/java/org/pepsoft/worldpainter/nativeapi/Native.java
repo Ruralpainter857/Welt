@@ -29,6 +29,10 @@ package org.pepsoft.worldpainter.nativeapi;
  *   <li>{@code wp.native.render} : rendu 2D ;</li>
  *   <li>{@code wp.native.export} : export de monde.</li>
  * </ul>
+ * <p>Les chemins Frost et Resources restent en Java avec le seul flag export :
+ * leurs benchmarks natifs sont actuellement plus lents. Pour les mesurer
+ * séparément, activer aussi {@code wp.native.export.frost} ou
+ * {@code wp.native.export.resources}.</p>
  *
  * <p>La valeur par défaut de chaque flag est {@code false} : sans configuration
  * explicite, WorldPainter utilise le chemin Java historique, garantissant
@@ -56,6 +60,10 @@ public final class Native {
      * Clé de propriété système du volet « export ».
      */
     public static final String EXPORT_KEY = "wp.native.export";
+
+    /** Slower export slices require explicit opt-in even when export acceleration is enabled. */
+    public static final String FROST_EXPORT_KEY = "wp.native.export.frost";
+    public static final String RESOURCES_EXPORT_KEY = "wp.native.export.resources";
 
     private static final String DEFAULT_VALUE = "false";
 
@@ -104,6 +112,16 @@ public final class Native {
      */
     public static boolean isExportEnabled() {
         return Boolean.parseBoolean(System.getProperty(EXPORT_KEY, DEFAULT_VALUE));
+    }
+
+    public static boolean isFrostExportEnabled() {
+        return isExportEnabled()
+                && Boolean.parseBoolean(System.getProperty(FROST_EXPORT_KEY, DEFAULT_VALUE));
+    }
+
+    public static boolean isResourcesExportEnabled() {
+        return isExportEnabled()
+                && Boolean.parseBoolean(System.getProperty(RESOURCES_EXPORT_KEY, DEFAULT_VALUE));
     }
 
     /**

@@ -9,7 +9,7 @@ import java.nio.file.Path;
 
 import static org.junit.Assume.assumeTrue;
 
-/** Opt-in whole-world benchmark: run with -Dwelt.resource.benchmark=true and wp.native.export=true. */
+/** Opt-in whole-world benchmark: run with -Dwelt.resource.benchmark=true. */
 public final class ResourceExporterBenchmarkTest {
     @Test
     public void measureNativeWholeWorldExports() throws Exception {
@@ -17,6 +17,7 @@ public final class ResourceExporterBenchmarkTest {
         final String oldUserDir = System.getProperty("user.dir");
         final String oldUserHome = System.getProperty("user.home");
         final String oldFlag = System.getProperty(Native.EXPORT_KEY);
+        final String oldResourcesFlag = System.getProperty(Native.RESOURCES_EXPORT_KEY);
         final Path root = Files.createTempDirectory("welt-resource-export-bench-");
         final File world = new File("../WPGUI/src/test/resources/Generated World.world").getCanonicalFile();
         try {
@@ -25,12 +26,14 @@ public final class ResourceExporterBenchmarkTest {
             Files.createDirectories(root.resolve("native"));
             Files.createDirectories(root.resolve("native-home"));
             Native.setExportEnabled(true);
+            System.setProperty(Native.RESOURCES_EXPORT_KEY, "true");
             System.out.println("Resource export native campaign; work root=" + root.resolve("native"));
             ExportPerformanceTester.main(new String[]{world.getAbsolutePath()});
         } finally {
             restore("user.dir", oldUserDir);
             restore("user.home", oldUserHome);
             restore(Native.EXPORT_KEY, oldFlag);
+            restore(Native.RESOURCES_EXPORT_KEY, oldResourcesFlag);
         }
     }
 

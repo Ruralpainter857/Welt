@@ -63,6 +63,7 @@ public final class FrostExporterBenchmark {
     private static double measure(FrostExporter exporter, MinecraftWorld world,
                                   Rectangle area, boolean nativePath) {
         Native.setExportEnabled(nativePath);
+        System.setProperty(Native.FROST_EXPORT_KEY, Boolean.toString(nativePath));
         final long start = System.nanoTime();
         exporter.addFeatures(area, area, world);
         final long elapsed = System.nanoTime() - start;

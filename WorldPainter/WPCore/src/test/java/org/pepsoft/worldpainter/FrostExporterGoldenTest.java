@@ -50,9 +50,12 @@ public final class FrostExporterGoldenTest {
 
     private static String runRandomBatch(boolean nativeEnabled) {
         final String previousFlag = System.getProperty(Native.EXPORT_KEY);
+        final String previousFrostFlag = System.getProperty(Native.FROST_EXPORT_KEY);
         Native.setExportEnabled(nativeEnabled);
+        System.setProperty(Native.FROST_EXPORT_KEY, Boolean.toString(nativeEnabled));
         try {
-            final Rectangle area = new Rectangle(0, 0, 4, 3);
+            // Cross multiple JNI batch boundaries while preserving RNG order.
+            final Rectangle area = new Rectangle(0, 0, 32, 32);
             final Dimension dimension = TestData.createDimension(DIMENSION_AREA, 62);
             final MinecraftWorld world = TestData.createMinecraftWorld(area, 62, GRASS_BLOCK);
             // This column freezes before drawing snow, so it checks that later
@@ -97,12 +100,15 @@ public final class FrostExporterGoldenTest {
             } else {
                 System.setProperty(Native.EXPORT_KEY, previousFlag);
             }
+            restoreFrostFlag(previousFrostFlag);
         }
     }
 
     private static void assertProductionOutputMatchesGolden(boolean nativeEnabled) throws Exception {
         final String previousFlag = System.getProperty(Native.EXPORT_KEY);
+        final String previousFrostFlag = System.getProperty(Native.FROST_EXPORT_KEY);
         Native.setExportEnabled(nativeEnabled);
+        System.setProperty(Native.FROST_EXPORT_KEY, Boolean.toString(nativeEnabled));
         final String requestedOutput = System.getProperty("welt.frost.golden.output");
         final Path generated = Files.createTempFile("welt-frost-golden-", ".txt");
         try {
@@ -122,6 +128,15 @@ public final class FrostExporterGoldenTest {
             } else {
                 System.setProperty(Native.EXPORT_KEY, previousFlag);
             }
+            restoreFrostFlag(previousFrostFlag);
+        }
+    }
+
+    private static void restoreFrostFlag(String previous) {
+        if (previous == null) {
+            System.clearProperty(Native.FROST_EXPORT_KEY);
+        } else {
+            System.setProperty(Native.FROST_EXPORT_KEY, previous);
         }
     }
 
