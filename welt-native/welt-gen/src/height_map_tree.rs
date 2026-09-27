@@ -317,14 +317,8 @@ pub fn fill_height_map_tree(
                 } => {
                     let x = origin_x.wrapping_add((cell % width) as i32) as f32;
                     let y = origin_y.wrapping_add((cell / width) as i32) as f32;
-                    stack[stack_depth] = nine_patch_height(
-                        x,
-                        y,
-                        inner_size,
-                        border_size,
-                        coast_size,
-                        height,
-                    );
+                    stack[stack_depth] =
+                        nine_patch_height(x, y, inner_size, border_size, coast_size, height);
                     stack_depth += 1;
                 }
                 ParsedNode::Add => {
