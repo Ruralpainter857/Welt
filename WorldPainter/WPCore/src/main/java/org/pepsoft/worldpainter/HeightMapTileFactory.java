@@ -10,6 +10,7 @@ import org.pepsoft.worldpainter.heightMaps.ConstantHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import org.pepsoft.worldpainter.themes.SimpleTheme;
 import org.pepsoft.worldpainter.themes.Theme;
 
@@ -139,8 +140,24 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             final boolean batchFreshSimpleTheme = freshSimpleTheme && isBatchSafeHeightMap(heightMap);
             final GenerationBuffers buffers = batchFreshSimpleTheme ? GENERATION_BUFFERS.get() : null;
             double[] nativeHeights = null;
+            boolean nativeHeightMapTreeSucceeded = false;
+            if (batchFreshSimpleTheme && Native.isGenEnabled()
+                    && buffers.prepareHeightMapProgram(heightMap)
+                    && buffers.heightMapNoiseCount > 0) {
+                final double[] output = buffers.nativeHeights();
+                if (NativeSlices.fillHeightMapTree(worldTileX, worldTileY,
+                        TILE_SIZE, TILE_SIZE, buffers.heightMapNodeCount,
+                        buffers.heightMapOpcodes, buffers.heightMapValues,
+                        buffers.heightMapScales, buffers.heightMapOctaves,
+                        buffers.heightMapSeeds, output)) {
+                    nativeHeights = output;
+                    nativeHeightMapTreeSucceeded = true;
+                }
+            }
             if (nativeNoiseMap != null) {
-                if (batchFreshSimpleTheme) {
+                if (nativeHeights != null) {
+                    // The whole pure Sum/Noise expression has already been evaluated natively.
+                } else if (batchFreshSimpleTheme) {
                     if (Native.isGenEnabled()) {
                         final double[] output = buffers.nativeHeights();
                         if (nativeNoiseMap.fillNativeHeights(worldTileX, worldTileY,
@@ -161,7 +178,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                         final double rawHeight;
                         if (nativeHeights != null) {
                             final double noise = nativeHeights[y * TILE_SIZE + x];
-                            rawHeight = (nativeNoiseMap == heightMap) ? noise
+                            rawHeight = nativeHeightMapTreeSucceeded || (nativeNoiseMap == heightMap) ? noise
                                     : (nativeConstantFirst ? nativeConstant + noise : noise + nativeConstant);
                         } else {
                             rawHeight = heightMap.getHeight(blockX, blockY);
@@ -190,7 +207,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                     final double rawHeight;
                     if (nativeHeights != null) {
                         final double noise = nativeHeights[y * TILE_SIZE + x];
-                        rawHeight = (nativeNoiseMap == heightMap) ? noise
+                        rawHeight = nativeHeightMapTreeSucceeded || (nativeNoiseMap == heightMap) ? noise
                                 : (nativeConstantFirst ? nativeConstant + noise : noise + nativeConstant);
                     } else {
                         rawHeight = heightMap.getHeight(blockX, blockY);
@@ -231,7 +248,55 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         private final float[] heights = new float[TILE_SIZE * TILE_SIZE];
         private final int[] intHeights = new int[TILE_SIZE * TILE_SIZE];
         private final byte[] terrainOrdinals = new byte[TILE_SIZE * TILE_SIZE];
+        private final int[] heightMapOpcodes = new int[64];
+        private final double[] heightMapValues = new double[64];
+        private final double[] heightMapScales = new double[64];
+        private final int[] heightMapOctaves = new int[64];
+        private final long[] heightMapSeeds = new long[64];
+        private int heightMapNodeCount;
+        private int heightMapNoiseCount;
         private double[] nativeHeightValues;
+
+        private boolean prepareHeightMapProgram(HeightMap heightMap) {
+            heightMapNodeCount = 0;
+            heightMapNoiseCount = 0;
+            return appendHeightMapNode(heightMap);
+        }
+
+        private boolean appendHeightMapNode(HeightMap heightMap) {
+            if (heightMapNodeCount >= heightMapOpcodes.length) {
+                return false;
+            }
+            final int index = heightMapNodeCount;
+            if (heightMap.getClass() == ConstantHeightMap.class) {
+                heightMapOpcodes[index] = 0;
+                heightMapValues[index] = ((ConstantHeightMap) heightMap).getHeight();
+                heightMapNodeCount++;
+                return true;
+            }
+            if (heightMap.getClass() == NoiseHeightMap.class) {
+                final NoiseHeightMap noise = (NoiseHeightMap) heightMap;
+                heightMapOpcodes[index] = 1;
+                heightMapValues[index] = noise.getHeight();
+                heightMapScales[index] = noise.getScale();
+                heightMapOctaves[index] = noise.getOctaves();
+                heightMapSeeds[index] = noise.getSeed() + noise.getSeedOffset();
+                heightMapNoiseCount++;
+                heightMapNodeCount++;
+                return true;
+            }
+            if (heightMap.getClass() == SumHeightMap.class) {
+                final SumHeightMap sum = (SumHeightMap) heightMap;
+                if (!appendHeightMapNode(sum.getHeightMap1())
+                        || !appendHeightMapNode(sum.getHeightMap2())
+                        || heightMapNodeCount >= heightMapOpcodes.length) {
+                    return false;
+                }
+                heightMapOpcodes[heightMapNodeCount++] = 2;
+                return true;
+            }
+            return false;
+        }
 
         private double[] nativeHeights() {
             if (nativeHeightValues == null) {

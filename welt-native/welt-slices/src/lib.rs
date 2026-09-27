@@ -11,6 +11,7 @@ use welt_export::frost::{
     apply_frost_column, apply_frost_packed_columns, FrostCell, FrostMode, FrostSettings,
     FrostUpdate,
 };
+use welt_gen::height_map_tree::{fill_height_map_tree, HeightMapNode, MAX_PROGRAM_NODES};
 use welt_gen::noise_height_map::NoiseHeightMapBulk;
 use welt_gen::resource_noise::fill_resource_materials;
 use welt_gen::theme_terrain::SimpleThemeTerrainBulk;
@@ -483,6 +484,126 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             );
             drop(output_values);
             if fill_result.is_err() {
+                return WeltError::IllegalArgument as jint;
+            }
+            WeltError::Ok as jint
+        })
+    }
+}
+
+/// Evaluate a post-order tree of constants, noise maps and additions in bulk.
+///
+/// # Safety
+/// All array references must be valid JNI references from this JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFillHeightMapTree(
+    env: *mut JNIEnv,
+    _class: jclass,
+    origin_x: jint,
+    origin_y: jint,
+    width: jint,
+    height: jint,
+    node_count: jint,
+    opcodes: jobject,
+    values: jobject,
+    scales: jobject,
+    octaves: jobject,
+    seeds: jobject,
+    output: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if [opcodes, values, scales, octaves, seeds, output]
+                .iter()
+                .any(|array| array.is_null())
+                || width <= 0
+                || height <= 0
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            let Some(area) = (width as usize).checked_mul(height as usize) else {
+                return WeltError::IllegalArgument as jint;
+            };
+            if area > 1_048_576 {
+                return WeltError::IllegalArgument as jint;
+            }
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            if node_count <= 0
+                || node_count as usize > MAX_PROGRAM_NODES
+                || get_array_length(env, opcodes) < node_count
+                || get_array_length(env, values) < node_count
+                || get_array_length(env, scales) < node_count
+                || get_array_length(env, octaves) < node_count
+                || get_array_length(env, seeds) < node_count
+                || get_array_length(env, output) != area as jint
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+
+            type GetIntArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i32);
+            type GetDoubleArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut f64);
+            type GetLongArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i64);
+            let get_ints: GetIntArrayRegion =
+                std::mem::transmute(function(env, GET_INT_ARRAY_REGION));
+            let get_doubles: GetDoubleArrayRegion =
+                std::mem::transmute(function(env, GET_DOUBLE_ARRAY_REGION));
+            let get_longs: GetLongArrayRegion =
+                std::mem::transmute(function(env, GET_LONG_ARRAY_REGION));
+            let count = node_count as usize;
+            let mut raw_opcodes = vec![0_i32; count];
+            let mut raw_values = vec![0.0_f64; count];
+            let mut raw_scales = vec![0.0_f64; count];
+            let mut raw_octaves = vec![0_i32; count];
+            let mut raw_seeds = vec![0_i64; count];
+            get_ints(env, opcodes, 0, node_count, raw_opcodes.as_mut_ptr());
+            get_doubles(env, values, 0, node_count, raw_values.as_mut_ptr());
+            get_doubles(env, scales, 0, node_count, raw_scales.as_mut_ptr());
+            get_ints(env, octaves, 0, node_count, raw_octaves.as_mut_ptr());
+            get_longs(env, seeds, 0, node_count, raw_seeds.as_mut_ptr());
+            let mut nodes = Vec::with_capacity(count);
+            for index in 0..count {
+                nodes.push(match raw_opcodes[index] {
+                    0 => HeightMapNode::Constant(raw_values[index]),
+                    1 => HeightMapNode::Noise {
+                        d_height: raw_values[index],
+                        scale: raw_scales[index],
+                        octaves: raw_octaves[index],
+                        effective_seed: raw_seeds[index],
+                    },
+                    2 => HeightMapNode::Add,
+                    _ => return WeltError::IllegalArgument as jint,
+                });
+            }
+
+            type GetDoubleArrayElements =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, *mut u8) -> *mut f64;
+            let get_elements: GetDoubleArrayElements =
+                std::mem::transmute(function(env, GET_DOUBLE_ARRAY_ELEMENTS));
+            let output_ptr = get_elements(env, output, std::ptr::null_mut());
+            if output_ptr.is_null() {
+                return WeltError::Internal as jint;
+            }
+            let mut output_values = DoubleArrayOutput {
+                env,
+                array: output,
+                values: output_ptr,
+                length: area,
+            };
+            let result = fill_height_map_tree(
+                &nodes,
+                origin_x,
+                origin_y,
+                width as usize,
+                height as usize,
+                output_values.as_mut_slice(),
+            );
+            drop(output_values);
+            if result.is_err() {
                 return WeltError::IllegalArgument as jint;
             }
             WeltError::Ok as jint

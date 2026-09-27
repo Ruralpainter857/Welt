@@ -60,6 +60,47 @@ public final class SimpleThemeFreshTileParityTest {
     }
 
     @Test
+    public void nativeNestedSumHeightMapsMatchJavaFreshTile() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        try {
+            final HeightMap javaMap = new SumHeightMap(
+                    new SumHeightMap(new ConstantHeightMap(42.25),
+                            new NoiseHeightMap(17.5, 0.75, 2, -0x1020_3040L)),
+                    new NoiseHeightMap(8.25, 1.5, 4, 0x5566_7788L));
+            final HeightMap nativeMap = new SumHeightMap(
+                    new SumHeightMap(new ConstantHeightMap(42.25),
+                            new NoiseHeightMap(17.5, 0.75, 2, -0x1020_3040L)),
+                    new NoiseHeightMap(8.25, 1.5, 4, 0x5566_7788L));
+            final HeightMapTileFactory javaFactory = new HeightMapTileFactory(73L, javaMap,
+                    0, 256, false, createSimpleTheme(true));
+            final HeightMapTileFactory nativeFactory = new HeightMapTileFactory(73L, nativeMap,
+                    0, 256, false, createSimpleTheme(false));
+            Native.setGenEnabled(false);
+            final Tile javaTile = javaFactory.createTile(-2, 5);
+            Native.setGenEnabled(true);
+            final Tile nativeTile = nativeFactory.createTile(-2, 5);
+            for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                    assertEquals("height at " + x + ',' + y,
+                            Float.floatToRawIntBits(javaTile.getHeight(x, y)),
+                            Float.floatToRawIntBits(nativeTile.getHeight(x, y)));
+                    assertEquals("water at " + x + ',' + y,
+                            javaTile.getWaterLevel(x, y), nativeTile.getWaterLevel(x, y));
+                    assertEquals("terrain at " + x + ',' + y,
+                            javaTile.getTerrain(x, y), nativeTile.getTerrain(x, y));
+                }
+            }
+        } finally {
+            if (previousFlag == null) {
+                System.clearProperty(Native.GEN_KEY);
+            } else {
+                System.setProperty(Native.GEN_KEY, previousFlag);
+            }
+        }
+    }
+
+    @Test
     public void javaHeightMapSimpleThemeBatchMatchesPerCellFallback() {
         final HeightMap heightMap = new SumHeightMap(new ConstantHeightMap(30), new ConstantHeightMap(32));
         final HeightMapTileFactory referenceFactory = new HeightMapTileFactory(42L, heightMap,
