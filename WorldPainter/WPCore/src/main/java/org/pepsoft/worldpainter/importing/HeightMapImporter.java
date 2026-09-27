@@ -13,6 +13,7 @@ import org.pepsoft.util.ProgressReceiver;
 import org.pepsoft.util.swing.TileProvider;
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.*;
+import org.pepsoft.worldpainter.heightMaps.BicubicHeightMap;
 import org.pepsoft.worldpainter.heightMaps.BitmapHeightMap;
 import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
 import org.pepsoft.worldpainter.history.HistoryEntry;
@@ -143,6 +144,9 @@ public class HeightMapImporter {
         final int totalTileCount = extentInTiles.width * extentInTiles.height;
         final int floor = Math.max(worldWaterLevel - 20, minHeight);
         final int variation = Math.min(15, (worldWaterLevel - floor) / 2);
+        final BitmapSampler bitmapSampler = getBitmapSampler(heightMap);
+        final double[] tileImageLevels = (bitmapSampler != null) ? new double[TILE_SIZE * TILE_SIZE] : null;
+        final double[] bitmapRowSamples = (bitmapSampler != null) ? new double[TILE_SIZE] : null;
         final PerlinNoise noiseGenerator = new PerlinNoise(0);
         noiseGenerator.setSeed(dimension.getSeed());
         int tileCount = 0;
@@ -167,12 +171,22 @@ public class HeightMapImporter {
                 }
                 final int xOffset = tileX << TILE_SIZE_BITS;
                 final int yOffset = tileY << TILE_SIZE_BITS;
+                final boolean imageLevelsAvailable = (bitmapSampler != null)
+                        && (bitmapSampler.repeat
+                        ? bitmapSampler.bitmap.fillRepeatedSamples(
+                                xOffset - bitmapSampler.offsetX, yOffset - bitmapSampler.offsetY,
+                                TILE_SIZE, TILE_SIZE, tileImageLevels, bitmapRowSamples)
+                        : bitmapSampler.bitmap.fillSamples(
+                                xOffset - bitmapSampler.offsetX, yOffset - bitmapSampler.offsetY,
+                                TILE_SIZE, TILE_SIZE, tileImageLevels, bitmapRowSamples));
                 for (int x = 0; x < TILE_SIZE; x++) {
                     for (int y = 0; y < TILE_SIZE; y++) {
                         final int imageX = xOffset + x;
                         final int imageY = yOffset + y;
                         if ((imageX >= x1) && (imageX <= x2) && (imageY >= y1) && (imageY <= y2)) {
-                            final double imageLevel = heightMap.getHeight(imageX, imageY);
+                            final double imageLevel = imageLevelsAvailable
+                                    ? tileImageLevels[x + (y << TILE_SIZE_BITS)]
+                                    : heightMap.getHeight(imageX, imageY);
                             final float height = calculateHeight(imageLevel);
                             if (onlyRaise && (! tileIsNew)) {
                                 if (height > tile.getHeight(x, y)) {
@@ -406,6 +420,54 @@ public class HeightMapImporter {
         int tileX2 = (extent.x + extent.width - 1) >> TILE_SIZE_BITS;
         int tileY2 = (extent.y + extent.height - 1) >> TILE_SIZE_BITS;
         extentInTiles = new Rectangle(tileX1, tileY1, tileX2 - tileX1 + 1, tileY2 - tileY1 + 1);
+    }
+
+    /** Returns a raster source for image maps whose integer sampling is a pure bitmap lookup. */
+    private static BitmapSampler getBitmapSampler(HeightMap heightMap) {
+        if (heightMap.getClass() == BitmapHeightMap.class) {
+            return new BitmapSampler((BitmapHeightMap) heightMap, 0, 0, false);
+        }
+        if (heightMap.getClass() == BicubicHeightMap.class) {
+            final BicubicHeightMap bicubic = (BicubicHeightMap) heightMap;
+            if (bicubic.getHeightMap(0).getClass() == BitmapHeightMap.class) {
+                return new BitmapSampler((BitmapHeightMap) bicubic.getHeightMap(0),
+                        0, 0, bicubic.isRepeat());
+            }
+            return null;
+        }
+        if (heightMap.getClass() == TransformingHeightMap.class) {
+            final TransformingHeightMap transforming = (TransformingHeightMap) heightMap;
+            if ((transforming.getScaleX() != 1.0f) || (transforming.getScaleY() != 1.0f)
+                    || (transforming.getRotation() != 0.0f)) {
+                return null;
+            }
+            final HeightMap base = transforming.getBaseHeightMap();
+            if (base.getClass() == BitmapHeightMap.class) {
+                return new BitmapSampler((BitmapHeightMap) base,
+                        transforming.getOffsetX(), transforming.getOffsetY(), false);
+            }
+            if (base.getClass() == BicubicHeightMap.class) {
+                final BicubicHeightMap bicubic = (BicubicHeightMap) base;
+                if (bicubic.getHeightMap(0).getClass() == BitmapHeightMap.class) {
+                    return new BitmapSampler((BitmapHeightMap) bicubic.getHeightMap(0),
+                            transforming.getOffsetX(), transforming.getOffsetY(), bicubic.isRepeat());
+                }
+            }
+        }
+        return null;
+    }
+
+    private static final class BitmapSampler {
+        private BitmapSampler(BitmapHeightMap bitmap, int offsetX, int offsetY, boolean repeat) {
+            this.bitmap = bitmap;
+            this.offsetX = offsetX;
+            this.offsetY = offsetY;
+            this.repeat = repeat;
+        }
+
+        private final BitmapHeightMap bitmap;
+        private final int offsetX, offsetY;
+        private final boolean repeat;
     }
 
     private float calculateHeight(final double imageLevel) {
