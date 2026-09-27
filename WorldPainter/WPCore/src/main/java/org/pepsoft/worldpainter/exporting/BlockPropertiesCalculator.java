@@ -12,6 +12,7 @@ import org.pepsoft.worldpainter.Platform;
 
 import java.util.Arrays;
 import java.util.BitSet;
+import java.util.IdentityHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static java.lang.Math.max;
@@ -51,6 +52,7 @@ import static org.pepsoft.worldpainter.exporting.WorldExportSettings.Step.LIGHTI
 public class BlockPropertiesCalculator {
     private static final String FRONTIER_PROPERTY = "welt.export.blockPropertiesFrontier";
     private static final String FRONTIER_PROFILE_PROPERTY = "welt.export.profileBlockPropertiesFrontier";
+    private static final String DISABLE_INITIAL_HEIGHT_CACHE_PROPERTY = "welt.export.disableInitialHeightCache";
     private static final AtomicLong FRONTIER_PROFILE_PASSES = new AtomicLong();
     private static final AtomicLong FRONTIER_PROFILE_RECTANGLE_CELLS = new AtomicLong();
     private static final AtomicLong FRONTIER_PROFILE_PROCESSED_CELLS = new AtomicLong();
@@ -113,7 +115,11 @@ public class BlockPropertiesCalculator {
         for (int chunkZ = z1InChunks; chunkZ <= z2InChunks; chunkZ++) {
             for (int chunkX = x1InChunks; chunkX <= x2InChunks; chunkX++) {
                 final Chunk chunk = world.getChunk(chunkX, chunkZ);
-                final int highestPossibleAffectedBlock = (chunk != null) ? Math.min(chunk.getHighestNonAirBlock() + 15, maxHeight - 1) : Integer.MIN_VALUE;
+                final Integer cachedHighestNonAirBlock = (chunk != null && initialChunkHeightCache != null)
+                        ? initialChunkHeightCache.remove(chunk) : null;
+                final int highestPossibleAffectedBlock = (chunk != null)
+                        ? Math.min(((cachedHighestNonAirBlock != null) ? cachedHighestNonAirBlock : chunk.getHighestNonAirBlock()) + 15, maxHeight - 1)
+                        : Integer.MIN_VALUE;
                 // Make sure the surrounding chunks are also at least as high, since blocks from this chunk could affect
                 // the block lighting in them
                 for (int dz = -1; dz <= 1; dz++) {
@@ -126,6 +132,12 @@ public class BlockPropertiesCalculator {
                     }
                 }
             }
+        }
+        // The cache only bridges the initial per-chunk pass and this area setup. Do not retain chunks
+        // outside the dirty area, or keep references alive for later propagation passes.
+        if (initialChunkHeightCache != null) {
+            initialChunkHeightCache.clear();
+            initialChunkHeightCache = null;
         }
         useChangedBlockFrontier = Boolean.getBoolean(FRONTIER_PROPERTY);
         if (useChangedBlockFrontier) {
@@ -347,6 +359,12 @@ public class BlockPropertiesCalculator {
      */
     public int[] firstPass(Chunk chunk) {
         final int highestNonAirBlock = chunk.getHighestNonAirBlock();
+        if (cacheInitialChunkHeights) {
+            if (initialChunkHeightCache == null) {
+                initialChunkHeightCache = new IdentityHashMap<>();
+            }
+            initialChunkHeightCache.put(chunk, highestNonAirBlock);
+        }
         for (int x = 0; x < 16; x++) {
             Arrays.fill(DAYLIGHT[x], true);
             Arrays.fill(HEIGHT[x], clamp(minHeight, highestNonAirBlock, maxHeight - 1));
@@ -754,6 +772,8 @@ public class BlockPropertiesCalculator {
     private final MinecraftWorld world;
     private final boolean skyLight, blockLight, leafDistance, removeFloatingLeaves;
     private final int minHeight, maxHeight, waterOpacity;
+    private final boolean cacheInitialChunkHeights = !Boolean.getBoolean(DISABLE_INITIAL_HEIGHT_CACHE_PROPERTY);
+    private IdentityHashMap<Chunk, Integer> initialChunkHeightCache;
     private Box originalDirtyArea, dirtyArea;
     private int[][] maxHeights;
     private int maxHeightsXOffset, maxHeightsZOffset;

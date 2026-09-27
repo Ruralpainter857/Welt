@@ -212,6 +212,7 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
         final String oldBlockPropertiesFrontier = System.getProperty("welt.export.blockPropertiesFrontier");
         final String oldBlockPropertiesFrontierProfile = System.getProperty("welt.export.profileBlockPropertiesFrontier");
         final String oldCaptureProfile = System.getProperty("welt.export.profileChunkCapture");
+        final String oldDisableInitialHeightCache = System.getProperty("welt.export.disableInitialHeightCache");
         final Path root = Files.createTempDirectory("welt-full-export-campaign-");
         try {
             System.setProperty("user.home", root.resolve("home").toString());
@@ -233,6 +234,56 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
             // rectangular scan on complete exports, and compare decompressed
             // chunk NBT before including the candidate in the main campaign.
             final Mode javaOnly = new Mode("frontier", false, false, false);
+            if (Boolean.getBoolean("welt.export.heightCacheOnly")) {
+                final List<Long> cachedNanos = new ArrayList<>(), uncachedNanos = new ArrayList<>();
+                final List<Long> cachedHeapPeaks = new ArrayList<>(), uncachedHeapPeaks = new ArrayList<>();
+                final List<Long> cachedHeapGrowth = new ArrayList<>(), uncachedHeapGrowth = new ArrayList<>();
+                final List<Long> cachedRssPeaks = new ArrayList<>(), uncachedRssPeaks = new ArrayList<>();
+                final List<Long> cachedRssGrowth = new ArrayList<>(), uncachedRssGrowth = new ArrayList<>();
+                Path cachedOutput = null, uncachedOutput = null;
+                System.setProperty("welt.export.blockPropertiesFrontier", "false");
+                for (int warmup = 0; warmup < 2; warmup++) {
+                    final boolean reverse = (warmup & 1) != 0;
+                    for (int position = 0; position < 2; position++) {
+                        final boolean cached = (position == 1) != reverse;
+                        System.setProperty("welt.export.disableInitialHeightCache", Boolean.toString(!cached));
+                        runExport(world, root, javaOnly, "height-cache-warmup-" + warmup + "-" + cached, false);
+                    }
+                }
+                for (int round = 0; round < 5; round++) {
+                    final boolean reverse = (round & 1) != 0;
+                    for (int position = 0; position < 2; position++) {
+                        final boolean cached = (position == 1) != reverse;
+                        System.setProperty("welt.export.disableInitialHeightCache", Boolean.toString(!cached));
+                        final RunResult result = runExport(world, root, javaOnly,
+                                "height-cache-round-" + round + "-" + cached, false);
+                        (cached ? cachedNanos : uncachedNanos).add(result.wallNanos);
+                        (cached ? cachedHeapPeaks : uncachedHeapPeaks).add(result.peakHeapBytes);
+                        (cached ? cachedHeapGrowth : uncachedHeapGrowth).add(result.peakHeapGrowthBytes());
+                        (cached ? cachedRssPeaks : uncachedRssPeaks).add(result.peakRssBytes);
+                        (cached ? cachedRssGrowth : uncachedRssGrowth).add(result.peakRssGrowthBytes());
+                        if (round == 4) {
+                            if (cached) cachedOutput = result.output;
+                            else uncachedOutput = result.output;
+                        }
+                    }
+                }
+                assertRegionsEqual("initial-height-cache", readRegions(uncachedOutput), readRegions(cachedOutput));
+                final long cachedMedian = median(cachedNanos), uncachedMedian = median(uncachedNanos);
+                System.out.printf("Cache de hauteur export complet: sans cache %.3f s, cache %.3f s, ratio %.3fx; "
+                                + "heap pic/hausse %.1f/%.1f vs %.1f/%.1f MiB; RSS pic/hausse %s/%s vs %s/%s; "
+                                + "essais sans cache %s, cache %s; parité NBT sur %d chunks.%n",
+                        uncachedMedian / 1_000_000_000.0, cachedMedian / 1_000_000_000.0,
+                        (double) uncachedMedian / cachedMedian,
+                        median(uncachedHeapPeaks) / 1048576.0, median(uncachedHeapGrowth) / 1048576.0,
+                        median(cachedHeapPeaks) / 1048576.0, median(cachedHeapGrowth) / 1048576.0,
+                        formatMiB(medianAvailable(uncachedRssPeaks)),
+                        formatMiB(medianAvailable(uncachedRssGrowth)),
+                        formatMiB(medianAvailable(cachedRssPeaks)),
+                        formatMiB(medianAvailable(cachedRssGrowth)),
+                        seconds(uncachedNanos), seconds(cachedNanos), countChunks(readRegions(cachedOutput)));
+                return;
+            }
             final List<Long> rectangleNanos = new ArrayList<>(), frontierNanos = new ArrayList<>();
             final List<Long> rectangleHeapPeaks = new ArrayList<>(), frontierHeapPeaks = new ArrayList<>();
             final List<Long> rectangleHeapGrowth = new ArrayList<>(), frontierHeapGrowth = new ArrayList<>();
@@ -458,6 +509,7 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
             restore("welt.export.blockPropertiesFrontier", oldBlockPropertiesFrontier);
             restore("welt.export.profileBlockPropertiesFrontier", oldBlockPropertiesFrontierProfile);
             restore("welt.export.profileChunkCapture", oldCaptureProfile);
+            restore("welt.export.disableInitialHeightCache", oldDisableInitialHeightCache);
         }
     }
 
