@@ -218,27 +218,47 @@ public final class NativeSlices {
                                           final int[] materialMinZ, final int[] materialMaxZ,
                                           final byte[] dirtMaterials, final float[] chances) {
         final long height = (long) maxZ - minZ + 1L;
+        if (height <= 0L || height > 4096L || tinyX == null || tinyX.length == 0
+                || tinyX.length > 256 || tinyX.length * height > 1_048_576L) {
+            return null;
+        }
+        final byte[] output = new byte[(int) (tinyX.length * height)];
+        return resourceMaterialsInto(minZ, maxZ, tinyX, tinyY, dirtX, dirtY,
+                columnMinZ, columnMaxZ, resourceValues, seeds, materialMinZ,
+                materialMaxZ, dirtMaterials, chances, output) ? output : null;
+    }
+
+    /** Fills a caller-owned result buffer to avoid one allocation per chunk. */
+    public static boolean resourceMaterialsInto(final int minZ, final int maxZ,
+                                          final double[] tinyX, final double[] tinyY,
+                                          final double[] dirtX, final double[] dirtY,
+                                          final int[] columnMinZ, final int[] columnMaxZ,
+                                          final int[] resourceValues, final long[] seeds,
+                                          final int[] materialMinZ, final int[] materialMaxZ,
+                                          final byte[] dirtMaterials, final float[] chances,
+                                          final byte[] output) {
+        final long height = (long) maxZ - minZ + 1L;
         if (!Native.isExportEnabled() || !NativeLoader.areSlicesAvailable()
                 || tinyX == null || tinyY == null || dirtX == null || dirtY == null
                 || columnMinZ == null || columnMaxZ == null || resourceValues == null
                 || seeds == null || materialMinZ == null || materialMaxZ == null
-                || dirtMaterials == null || chances == null || minZ > maxZ
+                || dirtMaterials == null || chances == null || output == null || minZ > maxZ
                 || height > 4096L || tinyX.length == 0 || tinyX.length > 256
                 || tinyY.length != tinyX.length || dirtX.length != tinyX.length
                 || dirtY.length != tinyX.length || columnMinZ.length != tinyX.length
                 || columnMaxZ.length != tinyX.length || resourceValues.length != tinyX.length
                 || seeds.length > 64 || materialMinZ.length != seeds.length
                 || materialMaxZ.length != seeds.length || dirtMaterials.length != seeds.length
-                || chances.length != seeds.length * 16L || tinyX.length * height > 1_048_576L) {
-            return null;
+                || chances.length != seeds.length * 16L || tinyX.length * height > 1_048_576L
+                || output.length != tinyX.length * height) {
+            return false;
         }
-        final byte[] output = new byte[(int) (tinyX.length * height)];
         try {
             return nativeFillResourceMaterials(minZ, maxZ, tinyX, tinyY, dirtX, dirtY,
                     columnMinZ, columnMaxZ, resourceValues, seeds, materialMinZ,
-                    materialMaxZ, dirtMaterials, chances, output) == 0 ? output : null;
+                    materialMaxZ, dirtMaterials, chances, output) == 0;
         } catch (final UnsatisfiedLinkError e) {
-            return null;
+            return false;
         }
     }
 

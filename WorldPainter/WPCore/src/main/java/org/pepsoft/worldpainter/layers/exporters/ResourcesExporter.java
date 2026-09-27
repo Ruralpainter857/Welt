@@ -69,6 +69,14 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
                 noiseGenerators[i].setSeed(dimension.getSeed() + seedOffsets[i]);
             }
         }
+        nativeSeeds = new long[this.activeMaterials.length];
+        nativeDirtMaterials = new byte[this.activeMaterials.length];
+        nativeFlattenedChances = new float[this.activeMaterials.length * 16];
+        for (int i = 0; i < this.activeMaterials.length; i++) {
+            nativeSeeds[i] = noiseGenerators[i].getSeed();
+            nativeDirtMaterials[i] = (byte) (this.activeMaterials[i].isNamedOneOf(MC_DIRT, MC_GRAVEL) ? 1 : 0);
+            System.arraycopy(chances[i], 0, nativeFlattenedChances, i * 16, 16);
+        }
     }
 
     @Override
@@ -159,16 +167,18 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
         final int minimumLevel = ((ResourcesExporterSettings) super.settings).getMinimumLevel();
         final int xOffset = (chunk.getxPos() & 7) << 4;
         final int zOffset = (chunk.getzPos() & 7) << 4;
-        final int[] columnMinZ = new int[256];
-        final int[] columnMaxZ = new int[256];
-        final int[] resourceValues = new int[256];
-        final double[] tinyX = new double[256], tinyY = new double[256];
-        final double[] dirtX = new double[256], dirtY = new double[256];
+        final NativeResourceBuffers buffers = nativeResourceBuffers.get();
+        final int[] columnMinZ = buffers.columnMinZ;
+        final int[] columnMaxZ = buffers.columnMaxZ;
+        final int[] resourceValues = buffers.resourceValues;
+        final double[] tinyX = buffers.tinyX, tinyY = buffers.tinyY;
+        final double[] dirtX = buffers.dirtX, dirtY = buffers.dirtY;
         for (int x = 0; x < 16; x++) {
             for (int z = 0; z < 16; z++) {
                 final int column = x * 16 + z;
                 final int localX = xOffset + x, localY = zOffset + z;
                 if (tile.getBitLayerValue(Void.INSTANCE, localX, localY)) {
+                    resourceValues[column] = 0;
                     columnMinZ[column] = this.minZ;
                     columnMaxZ[column] = this.minZ - 1;
                     continue;
@@ -202,19 +212,15 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
                 columnMaxZ[column] = Math.min(subsurfaceMaxHeight, maxZ);
             }
         }
-        final long[] seeds = new long[activeMaterials.length];
-        final int[] materialMinZ = minLevels.clone(), materialMaxZ = maxLevels.clone();
-        final byte[] dirtMaterials = new byte[activeMaterials.length];
-        final float[] flattenedChances = new float[activeMaterials.length * 16];
-        for (int material = 0; material < activeMaterials.length; material++) {
-            seeds[material] = noiseGenerators[material].getSeed();
-            dirtMaterials[material] = (byte) (activeMaterials[material].isNamedOneOf(MC_DIRT, MC_GRAVEL) ? 1 : 0);
-            System.arraycopy(chances[material], 0, flattenedChances, material * 16, 16);
+        final long outputLengthLong = 256L * ((long) this.maxZ - this.minZ + 1L);
+        if (outputLengthLong <= 0L || outputLengthLong > 1_048_576L) {
+            return false;
         }
-        final byte[] selected = NativeSlices.resourceMaterials(this.minZ, this.maxZ,
+        final int outputLength = (int) outputLengthLong;
+        final byte[] selected = buffers.output(outputLength);
+        if (!NativeSlices.resourceMaterialsInto(this.minZ, this.maxZ,
                 tinyX, tinyY, dirtX, dirtY, columnMinZ, columnMaxZ, resourceValues,
-                seeds, materialMinZ, materialMaxZ, dirtMaterials, flattenedChances);
-        if (selected == null) {
+                nativeSeeds, minLevels, maxLevels, nativeDirtMaterials, nativeFlattenedChances, selected)) {
             return false;
         }
         final boolean nether = dimension.getAnchor().dim == DIM_NETHER;
@@ -248,6 +254,27 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
     private final PerlinNoise[] noiseGenerators;
     private final int[] minLevels, maxLevels;
     private final float[][] chances;
+    private final long[] nativeSeeds;
+    private final byte[] nativeDirtMaterials;
+    private final float[] nativeFlattenedChances;
+    private final ThreadLocal<NativeResourceBuffers> nativeResourceBuffers =
+            ThreadLocal.withInitial(NativeResourceBuffers::new);
+
+    private static final class NativeResourceBuffers {
+        private final int[] columnMinZ = new int[256];
+        private final int[] columnMaxZ = new int[256];
+        private final int[] resourceValues = new int[256];
+        private final double[] tinyX = new double[256], tinyY = new double[256];
+        private final double[] dirtX = new double[256], dirtY = new double[256];
+        private byte[] output = new byte[0];
+
+        private byte[] output(int length) {
+            if (output.length != length) {
+                output = new byte[length];
+            }
+            return output;
+        }
+    }
 
     private static final Map<String, Material> ORE_TO_DEEPSLATE_VARIANT = ImmutableMap.of(
             MC_COAL_ORE, DEEPSLATE_COAL_ORE,

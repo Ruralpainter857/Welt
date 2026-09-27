@@ -8,6 +8,7 @@ import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeTrue;
 
 /** Verifies batched Rust ore-noise decisions against the production Java noise. */
@@ -52,6 +53,12 @@ public final class ResourceNoiseNativeParityTest {
                     resourceValues, seeds, materialMinZ, materialMaxZ, dirtMaterials, chances);
             assertNotNull("native resource-noise bridge", actual);
             assertEquals(9 * height, actual.length);
+            final byte[] reusedOutput = new byte[actual.length];
+            assertTrue(NativeSlices.resourceMaterialsInto(minZ, maxZ,
+                    tinyX, tinyY, dirtX, dirtY, columnMinZ, columnMaxZ,
+                    resourceValues, seeds, materialMinZ, materialMaxZ,
+                    dirtMaterials, chances, reusedOutput));
+            org.junit.Assert.assertArrayEquals(actual, reusedOutput);
             for (int column = 0; column < 9; column++) {
                 for (int y = minZ; y <= maxZ; y++) {
                     int expected = -1;
