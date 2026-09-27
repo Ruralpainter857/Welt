@@ -62,15 +62,10 @@ public final class ResourceExporterChunkParityTest extends AbstractTool {
 
             final Map<String, Map<Integer, byte[]>> javaRegions = readRegions(javaRoot);
             final Map<String, Map<Integer, byte[]>> nativeRegions = readRegions(nativeRoot);
-            assertEquals("region files", javaRegions.keySet(), nativeRegions.keySet());
-            for (String region : javaRegions.keySet()) {
-                final Map<Integer, byte[]> javaChunks = javaRegions.get(region);
-                final Map<Integer, byte[]> nativeChunks = nativeRegions.get(region);
-                assertEquals(region + " chunk indexes", javaChunks.keySet(), nativeChunks.keySet());
-                for (int chunk : javaChunks.keySet()) {
-                    assertArrayEquals(region + " chunk index=" + chunk,
-                            javaChunks.get(chunk), nativeChunks.get(chunk));
-                }
+            assertRegionsEqual("Java/Rust", javaRegions, nativeRegions);
+            final String baselinePath = System.getProperty("welt.resource.baseline");
+            if (baselinePath != null) {
+                assertRegionsEqual("Java loop-order baseline", readRegions(Path.of(baselinePath)), javaRegions);
             }
             System.out.println("Compared " + javaRegions.values().stream().mapToInt(Map::size).sum()
                     + " decompressed chunk NBT payloads; outputs retained in " + root);
@@ -92,7 +87,7 @@ public final class ResourceExporterChunkParityTest extends AbstractTool {
         final Map<String, Map<Integer, byte[]>> regions = new HashMap<>();
         try (var paths = Files.walk(root)) {
             for (Path path : paths.filter(file -> file.getFileName().toString().endsWith(".mca")).toList()) {
-                final String name = root.relativize(path).toString();
+                final String name = path.getFileName().toString();
                 regions.put(name, readRegion(path));
             }
         }
@@ -137,6 +132,22 @@ public final class ResourceExporterChunkParityTest extends AbstractTool {
             chunks.put(index, expanded.toByteArray());
         }
         return chunks;
+    }
+
+    private static void assertRegionsEqual(final String comparison,
+                                           final Map<String, Map<Integer, byte[]>> expected,
+                                           final Map<String, Map<Integer, byte[]>> actual) {
+        assertEquals(comparison + " region files", expected.keySet(), actual.keySet());
+        for (String region : expected.keySet()) {
+            final Map<Integer, byte[]> expectedChunks = expected.get(region);
+            final Map<Integer, byte[]> actualChunks = actual.get(region);
+            assertEquals(comparison + " " + region + " chunk indexes",
+                    expectedChunks.keySet(), actualChunks.keySet());
+            for (int chunk : expectedChunks.keySet()) {
+                assertArrayEquals(comparison + " " + region + " chunk index=" + chunk,
+                        expectedChunks.get(chunk), actualChunks.get(chunk));
+            }
+        }
     }
 
     private static void restore(final String key, final String previous) {

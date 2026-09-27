@@ -124,10 +124,10 @@ public class BlockPropertiesCalculator {
                     continue;
                 }
                 final int maxY = Math.min(dirtyArea.getY2() - 1, maxHeights[chunkZ - maxHeightsZOffset][chunkX - maxHeightsXOffset]);
-                for (int xInChunk = 0; xInChunk < 16; xInChunk++) {
+                for (int y = maxY; y >= dirtyArea.getY1(); y--) {
                     for (int zInChunk = 0; zInChunk < 16; zInChunk++) {
-                        final int x = (chunkX << 4) | xInChunk, z = (chunkZ << 4) | zInChunk;
-                        for (int y = maxY; y >= dirtyArea.getY1() ; y--) {
+                        for (int xInChunk = 0; xInChunk < 16; xInChunk++) {
+                            final int x = (chunkX << 4) | xInChunk, z = (chunkZ << 4) | zInChunk;
                             boolean changedBlock = false;
                             Material material = chunk.getMaterial(xInChunk, y, zInChunk);
                             if (leafDistance && material.leafBlock) {
