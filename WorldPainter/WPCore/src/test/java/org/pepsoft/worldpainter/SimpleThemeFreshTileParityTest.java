@@ -613,6 +613,110 @@ public final class SimpleThemeFreshTileParityTest {
     }
 
     @Test
+    public void nativeScaledAndRotatedHeightMapMatchesJavaFreshTile() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        try {
+            for (final int[] tile : new int[][] {{-2, 5}, {0, 0}, {131073, -131074}}) {
+                final HeightMap javaMap = new TransformingHeightMap("scaled and rotated",
+                        new SumHeightMap(new ConstantHeightMap(42.25),
+                                new NoiseHeightMap(38.0, 0.8, 3, -0x1020_3040L)),
+                        1.35f, 0.72f, -13, 29, 0.37f);
+                final HeightMap nativeMap = new TransformingHeightMap("scaled and rotated",
+                        new SumHeightMap(new ConstantHeightMap(42.25),
+                                new NoiseHeightMap(38.0, 0.8, 3, -0x1020_3040L)),
+                        1.35f, 0.72f, -13, 29, 0.37f);
+                final HeightMapTileFactory javaFactory = new HeightMapTileFactory(73L, javaMap,
+                        0, 256, false, createSimpleTheme(true));
+                final HeightMapTileFactory nativeFactory = new HeightMapTileFactory(73L, nativeMap,
+                        0, 256, false, createSimpleTheme(false));
+                Native.setGenEnabled(false);
+                final Tile javaTile = javaFactory.createTile(tile[0], tile[1]);
+                Native.setGenEnabled(true);
+                final Tile nativeTile = nativeFactory.createTile(tile[0], tile[1]);
+                for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                    for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                        assertEquals("transformed height at " + x + ',' + y + " tile=" + tile[0] + ',' + tile[1],
+                                Float.floatToRawIntBits(javaTile.getHeight(x, y)),
+                                Float.floatToRawIntBits(nativeTile.getHeight(x, y)));
+                        assertEquals("water at " + x + ',' + y,
+                                javaTile.getWaterLevel(x, y), nativeTile.getWaterLevel(x, y));
+                        assertEquals("terrain at " + x + ',' + y,
+                                javaTile.getTerrain(x, y), nativeTile.getTerrain(x, y));
+                    }
+                }
+            }
+        } finally {
+            restoreGenerationFlag(previousFlag);
+        }
+    }
+
+    @Test
+    public void benchmarkNativeScaledAndRotatedHeightMapWhenRequested() {
+        assumeTrue(Boolean.getBoolean("welt.transforming.benchmark"));
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        try {
+            final HeightMapTileFactory javaFactory = new HeightMapTileFactory(73L,
+                    new TransformingHeightMap("scaled and rotated",
+                            new SumHeightMap(new ConstantHeightMap(42.25),
+                                    new NoiseHeightMap(38.0, 0.8, 3, -0x1020_3040L)),
+                            1.35f, 0.72f, -13, 29, 0.37f),
+                    0, 256, false, createSimpleTheme(true));
+            final HeightMapTileFactory nativeFactory = new HeightMapTileFactory(73L,
+                    new TransformingHeightMap("scaled and rotated",
+                            new SumHeightMap(new ConstantHeightMap(42.25),
+                                    new NoiseHeightMap(38.0, 0.8, 3, -0x1020_3040L)),
+                            1.35f, 0.72f, -13, 29, 0.37f),
+                    0, 256, false, createSimpleTheme(false));
+            final int tileCount = 24, rounds = 7;
+            final double[] javaMillis = new double[rounds], nativeMillis = new double[rounds];
+            for (int warmup = 0; warmup < 4; warmup++) {
+                benchmarkTiles(javaFactory, tileCount, warmup, false);
+                benchmarkTiles(nativeFactory, tileCount, warmup, true);
+            }
+            for (int round = 0; round < rounds; round++) {
+                if ((round & 1) == 0) {
+                    javaMillis[round] = benchmarkTiles(javaFactory, tileCount, round, false);
+                    nativeMillis[round] = benchmarkTiles(nativeFactory, tileCount, round, true);
+                } else {
+                    nativeMillis[round] = benchmarkTiles(nativeFactory, tileCount, round, true);
+                    javaMillis[round] = benchmarkTiles(javaFactory, tileCount, round, false);
+                }
+            }
+            java.util.Arrays.sort(javaMillis);
+            java.util.Arrays.sort(nativeMillis);
+            System.out.printf("Transformed heightmap Java %.3f ms/tile, Rust/JNI %.3f ms/tile, ratio %.3fx%n",
+                    javaMillis[rounds / 2], nativeMillis[rounds / 2],
+                    javaMillis[rounds / 2] / nativeMillis[rounds / 2]);
+        } finally {
+            restoreGenerationFlag(previousFlag);
+        }
+    }
+
+    private static double benchmarkTiles(HeightMapTileFactory factory, int tileCount,
+                                         int round, boolean nativeEnabled) {
+        Native.setGenEnabled(nativeEnabled);
+        final long start = System.nanoTime();
+        int sink = 0;
+        for (int tile = 0; tile < tileCount; tile++) {
+            final int tileX = Math.floorMod(tile * 7 + round, 9) - 4;
+            final int tileY = Math.floorMod(tile * 13 + round * 3, 9) - 4;
+            sink ^= Float.floatToRawIntBits(factory.createTile(tileX, tileY).getHeight(tile & 127, (tile * 17) & 127));
+        }
+        benchmarkSink ^= sink;
+        return (System.nanoTime() - start) / 1_000_000.0 / tileCount;
+    }
+
+    private static void restoreGenerationFlag(String previousFlag) {
+        if (previousFlag == null) {
+            System.clearProperty(Native.GEN_KEY);
+        } else {
+            System.setProperty(Native.GEN_KEY, previousFlag);
+        }
+    }
+
+    @Test
     public void repeatingBicubicHeightMapBulkRasterMatchesPerCellSampling() {
         for (final int[] imageTypeAndChannel : new int[][] {
                 {BufferedImage.TYPE_BYTE_GRAY, 0},
@@ -860,4 +964,6 @@ public final class SimpleThemeFreshTileParityTest {
         }
         return new SimpleTheme(0L, 62, ranges, layers, 0, 256, true, true);
     }
+
+    private static volatile int benchmarkSink;
 }

@@ -29,6 +29,8 @@ import org.pepsoft.worldpainter.themes.SimpleTheme;
 import org.pepsoft.worldpainter.themes.Theme;
 
 import java.awt.*;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.Point2D;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.util.SortedMap;
@@ -162,6 +164,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                     && (isBatchSafeHeightMap(heightMap) || isNativeBandedHeightMap(heightMap)
                     || isNativeSlopeHeightMap(heightMap)
                     || isNativeDisplacementHeightMap(heightMap)
+                    || isNativeTransformingHeightMap(heightMap)
                     || (translatedHeightMap != null)
                     || isBulkReadableBitmapHeightMap(heightMap)
                     || isNativeShelvingHeightMap(heightMap, worldTileX, worldTileY));
@@ -200,6 +203,45 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                         final double[] output = buffers.nativeHeights();
                         if (slopeHeightMap.fillSamples(baseSamples, TILE_SIZE + 2,
                                 TILE_SIZE + 2, output)) {
+                            nativeHeights = output;
+                            completeHeightMapValuesAvailable = true;
+                        }
+                    }
+                }
+            }
+            if (nativeHeights == null && batchFreshSimpleTheme && Native.isGenEnabled()
+                    && isNativeTransformingHeightMap(heightMap)) {
+                final TransformingHeightMap transforming = (TransformingHeightMap) heightMap;
+                final HeightMap baseHeightMap = transforming.getBaseHeightMap();
+                if (buffers.prepareHeightMapProgram(baseHeightMap)
+                        && (buffers.heightMapNoiseCount > 0 || buffers.heightMapMandelbrotCount > 0
+                        || buffers.heightMapBandedCount > 0 || buffers.heightMapNinePatchCount > 0)) {
+                    final AffineTransform transform = createTransformingHeightMapTransform(transforming);
+                    final Point2D.Float coordinates = new Point2D.Float();
+                    final float[] xCoordinates = buffers.displacementXCoordinates();
+                    final float[] yCoordinates = buffers.displacementYCoordinates();
+                    boolean coordinatesValid = true;
+                    for (int y = 0; y < TILE_SIZE && coordinatesValid; y++) {
+                        final int row = y * TILE_SIZE;
+                        final int worldY = worldTileY + y;
+                        for (int x = 0; x < TILE_SIZE; x++) {
+                            final int index = row + x;
+                            coordinates.setLocation((float) (worldTileX + x), (float) worldY);
+                            transform.transform(coordinates, coordinates);
+                            if (!Float.isFinite(coordinates.x) || !Float.isFinite(coordinates.y)) {
+                                coordinatesValid = false;
+                                break;
+                            }
+                            xCoordinates[index] = coordinates.x;
+                            yCoordinates[index] = coordinates.y;
+                        }
+                    }
+                    if (coordinatesValid) {
+                        final double[] output = buffers.nativeHeights();
+                        if (NativeSlices.fillHeightMapTreePoints(buffers.heightMapNodeCount,
+                                buffers.heightMapOpcodes, buffers.heightMapValues,
+                                buffers.heightMapScales, buffers.heightMapOctaves,
+                                buffers.heightMapSeeds, xCoordinates, yCoordinates, output)) {
                             nativeHeights = output;
                             completeHeightMapValuesAvailable = true;
                         }
@@ -376,6 +418,31 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 && isSerializableHeightMapTree(displacement.getBaseHeightMap())
                 && isSerializableHeightMapTree(displacement.getAngleMap())
                 && isSerializableHeightMapTree(displacement.getDistanceMap());
+    }
+
+    private static boolean isNativeTransformingHeightMap(HeightMap heightMap) {
+        if (heightMap.getClass() != TransformingHeightMap.class) {
+            return false;
+        }
+        final TransformingHeightMap transforming = (TransformingHeightMap) heightMap;
+        return ((transforming.getScaleX() != 1.0f) || (transforming.getScaleY() != 1.0f)
+                || (transforming.getRotation() != 0.0f))
+                && isSerializableHeightMapTree(transforming.getBaseHeightMap());
+    }
+
+    /** Rebuilds the exact affine operation order used by TransformingHeightMap. */
+    private static AffineTransform createTransformingHeightMapTransform(TransformingHeightMap heightMap) {
+        final AffineTransform transform = new AffineTransform();
+        if ((heightMap.getScaleX() != 1.0f) || (heightMap.getScaleY() != 1.0f)) {
+            transform.scale(1 / heightMap.getScaleX(), 1 / heightMap.getScaleY());
+        }
+        if ((heightMap.getOffsetX() != 0) || (heightMap.getOffsetY() != 0)) {
+            transform.translate(-heightMap.getOffsetX(), -heightMap.getOffsetY());
+        }
+        if (heightMap.getRotation() != 0.0f) {
+            transform.rotate(-heightMap.getRotation());
+        }
+        return transform;
     }
 
     private static boolean isSerializableHeightMapTree(HeightMap heightMap) {
