@@ -4,7 +4,10 @@
 use std::ffi::c_void;
 use welt_core::error::WeltError;
 use welt_core::jni::{jclass, jint, jlong, jni_catch, jobject, JNIEnv};
-use welt_export::frost::{apply_frost_column, FrostCell, FrostMode, FrostSettings, FrostUpdate};
+use welt_export::frost::{
+    apply_frost_column, apply_frost_packed_columns, FrostCell, FrostMode, FrostSettings,
+    FrostUpdate,
+};
 use welt_gen::noise_height_map::NoiseHeightMapBulk;
 use welt_gen::theme_terrain::SimpleThemeTerrainBulk;
 
@@ -14,6 +17,7 @@ use welt_gen::theme_terrain::SimpleThemeTerrainBulk;
 const GET_ARRAY_LENGTH: usize = 171;
 const SET_DOUBLE_ARRAY_REGION: usize = 214;
 const GET_INT_ARRAY_REGION: usize = 203;
+const GET_FLOAT_ARRAY_REGION: usize = 205;
 const SET_INT_ARRAY_REGION: usize = 211;
 const GET_BYTE_ARRAY_REGION: usize = 200;
 const SET_BYTE_ARRAY_REGION: usize = 208;
@@ -139,6 +143,192 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let set_byte_array_region: SetByteArrayRegion =
                 std::mem::transmute(function(env, SET_BYTE_ARRAY_REGION));
             set_byte_array_region(env, updates, 0, length as jint, output.as_ptr());
+            WeltError::Ok as jint
+        })
+    }
+}
+
+/// Applies one common FrostExporter mode to a packed batch of columns.
+///
+/// # Safety
+/// All references and `env` must be supplied by the current JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFrostColumns(
+    env: *mut JNIEnv,
+    _class: jclass,
+    min_z: jint,
+    max_z: jint,
+    column_count: jint,
+    column_max_z: jobject,
+    frost_everywhere: jint,
+    snow_under_trees: jint,
+    mode: jint,
+    flags: jobject,
+    snow_layers: jobject,
+    highest_non_air: jobject,
+    height_floats: jobject,
+    height_ints: jobject,
+    frost_bit_counts: jobject,
+    updates: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if [
+                flags,
+                snow_layers,
+                column_max_z,
+                highest_non_air,
+                height_floats,
+                height_ints,
+                frost_bit_counts,
+                updates,
+            ]
+            .iter()
+            .any(|array| array.is_null())
+                || column_count <= 0
+                || min_z > max_z
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            let max_column_length = i64::from(max_z) - i64::from(min_z) + 1;
+            if !(1..=4096).contains(&max_column_length)
+                || column_count as i64 > 1_048_576 / max_column_length
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            let mode = match mode {
+                0 => FrostMode::Flat,
+                1 => FrostMode::Random,
+                2 => FrostMode::Smooth,
+                3 => FrostMode::SmoothAtAllElevations,
+                _ => return WeltError::IllegalArgument as jint,
+            };
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            let per_column_arrays = [
+                column_max_z,
+                highest_non_air,
+                height_floats,
+                height_ints,
+                frost_bit_counts,
+            ];
+            if per_column_arrays
+                .iter()
+                .any(|&array| get_array_length(env, array) < column_count)
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+
+            type GetIntArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i32);
+            let get_int_array_region: GetIntArrayRegion =
+                std::mem::transmute(function(env, GET_INT_ARRAY_REGION));
+            let mut packed_max_z = vec![0_i32; column_count as usize];
+            let mut highest = vec![0_i32; column_count as usize];
+            let mut heights_int = vec![0_i32; column_count as usize];
+            let mut bit_counts = vec![0_i32; column_count as usize];
+            get_int_array_region(
+                env,
+                column_max_z,
+                0,
+                column_count,
+                packed_max_z.as_mut_ptr(),
+            );
+            get_int_array_region(env, highest_non_air, 0, column_count, highest.as_mut_ptr());
+            get_int_array_region(env, height_ints, 0, column_count, heights_int.as_mut_ptr());
+            get_int_array_region(
+                env,
+                frost_bit_counts,
+                0,
+                column_count,
+                bit_counts.as_mut_ptr(),
+            );
+            let mut expected = 0_usize;
+            for (&segment_max_z, &surface_z) in packed_max_z.iter().zip(&highest) {
+                if segment_max_z < min_z
+                    || segment_max_z > max_z
+                    || surface_z < min_z
+                    || surface_z > segment_max_z
+                {
+                    return WeltError::IllegalArgument as jint;
+                }
+                let segment_length = (i64::from(segment_max_z) - i64::from(min_z) + 1) as usize;
+                let Some(new_total) = expected.checked_add(segment_length) else {
+                    return WeltError::IllegalArgument as jint;
+                };
+                expected = new_total;
+            }
+            if expected > 1_048_576
+                || [flags, snow_layers, updates]
+                    .iter()
+                    .any(|&array| get_array_length(env, array) < expected as jint)
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+
+            type GetByteArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i8);
+            let get_byte_array_region: GetByteArrayRegion =
+                std::mem::transmute(function(env, GET_BYTE_ARRAY_REGION));
+            let mut raw_flags = vec![0_i8; expected];
+            let mut raw_snow = vec![0_i8; expected];
+            get_byte_array_region(env, flags, 0, expected as jint, raw_flags.as_mut_ptr());
+            get_byte_array_region(env, snow_layers, 0, expected as jint, raw_snow.as_mut_ptr());
+
+            type GetFloatArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut f32);
+            let get_float_array_region: GetFloatArrayRegion =
+                std::mem::transmute(function(env, GET_FLOAT_ARRAY_REGION));
+            let mut heights_float = vec![0.0_f32; column_count as usize];
+            get_float_array_region(
+                env,
+                height_floats,
+                0,
+                column_count,
+                heights_float.as_mut_ptr(),
+            );
+
+            let mut cells = vec![FrostCell::default(); expected];
+            for index in 0..expected {
+                let snow = raw_snow[index] as u8;
+                cells[index] = FrostCell::with_canonical_snow(
+                    raw_flags[index] as u8,
+                    snow & 0x7f,
+                    snow & 0x80 != 0,
+                );
+            }
+            let settings: Vec<_> = (0..column_count as usize)
+                .map(|index| FrostSettings {
+                    frost_everywhere: frost_everywhere != 0,
+                    frost_layer_present: true,
+                    snow_under_trees: snow_under_trees != 0,
+                    mode,
+                    random_snow_layers: 1,
+                    height_float: heights_float[index],
+                    height_int: heights_int[index],
+                    frost_bit_count: bit_counts[index],
+                })
+                .collect();
+            if apply_frost_packed_columns(&mut cells, min_z, &packed_max_z, &highest, &settings)
+                .is_err()
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            let values: Vec<i8> = cells
+                .iter()
+                .map(|cell| match cell.update {
+                    FrostUpdate::Unchanged => 0,
+                    FrostUpdate::Air => 1,
+                    FrostUpdate::Ice => 2,
+                    FrostUpdate::Snow(layers) => (layers + 2) as i8,
+                })
+                .collect();
+            type SetByteArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i8);
+            let set_byte_array_region: SetByteArrayRegion =
+                std::mem::transmute(function(env, SET_BYTE_ARRAY_REGION));
+            set_byte_array_region(env, updates, 0, expected as jint, values.as_ptr());
             WeltError::Ok as jint
         })
     }

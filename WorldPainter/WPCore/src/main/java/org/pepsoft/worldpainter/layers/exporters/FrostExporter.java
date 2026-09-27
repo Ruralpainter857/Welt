@@ -59,107 +59,125 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
                     || mode == FrostSettings.MODE_SMOOTH
                     || mode == FrostSettings.MODE_SMOOTH_AT_ALL_ELEVATIONS)
                 && NativeLoader.areSlicesAvailable();
-        final int nativeLength = nativeFrost ? (int) nativeColumnLength : 0;
-        final byte[] nativeFlags = nativeFrost ? new byte[nativeLength] : null;
-        final byte[] nativeSnowLayers = nativeFrost ? new byte[nativeLength] : null;
-        final byte[] nativeUpdates = nativeFrost ? new byte[nativeLength] : null;
+        if (nativeFrost && hasSafeBatchBounds(area)) {
+            applyNativeBatches(minecraftWorld, area, frostEverywhere, snowUnderTrees, mode, random,
+                    (int) nativeColumnLength);
+            return null;
+        }
         for (int x = area.x; x < area.x + area.width; x++) {
             for (int y = area.y; y < area.y + area.height; y++) {
                 if (frostEverywhere || dimension.getBitLayerValueAt(Frost.INSTANCE, x, y)) {
                     int highestNonAirBlock = minecraftWorld.getHighestNonAirBlock(x, y);
-                    if (nativeLength > 0 && applyNativeColumn(minecraftWorld, x, y,
-                            highestNonAirBlock, frostEverywhere, snowUnderTrees, mode, random,
-                            nativeFlags, nativeSnowLayers, nativeUpdates)) {
-                        continue;
-                    }
-                    Material previousMaterial = (highestNonAirBlock == maxZ) ? minecraftWorld.getMaterialAt(x, y, maxZ) : AIR;
-                    int leafBlocksEncountered = 0;
-                    for (int height = Math.min(highestNonAirBlock, maxZ - 1); height >= minHeight; height--) {
-                        Material material = minecraftWorld.getMaterialAt(x, y, height);
-                        if ((material.isNamed(MC_WATER) && (material.getProperty(LAYERS, 0) == 0))
-                                || (material.containsWater() && material.insubstantial)) {
-                            minecraftWorld.setMaterialAt(x, y, height, ICE);
-                            // Remove insubstantial blocks above, assuming they are plants we cut in half
-                            for (int dz = height + 1; dz <= highestNonAirBlock; dz++) {
-                                if (minecraftWorld.getMaterialAt(x, y, dz).insubstantial) {
-                                    minecraftWorld.setMaterialAt(x, y, dz, AIR);
-                                } else {
-                                    break;
-                                }
-                            }
-                            break;
-                        } else if (material.canSupportSnow) {
-                            if ((material.leafBlock) || (material.sustainsLeaves)) {
-                                if (previousMaterial.empty) {
-                                    minecraftWorld.setMaterialAt(x, y, height + 1, SNOW);
-                                }
-                                leafBlocksEncountered++;
-                                if ((! snowUnderTrees) && (leafBlocksEncountered > 1)) {
-                                    break;
-                                }
-                            } else {
-                                // Obliterate tall grass, 'cause there is too much of it, and leaving it in would look
-                                // strange. Also replace existing snow, as we might want to place thicker snow
-                                if (previousMaterial.empty || (previousMaterial == GRASS) || (previousMaterial == FERN) || (previousMaterial == SNOW)) {
-                                    if ((mode == FrostSettings.MODE_SMOOTH_AT_ALL_ELEVATIONS)
-                                            || (height == dimension.getIntHeightAt(x, y))) {
-                                        // Only vary the snow thickness if we're at surface height, otherwise it looks
-                                        // odd
-                                        switch (mode) {
-                                            case FrostSettings.MODE_FLAT:
-                                                placeSnow(minecraftWorld, x, y, height, 1);
-                                                break;
-                                            case FrostSettings.MODE_RANDOM:
-                                                placeSnow(minecraftWorld, x, y, height, random.nextInt(3) + 1);
-                                                break;
-                                            case FrostSettings.MODE_SMOOTH:
-                                            case FrostSettings.MODE_SMOOTH_AT_ALL_ELEVATIONS:
-                                                int layers = (int) Math.floor((dimension.getHeightAt(x, y) + 0.5f - dimension.getIntHeightAt(x, y)) / 0.125f) + 1;
-                                                if ((layers > 1) && (! frostEverywhere)) {
-                                                    layers = Math.max(Math.min(layers, dimension.getBitLayerCount(Frost.INSTANCE, x, y, 1) - 1), 1);
-                                                }
-                                                placeSnow(minecraftWorld, x, y, height, layers);
-                                                break;
-                                        }
-                                    } else {
-                                        // At other elevations just place a
-                                        // regular thin snow block
-                                        placeSnow(minecraftWorld, x, y, height, 1);
-                                    }
-                                }
-                                break;
-                            }
-                        } else {
-                            previousMaterial = material;
-                            continue;
-                        }
-                        previousMaterial = material;
-                    }
+                    applyJavaColumn(minecraftWorld, x, y, highestNonAirBlock,
+                            frostEverywhere, snowUnderTrees, mode, random);
                 }
             }
         }
         return null;
     }
 
-    /** Snapshots one column; all world mutations remain on the Java side. */
-    private boolean applyNativeColumn(MinecraftWorld world, int x, int y, int highestNonAir,
-                                      boolean frostEverywhere, boolean snowUnderTrees, int mode,
-                                      Random random, byte[] flags, byte[] snowLayers,
-                                      byte[] updates) {
+    private static boolean hasSafeBatchBounds(Rectangle area) {
+        return area.width > 0 && area.height > 0
+                && (long) area.x + area.width <= Integer.MAX_VALUE
+                && (long) area.y + area.height <= Integer.MAX_VALUE;
+    }
+
+    /** Packs eligible columns, invokes Rust once per chunk, then applies results in Java order. */
+    private void applyNativeBatches(MinecraftWorld world, Rectangle area,
+                                    boolean frostEverywhere, boolean snowUnderTrees, int mode,
+                                    Random random, int columnLength) {
+        final int batchCapacity = Math.min(64, 1_048_576 / columnLength);
+        final byte[] flags = new byte[batchCapacity * columnLength];
+        final byte[] snowLayers = new byte[batchCapacity * columnLength];
+        final byte[] updates = new byte[batchCapacity * columnLength];
+        final int[] highest = new int[batchCapacity];
+        final float[] heightsFloat = new float[batchCapacity];
+        final int[] heightsInt = new int[batchCapacity];
+        final int[] frostBitCounts = new int[batchCapacity];
+        final int[] packedMaxZ = new int[batchCapacity];
+        final int[] packedOffsets = new int[batchCapacity];
+        final int[] packedSlots = new int[batchCapacity];
+        final int[] highestByColumn = new int[batchCapacity];
+        final boolean[] active = new boolean[batchCapacity];
+        final long totalColumns = (long) area.width * area.height;
+
+        for (long batchStart = 0; batchStart < totalColumns; batchStart += batchCapacity) {
+            final int currentCount = (int) Math.min(batchCapacity, totalColumns - batchStart);
+            java.util.Arrays.fill(packedSlots, 0, currentCount, -1);
+            java.util.Arrays.fill(active, 0, currentCount, false);
+            int nativeCount = 0;
+            int packedCellCount = 0;
+            for (int local = 0; local < currentCount; local++) {
+                final long index = batchStart + local;
+                final int x = area.x + (int) (index / area.height);
+                final int y = area.y + (int) (index % area.height);
+                if (!frostEverywhere && !dimension.getBitLayerValueAt(Frost.INSTANCE, x, y)) {
+                    continue;
+                }
+                active[local] = true;
+                final int highestNonAir = world.getHighestNonAirBlock(x, y);
+                highestByColumn[local] = highestNonAir;
+                final int segmentMaxZ = (highestNonAir < maxZ) ? highestNonAir + 1 : maxZ;
+                final int segmentLength = segmentMaxZ - minHeight + 1;
+                if (snapshotNativeColumn(world, x, y, highestNonAir, mode, nativeCount,
+                        packedCellCount, segmentLength, flags, snowLayers, highest, heightsFloat,
+                        heightsInt, frostBitCounts)) {
+                    packedSlots[local] = nativeCount;
+                    packedMaxZ[nativeCount] = segmentMaxZ;
+                    packedOffsets[nativeCount] = packedCellCount;
+                    packedCellCount += segmentLength;
+                    nativeCount++;
+                }
+            }
+
+            final boolean nativeBatchSucceeded = nativeCount > 0
+                    && NativeSlices.frostColumns(minHeight, maxZ, nativeCount,
+                    packedMaxZ, frostEverywhere, snowUnderTrees, mode, flags, snowLayers,
+                    highest, heightsFloat, heightsInt, frostBitCounts, updates);
+
+            // Keep Java's original x/y mutation order, including fallback columns.
+            for (int local = 0; local < currentCount; local++) {
+                if (!active[local]) {
+                    continue;
+                }
+                final long index = batchStart + local;
+                final int x = area.x + (int) (index / area.height);
+                final int y = area.y + (int) (index % area.height);
+                final int slot = packedSlots[local];
+                if (nativeBatchSucceeded && slot >= 0) {
+                    applyNativeColumnResult(world, x, y, highestByColumn[local],
+                            heightsInt[slot], mode, random, packedOffsets[slot],
+                            packedMaxZ[slot],
+                            flags, snowLayers, updates);
+                } else {
+                    applyJavaColumn(world, x, y, highestByColumn[local],
+                            frostEverywhere, snowUnderTrees, mode, random);
+                }
+            }
+        }
+    }
+
+    /** Snapshots one column into the next packed slot; mixed columns use Java. */
+    private boolean snapshotNativeColumn(MinecraftWorld world, int x, int y, int highestNonAir,
+                                         int mode, int slot, int base, int segmentLength,
+                                         byte[] flags, byte[] snowLayers, int[] highest,
+                                         float[] heightsFloat, int[] heightsInt,
+                                         int[] frostBitCounts) {
         if (highestNonAir < minHeight || highestNonAir > maxZ) {
             return false;
         }
         boolean hasLeaf = false;
         boolean hasFreezableWater = false;
-        for (int z = minHeight; z <= maxZ; z++) {
-            final int offset = z - minHeight;
+        for (int offset = 0; offset < segmentLength; offset++) {
+            final int z = minHeight + offset;
+            final int cell = base + offset;
             if (z > highestNonAir) {
-                flags[offset] = 1 << 6; // AIR.empty
-                snowLayers[offset] = 0;
+                flags[cell] = 1 << 6;
+                snowLayers[cell] = 0;
                 continue;
             }
             final Material material = world.getMaterialAt(x, y, z);
-            snowLayers[offset] = 0;
+            snowLayers[cell] = 0;
             int bits = 0;
             if (material.isNamed(MC_WATER) && (material.getProperty(LAYERS, 0) == 0)) bits |= 1;
             if (material.containsWater()) bits |= 1 << 1;
@@ -169,7 +187,7 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
             if (material.sustainsLeaves) bits |= 1 << 5;
             if (material.empty) bits |= 1 << 6;
             if (material == GRASS || material == FERN) bits |= 1 << 7;
-            flags[offset] = (byte) bits;
+            flags[cell] = (byte) bits;
             hasLeaf |= material.canSupportSnow && (material.leafBlock || material.sustainsLeaves);
             hasFreezableWater |= (bits & 1) != 0 || ((bits & 6) == 6);
             if (hasLeaf && hasFreezableWater) {
@@ -178,10 +196,10 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
                 return false;
             }
             if (material.isNamed(MC_SNOW)) {
-                snowLayers[offset] = material.getProperty(LAYERS, 0).byteValue();
+                snowLayers[cell] = material.getProperty(LAYERS, 0).byteValue();
             }
             if (material == SNOW) {
-                snowLayers[offset] |= (byte) 0x80;
+                snowLayers[cell] |= (byte) 0x80;
             }
         }
         final int heightInt = dimension.getIntHeightAt(x, y);
@@ -191,50 +209,121 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
         final int frostBitCount = (mode == FrostSettings.MODE_SMOOTH
                 || mode == FrostSettings.MODE_SMOOTH_AT_ALL_ELEVATIONS)
                 ? dimension.getBitLayerCount(Frost.INSTANCE, x, y, 1) : 0;
-        if (!NativeSlices.frostColumn(minHeight, maxZ, highestNonAir,
-                frostEverywhere, true, snowUnderTrees, mode,
-                heightFloat, heightInt, frostBitCount, flags, snowLayers, updates)) {
-            return false;
-        }
+        highest[slot] = highestNonAir;
+        heightsFloat[slot] = heightFloat;
+        heightsInt[slot] = heightInt;
+        frostBitCounts[slot] = frostBitCount;
+        return true;
+    }
+
+    private void applyNativeColumnResult(MinecraftWorld world, int x, int y, int highestNonAir,
+                                         int heightInt, int mode, Random random, int base,
+                                         int segmentMaxZ, byte[] flags, byte[] snowLayers,
+                                         byte[] updates) {
         if (mode == FrostSettings.MODE_RANDOM) {
             final long snowZ = (long) heightInt + 1L;
-            if (snowZ > minHeight && snowZ <= maxZ) {
+            if (snowZ > minHeight && snowZ <= segmentMaxZ) {
                 final int snowOffset = (int) snowZ - minHeight;
-                final int supportFlags = flags[snowOffset - 1] & 0xff;
-                if ((updates[snowOffset] & 0xff) >= 3
+                final int snowCell = base + snowOffset;
+                final int supportFlags = flags[base + snowOffset - 1] & 0xff;
+                if ((updates[snowCell] & 0xff) >= 3
                         && (supportFlags & 0x08) != 0 && (supportFlags & 0x30) == 0) {
                     // Rust used layer 1 as a placeholder. Draw at exactly the
                     // point where Java's MODE_RANDOM would call nextInt(3).
                     final int drawn = random.nextInt(3) + 1;
-                    final int existing = snowLayers[snowOffset] & 0x7f;
-                    updates[snowOffset] = (byte) (Math.max(drawn, existing) + 2);
+                    final int existing = snowLayers[snowCell] & 0x7f;
+                    updates[snowCell] = (byte) (Math.max(drawn, existing) + 2);
                 }
             }
         }
-        for (int z = minHeight; z <= maxZ; z++) {
-            if (updates[z - minHeight] == 2) {
+        for (int z = minHeight; z <= Math.min(highestNonAir, segmentMaxZ - 1); z++) {
+            if (updates[base + z - minHeight] == 2) {
                 world.setMaterialAt(x, y, z, ICE);
                 for (int above = z + 1; above <= highestNonAir; above++) {
-                    if (updates[above - minHeight] == 1) {
+                    if (updates[base + above - minHeight] == 1) {
                         world.setMaterialAt(x, y, above, AIR);
                     } else {
                         break;
                     }
                 }
-                return true;
+                return;
             }
         }
-        for (int z = maxZ; z >= minHeight; z--) {
-            final int update = updates[z - minHeight] & 0xff;
+        for (int z = segmentMaxZ; z >= minHeight; z--) {
+            final int update = updates[base + z - minHeight] & 0xff;
             if (update >= 3 && update <= 10) {
                 final int below = z - minHeight - 1;
-                final int belowFlags = (below >= 0) ? flags[below] & 0xff : 0;
+                final int belowFlags = (below >= 0) ? flags[base + below] & 0xff : 0;
                 final boolean onLeaves = ((belowFlags & 0x08) != 0) && ((belowFlags & 0x30) != 0);
                 world.setMaterialAt(x, y, z,
                         onLeaves ? SNOW : SNOW.withProperty(LAYERS, update - 2));
             }
         }
-        return true;
+    }
+
+    private void applyJavaColumn(MinecraftWorld minecraftWorld, int x, int y, int highestNonAirBlock,
+                                 boolean frostEverywhere, boolean snowUnderTrees, int mode,
+                                 Random random) {
+        Material previousMaterial = (highestNonAirBlock == maxZ)
+                ? minecraftWorld.getMaterialAt(x, y, maxZ) : AIR;
+        int leafBlocksEncountered = 0;
+        for (int height = Math.min(highestNonAirBlock, maxZ - 1); height >= minHeight; height--) {
+            Material material = minecraftWorld.getMaterialAt(x, y, height);
+            if ((material.isNamed(MC_WATER) && (material.getProperty(LAYERS, 0) == 0))
+                    || (material.containsWater() && material.insubstantial)) {
+                minecraftWorld.setMaterialAt(x, y, height, ICE);
+                for (int dz = height + 1; dz <= highestNonAirBlock; dz++) {
+                    if (minecraftWorld.getMaterialAt(x, y, dz).insubstantial) {
+                        minecraftWorld.setMaterialAt(x, y, dz, AIR);
+                    } else {
+                        break;
+                    }
+                }
+                break;
+            } else if (material.canSupportSnow) {
+                if ((material.leafBlock) || (material.sustainsLeaves)) {
+                    if (previousMaterial.empty) {
+                        minecraftWorld.setMaterialAt(x, y, height + 1, SNOW);
+                    }
+                    leafBlocksEncountered++;
+                    if ((!snowUnderTrees) && (leafBlocksEncountered > 1)) {
+                        break;
+                    }
+                } else {
+                    if (previousMaterial.empty || (previousMaterial == GRASS)
+                            || (previousMaterial == FERN) || (previousMaterial == SNOW)) {
+                        if ((mode == FrostSettings.MODE_SMOOTH_AT_ALL_ELEVATIONS)
+                                || (height == dimension.getIntHeightAt(x, y))) {
+                            switch (mode) {
+                                case FrostSettings.MODE_FLAT:
+                                    placeSnow(minecraftWorld, x, y, height, 1);
+                                    break;
+                                case FrostSettings.MODE_RANDOM:
+                                    placeSnow(minecraftWorld, x, y, height, random.nextInt(3) + 1);
+                                    break;
+                                case FrostSettings.MODE_SMOOTH:
+                                case FrostSettings.MODE_SMOOTH_AT_ALL_ELEVATIONS:
+                                    int layers = (int) Math.floor((dimension.getHeightAt(x, y) + 0.5f
+                                            - dimension.getIntHeightAt(x, y)) / 0.125f) + 1;
+                                    if ((layers > 1) && (!frostEverywhere)) {
+                                        layers = Math.max(Math.min(layers,
+                                                dimension.getBitLayerCount(Frost.INSTANCE, x, y, 1) - 1), 1);
+                                    }
+                                    placeSnow(minecraftWorld, x, y, height, layers);
+                                    break;
+                            }
+                        } else {
+                            placeSnow(minecraftWorld, x, y, height, 1);
+                        }
+                    }
+                    break;
+                }
+            } else {
+                previousMaterial = material;
+                continue;
+            }
+            previousMaterial = material;
+        }
     }
 
     /**

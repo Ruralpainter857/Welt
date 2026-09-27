@@ -98,6 +98,7 @@ pub struct FrostSettings {
 pub enum FrostError {
     InvalidBounds,
     ColumnLength { expected: usize, actual: usize },
+    BatchLength { expected: usize, actual: usize },
     HighestNonAirOutOfBounds(i32),
     InvalidRandomLayerCount(u8),
     InvalidSnowLayerCount(i32),
@@ -214,6 +215,93 @@ pub fn apply_frost_column(
     Ok(())
 }
 
+/// Applies independent frost decisions to a packed batch of vertical columns.
+/// Column `i` occupies `cells[i * column_length..(i + 1) * column_length]`.
+pub fn apply_frost_columns(
+    cells: &mut [FrostCell],
+    min_z: i32,
+    max_z: i32,
+    highest_non_air: &[i32],
+    settings: &[FrostSettings],
+) -> Result<(), FrostError> {
+    if highest_non_air.len() != settings.len() {
+        return Err(FrostError::BatchLength {
+            expected: highest_non_air.len(),
+            actual: settings.len(),
+        });
+    }
+    let column_length: usize = (i64::from(max_z) - i64::from(min_z) + 1)
+        .try_into()
+        .map_err(|_| FrostError::InvalidBounds)?;
+    let expected = column_length
+        .checked_mul(settings.len())
+        .ok_or(FrostError::InvalidBounds)?;
+    if cells.len() != expected {
+        return Err(FrostError::BatchLength {
+            expected,
+            actual: cells.len(),
+        });
+    }
+    for (index, (highest, column_settings)) in highest_non_air.iter().zip(settings).enumerate() {
+        let start = index * column_length;
+        apply_frost_column(
+            &mut cells[start..start + column_length],
+            min_z,
+            max_z,
+            *highest,
+            *column_settings,
+        )?;
+    }
+    Ok(())
+}
+
+/// Applies columns packed at their highest relevant output level. Each packed
+/// segment ends at `column_max_z`, which includes the one air cell above a
+/// surface when that cell can receive snow.
+pub fn apply_frost_packed_columns(
+    cells: &mut [FrostCell],
+    min_z: i32,
+    column_max_z: &[i32],
+    highest_non_air: &[i32],
+    settings: &[FrostSettings],
+) -> Result<(), FrostError> {
+    if column_max_z.len() != highest_non_air.len() || highest_non_air.len() != settings.len() {
+        return Err(FrostError::BatchLength {
+            expected: column_max_z.len(),
+            actual: highest_non_air.len().min(settings.len()),
+        });
+    }
+    let mut offset = 0_usize;
+    for ((&max_z, &highest), &column_settings) in
+        column_max_z.iter().zip(highest_non_air).zip(settings)
+    {
+        if max_z < min_z || highest < min_z || highest > max_z {
+            return Err(FrostError::HighestNonAirOutOfBounds(highest));
+        }
+        let length: usize = (i64::from(max_z) - i64::from(min_z) + 1)
+            .try_into()
+            .map_err(|_| FrostError::InvalidBounds)?;
+        let end = offset
+            .checked_add(length)
+            .ok_or(FrostError::InvalidBounds)?;
+        let Some(column) = cells.get_mut(offset..end) else {
+            return Err(FrostError::BatchLength {
+                expected: end,
+                actual: cells.len(),
+            });
+        };
+        apply_frost_column(column, min_z, max_z, highest, column_settings)?;
+        offset = end;
+    }
+    if offset != cells.len() {
+        return Err(FrostError::BatchLength {
+            expected: offset,
+            actual: cells.len(),
+        });
+    }
+    Ok(())
+}
+
 fn place_snow(
     cells: &mut [FrostCell],
     min_z: i32,
@@ -241,8 +329,8 @@ fn place_snow(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_frost_column, material_flags as f, FrostCell, FrostError, FrostMode, FrostSettings,
-        FrostUpdate,
+        apply_frost_column, apply_frost_columns, apply_frost_packed_columns, material_flags as f,
+        FrostCell, FrostError, FrostMode, FrostSettings, FrostUpdate,
     };
 
     fn settings(mode: FrostMode) -> FrostSettings {
@@ -309,6 +397,50 @@ mod tests {
                 actual: 2
             })
         );
+    }
+
+    #[test]
+    fn packed_columns_match_individual_column_calls() {
+        let settings = [settings(FrostMode::Flat), settings(FrostMode::Smooth)];
+        let highest = [2, 3];
+        let mut packed = [
+            FrostCell::air(),
+            FrostCell::new(f::CAN_SUPPORT_SNOW, 0),
+            FrostCell::air(),
+            FrostCell::air(),
+            FrostCell::new(f::WATER_SOURCE, 0),
+            FrostCell::new(f::INSUBSTANTIAL, 0),
+            FrostCell::new(f::CAN_SUPPORT_SNOW, 0),
+            FrostCell::air(),
+        ];
+        let mut separate = packed;
+        apply_frost_columns(&mut packed, 0, 3, &highest, &settings).unwrap();
+        apply_frost_column(&mut separate[..4], 0, 3, highest[0], settings[0]).unwrap();
+        apply_frost_column(&mut separate[4..], 0, 3, highest[1], settings[1]).unwrap();
+        assert_eq!(packed, separate);
+    }
+
+    #[test]
+    fn packed_variable_height_columns_match_individual_calls() {
+        let settings = [settings(FrostMode::Flat), settings(FrostMode::Smooth)];
+        let highest = [2, 4];
+        let max_z = [3, 4];
+        let mut packed = [
+            FrostCell::air(),
+            FrostCell::new(f::CAN_SUPPORT_SNOW, 0),
+            FrostCell::air(),
+            FrostCell::air(),
+            FrostCell::air(),
+            FrostCell::new(f::WATER_SOURCE, 0),
+            FrostCell::new(f::INSUBSTANTIAL, 0),
+            FrostCell::new(f::CAN_SUPPORT_SNOW, 0),
+            FrostCell::air(),
+        ];
+        let mut separate = packed;
+        apply_frost_packed_columns(&mut packed, 0, &max_z, &highest, &settings).unwrap();
+        apply_frost_column(&mut separate[..4], 0, 3, highest[0], settings[0]).unwrap();
+        apply_frost_column(&mut separate[4..], 0, 4, highest[1], settings[1]).unwrap();
+        assert_eq!(packed, separate);
     }
 
     #[test]

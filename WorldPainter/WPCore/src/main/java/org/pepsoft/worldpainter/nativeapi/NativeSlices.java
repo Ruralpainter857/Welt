@@ -87,6 +87,39 @@ public final class NativeSlices {
         }
     }
 
+    /** Applies one export mode to a packed set of eligible columns in one JNI call. */
+    public static boolean frostColumns(final int minZ, final int maxZ, final int columnCount,
+                                       final int[] columnMaxZs,
+                                       final boolean frostEverywhere, final boolean snowUnderTrees,
+                                       final int mode, final byte[] flags, final byte[] snowLayers,
+                                       final int[] highestNonAir, final float[] heightFloats,
+                                       final int[] heightInts, final int[] frostBitCounts,
+                                       final byte[] updates) {
+        final long columnLength = (long) maxZ - minZ + 1L;
+        final long cellCount = columnLength * columnCount;
+        if (!Native.isExportEnabled() || !NativeLoader.areSlicesAvailable()
+                || columnCount <= 0 || columnLength <= 0 || columnLength > 4096
+                || cellCount > 1_048_576L || flags == null || snowLayers == null
+                || columnMaxZs == null
+                || highestNonAir == null || heightFloats == null || heightInts == null
+                || frostBitCounts == null || updates == null
+                || flags.length < cellCount || snowLayers.length < cellCount
+                || updates.length < cellCount || columnMaxZs.length < columnCount
+                || highestNonAir.length < columnCount
+                || heightFloats.length < columnCount || heightInts.length < columnCount
+                || frostBitCounts.length < columnCount) {
+            return false;
+        }
+        try {
+            return nativeFrostColumns(minZ, maxZ, columnCount,
+                    columnMaxZs, frostEverywhere ? 1 : 0, snowUnderTrees ? 1 : 0, mode,
+                    flags, snowLayers, highestNonAir, heightFloats,
+                    heightInts, frostBitCounts, updates) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     private static native int nativeFillNoiseHeights(int originX, int originY,
                                                       int width, int height,
                                                       double dHeight, double scale,
@@ -109,6 +142,14 @@ public final class NativeSlices {
                                                 float heightFloat, int heightInt,
                                                 int frostBitCount, byte[] flags,
                                                 byte[] snowLayers, byte[] updates);
+
+    private static native int nativeFrostColumns(int minZ, int maxZ, int columnCount,
+                                                 int[] columnMaxZs,
+                                                 int frostEverywhere, int snowUnderTrees,
+                                                 int mode, byte[] flags, byte[] snowLayers,
+                                                 int[] highestNonAir, float[] heightFloats,
+                                                 int[] heightInts, int[] frostBitCounts,
+                                                 byte[] updates);
 
     static native int nativeAbiVersion();
 }
