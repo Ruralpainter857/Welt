@@ -110,3 +110,20 @@ jobs:
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "Slope benchmark (${{ matrix.os }}): ``$result``"
             Write-Output "::notice title=Slope benchmark (${{ matrix.os }})::$result"
           }
+      - name: Upload displacement benchmark result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: displacement-heightmap-benchmark-${{ matrix.os }}
+          path: WorldPainter/WPCore/target/displacement-heightmap-benchmark.txt
+          if-no-files-found: ignore
+      - name: Publish displacement benchmark summary
+        if: always()
+        shell: pwsh
+        run: |
+          $resultPath = 'WorldPainter/WPCore/target/displacement-heightmap-benchmark.txt'
+          if (Test-Path $resultPath) {
+            $result = (Get-Content -Raw $resultPath).Trim()
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "Displacement benchmark (${{ matrix.os }}): ``$result``"
+            Write-Output "::notice title=Displacement benchmark (${{ matrix.os }})::$result"
+          }

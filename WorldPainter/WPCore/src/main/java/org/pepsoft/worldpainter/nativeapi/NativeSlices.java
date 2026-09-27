@@ -95,6 +95,32 @@ public final class NativeSlices {
         }
     }
 
+    /** Fills a height-map expression at explicit float coordinates. */
+    public static boolean fillHeightMapTreePoints(final int nodeCount,
+                                                  final int[] opcodes, final double[] values,
+                                                  final double[] scales, final int[] octaves,
+                                                  final long[] seeds, final float[] xCoordinates,
+                                                  final float[] yCoordinates, final double[] output) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || nodeCount <= 0 || nodeCount > 64
+                || opcodes == null || opcodes.length < nodeCount
+                || values == null || values.length < nodeCount
+                || scales == null || scales.length < nodeCount
+                || octaves == null || octaves.length < nodeCount
+                || seeds == null || seeds.length < nodeCount
+                || xCoordinates == null || yCoordinates == null || output == null
+                || output.length == 0 || output.length > 1_048_576
+                || xCoordinates.length != output.length || yCoordinates.length != output.length) {
+            return false;
+        }
+        try {
+            return nativeFillHeightMapTreePoints(nodeCount, opcodes, values, scales,
+                    octaves, seeds, xCoordinates, yCoordinates, output) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     /** Returns native terrain ordinals for one already-quantised SimpleTheme tile. */
     public static int[] simpleThemeTerrains(final int originX, final int originY,
                                             final int width, final int height,
@@ -332,6 +358,12 @@ public final class NativeSlices {
                                                        int[] opcodes, double[] values,
                                                        double[] scales, int[] octaves,
                                                        long[] seeds, double[] output);
+
+    private static native int nativeFillHeightMapTreePoints(int nodeCount,
+                                                            int[] opcodes, double[] values,
+                                                            double[] scales, int[] octaves,
+                                                            long[] seeds, float[] xCoordinates,
+                                                            float[] yCoordinates, double[] output);
 
     private static native int nativeShadeColours(int[] colours, long[] packedAmounts);
 

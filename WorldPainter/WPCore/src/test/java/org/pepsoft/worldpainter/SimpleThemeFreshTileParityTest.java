@@ -6,6 +6,7 @@ import org.pepsoft.worldpainter.heightMaps.BitmapHeightMap;
 import org.pepsoft.worldpainter.heightMaps.BicubicHeightMap;
 import org.pepsoft.worldpainter.heightMaps.BandedHeightMap;
 import org.pepsoft.worldpainter.heightMaps.DifferenceHeightMap;
+import org.pepsoft.worldpainter.heightMaps.DisplacementHeightMap;
 import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MinimisingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.MaximisingHeightMap;
@@ -351,6 +352,49 @@ public final class SimpleThemeFreshTileParityTest {
                             assertEquals("terrain at " + x + ',' + y,
                                     javaTile.getTerrain(x, y), nativeTile.getTerrain(x, y));
                         }
+                    }
+                }
+            }
+        } finally {
+            if (previousFlag == null) {
+                System.clearProperty(Native.GEN_KEY);
+            } else {
+                System.setProperty(Native.GEN_KEY, previousFlag);
+            }
+        }
+    }
+
+    @Test
+    public void nativeDisplacementHeightMapMatchesJavaFreshTile() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        try {
+            for (final int[] tile : new int[][] {{-2, 5}, {0, 0}, {1000, -1000}, {131073, 0}}) {
+                final HeightMapTileFactory javaFactory = new HeightMapTileFactory(73L,
+                        new DisplacementHeightMap(
+                                new SumHeightMap(new ConstantHeightMap(42.25),
+                                        new NoiseHeightMap(38.0, 0.8, 3, -0x1020_3040L)),
+                                new NoiseHeightMap(6.0, 0.75, 2, 0x1234_5678L),
+                                new NoiseHeightMap(8.0, 1.25, 2, -0x2468_1357L)),
+                        0, 256, false, createSimpleTheme(false));
+                final HeightMapTileFactory nativeFactory = new HeightMapTileFactory(73L,
+                        new DisplacementHeightMap(
+                                new SumHeightMap(new ConstantHeightMap(42.25),
+                                        new NoiseHeightMap(38.0, 0.8, 3, -0x1020_3040L)),
+                                new NoiseHeightMap(6.0, 0.75, 2, 0x1234_5678L),
+                                new NoiseHeightMap(8.0, 1.25, 2, -0x2468_1357L)),
+                        0, 256, false, createSimpleTheme(false));
+                Native.setGenEnabled(false);
+                final Tile javaTile = javaFactory.createTile(tile[0], tile[1]);
+                Native.setGenEnabled(true);
+                final Tile nativeTile = nativeFactory.createTile(tile[0], tile[1]);
+                for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                    for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                        assertEquals("displacement height at " + x + ',' + y,
+                                Float.floatToRawIntBits(javaTile.getHeight(x, y)),
+                                Float.floatToRawIntBits(nativeTile.getHeight(x, y)));
+                        assertEquals("terrain at " + x + ',' + y,
+                                javaTile.getTerrain(x, y), nativeTile.getTerrain(x, y));
                     }
                 }
             }

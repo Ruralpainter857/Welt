@@ -358,6 +358,240 @@ pub fn fill_height_map_tree(
     Ok(())
 }
 
+/// Evaluates a post-order height-map expression at explicit float coordinates.
+/// This is used by maps such as `DisplacementHeightMap` whose samples do not lie
+/// on a regular integer grid.
+pub fn fill_height_map_tree_points(
+    nodes: &[HeightMapNode],
+    x_coordinates: &[f32],
+    y_coordinates: &[f32],
+    output: &mut [f64],
+) -> Result<(), HeightMapTreeError> {
+    if nodes.is_empty() {
+        return Err(HeightMapTreeError::InvalidProgram);
+    }
+    if nodes.len() > MAX_PROGRAM_NODES {
+        return Err(HeightMapTreeError::TooManyNodes(nodes.len()));
+    }
+    let area = x_coordinates.len();
+    if (y_coordinates.len() != area) || (output.len() != area) {
+        return Err(HeightMapTreeError::OutputLength {
+            expected: area,
+            actual: output.len(),
+        });
+    }
+
+    let mut depth = 0_usize;
+    let mut noise_maps = Vec::new();
+    let mut parsed = Vec::with_capacity(nodes.len());
+    for &node in nodes {
+        match node {
+            HeightMapNode::Constant(value) => {
+                parsed.push(ParsedNode::Constant(value));
+                depth += 1;
+            }
+            HeightMapNode::Noise {
+                d_height,
+                scale,
+                octaves,
+                effective_seed,
+            } => {
+                noise_maps.push(NoiseHeightMapBulk::new(
+                    d_height,
+                    scale,
+                    octaves,
+                    effective_seed,
+                )?);
+                parsed.push(ParsedNode::Noise(noise_maps.len() - 1));
+                depth += 1;
+            }
+            HeightMapNode::Mandelbrot => {
+                parsed.push(ParsedNode::Mandelbrot);
+                depth += 1;
+            }
+            HeightMapNode::Banded {
+                segment1_length,
+                segment1_end_height,
+                segment2_length,
+                segment2_end_height,
+                smooth,
+            } => {
+                parsed.push(ParsedNode::Banded {
+                    segment1_length,
+                    segment1_end_height,
+                    segment2_length,
+                    segment2_end_height,
+                    smooth,
+                });
+                depth += 1;
+            }
+            HeightMapNode::Shelving {
+                shelve_height,
+                shelve_strength,
+            } => {
+                if depth < 1 {
+                    return Err(HeightMapTreeError::InvalidProgram);
+                }
+                parsed.push(ParsedNode::Shelving {
+                    shelve_height,
+                    shelve_strength,
+                });
+            }
+            HeightMapNode::NinePatch {
+                inner_size,
+                border_size,
+                coast_size,
+                height,
+            } => {
+                parsed.push(ParsedNode::NinePatch {
+                    inner_size,
+                    border_size,
+                    coast_size,
+                    height,
+                });
+                depth += 1;
+            }
+            HeightMapNode::Add => {
+                if depth < 2 {
+                    return Err(HeightMapTreeError::InvalidProgram);
+                }
+                depth -= 1;
+                parsed.push(ParsedNode::Add);
+            }
+            HeightMapNode::Subtract => {
+                if depth < 2 {
+                    return Err(HeightMapTreeError::InvalidProgram);
+                }
+                depth -= 1;
+                parsed.push(ParsedNode::Subtract);
+            }
+            HeightMapNode::Multiply => {
+                if depth < 2 {
+                    return Err(HeightMapTreeError::InvalidProgram);
+                }
+                depth -= 1;
+                parsed.push(ParsedNode::Multiply);
+            }
+            HeightMapNode::Minimum => {
+                if depth < 2 {
+                    return Err(HeightMapTreeError::InvalidProgram);
+                }
+                depth -= 1;
+                parsed.push(ParsedNode::Minimum);
+            }
+            HeightMapNode::Maximum => {
+                if depth < 2 {
+                    return Err(HeightMapTreeError::InvalidProgram);
+                }
+                depth -= 1;
+                parsed.push(ParsedNode::Maximum);
+            }
+        }
+    }
+    if depth != 1 {
+        return Err(HeightMapTreeError::InvalidProgram);
+    }
+    if noise_maps
+        .len()
+        .checked_mul(area)
+        .ok_or(HeightMapTreeError::AreaOverflow)?
+        > MAX_NOISE_VALUES
+    {
+        return Err(HeightMapTreeError::TooManyNoiseValues);
+    }
+
+    let mut stack = [0.0_f64; MAX_PROGRAM_NODES];
+    for cell in 0..area {
+        let x = x_coordinates[cell];
+        let y = y_coordinates[cell];
+        let mut stack_depth = 0_usize;
+        for node in &parsed {
+            match *node {
+                ParsedNode::Constant(value) => {
+                    stack[stack_depth] = value;
+                    stack_depth += 1;
+                }
+                ParsedNode::Noise(index) => {
+                    stack[stack_depth] = noise_maps[index].get_value(f64::from(x), f64::from(y));
+                    stack_depth += 1;
+                }
+                ParsedNode::Mandelbrot => {
+                    stack[stack_depth] = mandelbrot_height(x, y);
+                    stack_depth += 1;
+                }
+                ParsedNode::Banded {
+                    segment1_length,
+                    segment1_end_height,
+                    segment2_length,
+                    segment2_end_height,
+                    smooth,
+                } => {
+                    stack[stack_depth] = banded_height(
+                        x,
+                        segment1_length,
+                        segment1_end_height,
+                        segment2_length,
+                        segment2_end_height,
+                        smooth,
+                    );
+                    stack_depth += 1;
+                }
+                ParsedNode::Shelving {
+                    shelve_height,
+                    shelve_strength,
+                } => {
+                    let value = stack[stack_depth - 1];
+                    stack[stack_depth - 1] = value
+                        - (value * std::f64::consts::TAU / f64::from(shelve_height)).sin()
+                            * f64::from(shelve_strength);
+                }
+                ParsedNode::NinePatch {
+                    inner_size,
+                    border_size,
+                    coast_size,
+                    height,
+                } => {
+                    stack[stack_depth] =
+                        nine_patch_height(x, y, inner_size, border_size, coast_size, height);
+                    stack_depth += 1;
+                }
+                ParsedNode::Add => {
+                    let right = stack[stack_depth - 1];
+                    let left = stack[stack_depth - 2];
+                    stack_depth -= 1;
+                    stack[stack_depth - 1] = left + right;
+                }
+                ParsedNode::Subtract => {
+                    let right = stack[stack_depth - 1];
+                    let left = stack[stack_depth - 2];
+                    stack_depth -= 1;
+                    stack[stack_depth - 1] = left - right;
+                }
+                ParsedNode::Multiply => {
+                    let right = stack[stack_depth - 1];
+                    let left = stack[stack_depth - 2];
+                    stack_depth -= 1;
+                    stack[stack_depth - 1] = if left == 0.0 { 0.0 } else { left * right };
+                }
+                ParsedNode::Minimum => {
+                    let right = stack[stack_depth - 1];
+                    let left = stack[stack_depth - 2];
+                    stack_depth -= 1;
+                    stack[stack_depth - 1] = java_min(left, right);
+                }
+                ParsedNode::Maximum => {
+                    let right = stack[stack_depth - 1];
+                    let left = stack[stack_depth - 2];
+                    stack_depth -= 1;
+                    stack[stack_depth - 1] = java_max(left, right);
+                }
+            }
+        }
+        output[cell] = stack[0];
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug)]
 enum ParsedNode {
     Constant(f64),
@@ -543,8 +777,79 @@ fn java_max(left: f64, right: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{fill_height_map_tree, HeightMapNode, HeightMapTreeError};
+    use super::{
+        fill_height_map_tree, fill_height_map_tree_points, HeightMapNode, HeightMapTreeError,
+    };
     use crate::noise_height_map::NoiseHeightMapBulk;
+
+    #[test]
+    fn explicit_integer_points_match_regular_grid_evaluation() {
+        let nodes = [
+            HeightMapNode::Constant(13.25),
+            HeightMapNode::Noise {
+                d_height: 72.0,
+                scale: 1.125,
+                octaves: 4,
+                effective_seed: -0x1020_3040,
+            },
+            HeightMapNode::Add,
+            HeightMapNode::Mandelbrot,
+            HeightMapNode::Add,
+        ];
+        let (origin_x, origin_y, width, height) = (-19_i32, 37_i32, 5_usize, 4_usize);
+        let x_coordinates: Vec<_> = (0..height)
+            .flat_map(|_| (0..width).map(|x| (origin_x + x as i32) as f32))
+            .collect();
+        let y_coordinates: Vec<_> = (0..height)
+            .flat_map(|y| (0..width).map(move |_| (origin_y + y as i32) as f32))
+            .collect();
+        let mut actual = vec![0.0; width * height];
+        let mut expected = vec![0.0; width * height];
+
+        fill_height_map_tree_points(&nodes, &x_coordinates, &y_coordinates, &mut actual).unwrap();
+        fill_height_map_tree(
+            &nodes,
+            origin_x,
+            origin_y,
+            width,
+            height,
+            &mut expected,
+        )
+        .unwrap();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn explicit_fractional_points_preserve_float_coordinate_precision() {
+        let nodes = [
+            HeightMapNode::Constant(-7.5),
+            HeightMapNode::Noise {
+                d_height: 128.0,
+                scale: 0.75,
+                octaves: 3,
+                effective_seed: 0x5566_7788,
+            },
+            HeightMapNode::Add,
+        ];
+        let x_coordinates = [-12.375_f32, 0.125, 98.75];
+        let y_coordinates = [7.5_f32, -31.25, 14.875];
+        let mut actual = [0.0; 3];
+        let noise = NoiseHeightMapBulk::new(128.0, 0.75, 3, 0x5566_7788).unwrap();
+
+        fill_height_map_tree_points(&nodes, &x_coordinates, &y_coordinates, &mut actual).unwrap();
+
+        for index in 0..actual.len() {
+            assert_eq!(
+                actual[index].to_bits(),
+                (-7.5 + noise.get_value(
+                    f64::from(x_coordinates[index]),
+                    f64::from(y_coordinates[index]),
+                ))
+                .to_bits()
+            );
+        }
+    }
 
     #[test]
     fn nested_sum_preserves_java_tree_order_bit_for_bit() {
