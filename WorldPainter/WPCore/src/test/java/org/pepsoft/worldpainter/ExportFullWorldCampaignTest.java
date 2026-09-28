@@ -485,6 +485,7 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                     recording.setName("Welt native resources and fluid export");
                     recording.enable("jdk.ExecutionSample").withPeriod(Duration.ofMillis(10));
                     recording.enable("jdk.ThreadCPULoad").withPeriod(Duration.ofMillis(1_000));
+                    recording.enable("jdk.ObjectAllocationSample");
                     recording.start();
                     try {
                         runExport(world, root,
@@ -735,6 +736,7 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                     recording.setName("Welt full export Java baseline");
                     recording.enable("jdk.ExecutionSample").withPeriod(Duration.ofMillis(10));
                     recording.enable("jdk.ThreadCPULoad").withPeriod(Duration.ofSeconds(1));
+                    recording.enable("jdk.ObjectAllocationSample");
                     recording.start();
                     try {
                         stats = exporter.export(output.toFile(), world.getName(),
