@@ -107,6 +107,14 @@ impl ResourceNoiseWorkspace {
         self.resource_candidate_offsets.fill(0);
         self.resource_candidates.clear();
     }
+
+    #[cfg(test)]
+    fn resource_candidate_candidates_for(&self, resource_value: usize, height: usize) -> &[usize] {
+        let stride = height + 1;
+        let offset = resource_value * stride;
+        &self.resource_candidates[self.resource_candidate_offsets[offset]
+            ..self.resource_candidate_offsets[offset + height]]
+    }
 }
 
 #[derive(Default)]
@@ -396,15 +404,5 @@ mod tests {
             workspace.resource_candidate_candidates_for(1, 5),
             &[1, 1, 1]
         );
-    }
-}
-
-impl ResourceNoiseWorkspace {
-    #[cfg(test)]
-    fn resource_candidate_candidates_for(&self, resource_value: usize, height: usize) -> &[usize] {
-        let stride = height + 1;
-        let offset = resource_value * stride;
-        &self.resource_candidates[self.resource_candidate_offsets[offset]
-            ..self.resource_candidate_offsets[offset + height]]
     }
 }
