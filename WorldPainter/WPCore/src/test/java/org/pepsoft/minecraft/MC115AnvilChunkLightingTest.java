@@ -29,4 +29,14 @@ public final class MC115AnvilChunkLightingTest {
             }
         }
     }
+
+    @Test
+    public void outOfRangeZIsCheckedBeforeSectionLookup() {
+        final MC115AnvilChunk chunk = new MC115AnvilChunk(0, 0, 16);
+
+        assertEquals(15, chunk.getSkyLightLevel(0, 16, -1));
+        assertEquals(15, chunk.getSkyLightLevel(0, 16, 16));
+        assertEquals(0, chunk.getBlockLightLevel(0, 16, -1));
+        assertEquals(0, chunk.getBlockLightLevel(0, 16, 16));
+    }
 }
