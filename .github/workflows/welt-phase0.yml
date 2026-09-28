@@ -182,13 +182,14 @@ jobs:
 
       - name: Measure baseline full-world exports
         working-directory: baseline/WorldPainter
-        run: >-
-          mvn --batch-mode --no-transfer-progress -Pnative -pl WPCore -am
-          -Dtest=ExportFullWorldCampaignTest
-          -Dsurefire.failIfNoSpecifiedTests=false
-          -Dwelt.export.campaign=true
-          -Dwelt.export.modernChunkCampaign=true
-          test
+        shell: bash
+        run: |
+          mvn --batch-mode --no-transfer-progress -Pnative -pl WPCore -am \
+            '-Dtest=ExportFullWorldCampaignTest' \
+            '-Dsurefire.failIfNoSpecifiedTests=false' \
+            '-Dwelt.export.campaign=true' \
+            '-Dwelt.export.modernChunkCampaign=true' \
+            test
 
       - name: Upload baseline measurements
         if: always()
@@ -206,13 +207,14 @@ jobs:
 
       - name: Measure candidate full-world exports
         working-directory: candidate/WorldPainter
-        run: >-
-          mvn --batch-mode --no-transfer-progress -Pnative -pl WPCore -am
-          -Dtest=ExportFullWorldCampaignTest
-          -Dsurefire.failIfNoSpecifiedTests=false
-          -Dwelt.export.campaign=true
-          -Dwelt.export.modernChunkCampaign=true
-          test
+        shell: bash
+        run: |
+          mvn --batch-mode --no-transfer-progress -Pnative -pl WPCore -am \
+            '-Dtest=ExportFullWorldCampaignTest' \
+            '-Dsurefire.failIfNoSpecifiedTests=false' \
+            '-Dwelt.export.campaign=true' \
+            '-Dwelt.export.modernChunkCampaign=true' \
+            test
 
       - name: Upload candidate measurements
         if: always()
