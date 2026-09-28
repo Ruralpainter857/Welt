@@ -275,6 +275,12 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 return;
             }
 
+            if (Boolean.getBoolean("welt.export.resourcesOnlyCampaign")) {
+                assumeTrue("Resources campaign requires the modern chunk fixture", modernChunkCampaign);
+                runNativeModeCampaign(world, root, modes[0], MODES[3], workerCount, "Resources");
+                return;
+            }
+
             if (Boolean.getBoolean("welt.export.frostOnlyCampaign")) {
                 assumeTrue("Frost-only campaign requires the modern chunk fixture", modernChunkCampaign);
                 runNativeModeCampaign(world, root, modes[0], MODES[2], workerCount, "Frost");
@@ -1016,6 +1022,7 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
     private static void runNativeModeCampaign(World2 world, Path root, Mode javaMode,
                                               Mode frostMode, int workerCount, String label) throws Exception {
         final List<Long> javaNanos = new ArrayList<>(), frostNanos = new ArrayList<>();
+        final List<Long> pairedRatios = new ArrayList<>();
         final List<Long> javaHeapPeaks = new ArrayList<>(), frostHeapPeaks = new ArrayList<>();
         final List<Long> javaHeapGrowth = new ArrayList<>(), frostHeapGrowth = new ArrayList<>();
         final List<Long> javaRssPeaks = new ArrayList<>(), frostRssPeaks = new ArrayList<>();
@@ -1037,6 +1044,7 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
         for (int round = 0; round < 5; round++) {
             final Mode[] order = (((round & 1) == 0) != reverseOrder)
                     ? new Mode[]{javaMode, frostMode} : new Mode[]{frostMode, javaMode};
+            RunResult javaRun = null, nativeRun = null;
             for (Mode mode : order) {
                 final boolean frost = mode == frostMode;
                 final RunResult result = runExport(world, root, mode,
@@ -1047,11 +1055,14 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 (frost ? frostHeapGrowth : javaHeapGrowth).add(result.peakHeapGrowthBytes());
                 (frost ? frostRssPeaks : javaRssPeaks).add(result.peakRssBytes);
                 (frost ? frostRssGrowth : javaRssGrowth).add(result.peakRssGrowthBytes());
+                if (frost) nativeRun = result;
+                else javaRun = result;
                 if (round == 4) {
                     if (frost) frostOutput = result.output;
                     else javaOutput = result.output;
                 }
             }
+            pairedRatios.add(Math.round(javaRun.wallNanos * 1_000_000.0 / nativeRun.wallNanos));
         }
 
         final Map<String, Map<Integer, byte[]>> javaChunks = readRegions(javaOutput);
@@ -1059,35 +1070,60 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
         assertRegionsEqual(label + "/java", javaChunks, frostChunks);
         final long javaMedian = median(javaNanos), frostMedian = median(frostNanos);
         System.out.printf("%s full-export A/B (5 alternating, %d workers): Java %.3f s, "
-                        + "Welt %.3f s, ratio %.3fx; runs Java %s, Welt %s; "
+                        + "Welt %.3f s, median paired ratio %.3fx; runs Java %s, Welt %s; "
                         + "heap peak/growth %.1f/%.1f vs %.1f/%.1f MiB; "
                         + "RSS peak/growth %s/%s vs %s/%s; NBT parity on %d chunks.%n",
                 label, workerCount, javaMedian / 1_000_000_000.0, frostMedian / 1_000_000_000.0,
-                (double) javaMedian / frostMedian, seconds(javaNanos), seconds(frostNanos),
+                median(pairedRatios) / 1_000_000.0, seconds(javaNanos), seconds(frostNanos),
                 median(javaHeapPeaks) / 1048576.0, median(javaHeapGrowth) / 1048576.0,
                 median(frostHeapPeaks) / 1048576.0, median(frostHeapGrowth) / 1048576.0,
                 formatMiB(medianAvailable(javaRssPeaks)), formatMiB(medianAvailable(javaRssGrowth)),
                 formatMiB(medianAvailable(frostRssPeaks)), formatMiB(medianAvailable(frostRssGrowth)),
                 countChunks(frostChunks));
 
-        final String previousFrostProfile = System.getProperty("welt.export.profileFrostNative");
-        try {
-            System.setProperty("welt.export.profileFrostNative", "true");
-            FrostExporter.resetNativeProfile();
-            final RunResult profile = runExport(world, root, frostMode, modeName + "-profile", false);
-            printTimings(modeName + "-profile", -1, profile);
-            final Map<String, Map<Integer, byte[]>> profileChunks = readRegions(profile.output);
-            assertRegionsEqual(label + "/profile", javaChunks, profileChunks);
-            final long[] profileStats = FrostExporter.nativeProfileSnapshot();
-            System.out.printf("Frost batch detail for %s: preparation %.3f s, JNI+Rust %.3f s, "
-                            + "Java application/fallback %.3f s; %d JNI calls, %d native columns, "
-                            + "%d fallback columns, %d packed cells.%n",
-                    label, profileStats[0] / 1_000_000_000.0,
-                    profileStats[1] / 1_000_000_000.0, profileStats[2] / 1_000_000_000.0,
-                    profileStats[3], profileStats[4], profileStats[5], profileStats[6]);
-        } finally {
-            restore("welt.export.profileFrostNative", previousFrostProfile);
-            FrostExporter.resetNativeProfile();
+        if (frostMode.frost) {
+            final String previousFrostProfile = System.getProperty("welt.export.profileFrostNative");
+            try {
+                System.setProperty("welt.export.profileFrostNative", "true");
+                FrostExporter.resetNativeProfile();
+                final RunResult profile = runExport(world, root, frostMode, modeName + "-profile", false);
+                printTimings(modeName + "-profile", -1, profile);
+                final Map<String, Map<Integer, byte[]>> profileChunks = readRegions(profile.output);
+                assertRegionsEqual(label + "/profile", javaChunks, profileChunks);
+                final long[] profileStats = FrostExporter.nativeProfileSnapshot();
+                System.out.printf("Frost batch detail for %s: preparation %.3f s, JNI+Rust %.3f s, "
+                                + "Java application/fallback %.3f s; %d JNI calls, %d native columns, "
+                                + "%d fallback columns, %d packed cells.%n",
+                        label, profileStats[0] / 1_000_000_000.0,
+                        profileStats[1] / 1_000_000_000.0, profileStats[2] / 1_000_000_000.0,
+                        profileStats[3], profileStats[4], profileStats[5], profileStats[6]);
+            } finally {
+                restore("welt.export.profileFrostNative", previousFrostProfile);
+                FrostExporter.resetNativeProfile();
+            }
+        } else if (frostMode.resources) {
+            final String property = "welt.export.profileResourcesNative";
+            final String previousResourceProfile = System.getProperty(property);
+            try {
+                System.setProperty(property, "true");
+                ResourcesExporter.resetNativeProfile();
+                final RunResult profile = runExport(world, root, frostMode, modeName + "-profile", false);
+                printTimings(modeName + "-profile", -1, profile);
+                final Map<String, Map<Integer, byte[]>> profileChunks = readRegions(profile.output);
+                assertRegionsEqual(label + "/profile", javaChunks, profileChunks);
+                final long[] stats = ResourcesExporter.nativeProfileSnapshot();
+                System.out.printf("Resources batch detail: preparation %.3f s, JNI+copy+Rust %.3f s "
+                                + "(copies %.3f s, kernel %.3f s: setup %.3f s, scan %.3f s, "
+                                + "%,d Perlin samples), Java apply %.3f s; %d chunks, "
+                                + "%d live-palette updates, %d views, %d misses, %d rejects.%n",
+                        stats[0] / 1_000_000_000.0, stats[1] / 1_000_000_000.0,
+                        stats[4] / 1_000_000_000.0, stats[5] / 1_000_000_000.0,
+                        stats[7] / 1_000_000_000.0, stats[8] / 1_000_000_000.0, stats[9],
+                        stats[2] / 1_000_000_000.0, stats[3], stats[6], stats[10], stats[11], stats[12]);
+            } finally {
+                restore(property, previousResourceProfile);
+                ResourcesExporter.resetNativeProfile();
+            }
         }
     }
 
