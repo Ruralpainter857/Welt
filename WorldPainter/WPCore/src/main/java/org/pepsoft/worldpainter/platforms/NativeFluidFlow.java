@@ -158,15 +158,27 @@ public final class NativeFluidFlow {
         }
 
         final long applyStart = profile ? System.nanoTime() : 0L;
-        for (int x = localX1; x <= localX2; x++) {
-            for (int z = localZ1; z <= localZ2; z++) {
-                final int column = x * 16 + z;
-                for (int y = minY + 1; y <= maxY; y++) {
-                    final int updateOffset = column * height + y - minY;
-                    if (buffers.updates[updateOffset] != 0) {
-                        chunk.markForUpdateChunk(x, y, z);
-                    }
+        final int updateCapacity = height * 256;
+        final int updateWordCount = (updateCapacity + Long.SIZE - 1) / Long.SIZE;
+        if (buffers.updates.length < updateWordCount) {
+            return false;
+        }
+        for (int wordIndex = 0; wordIndex < updateWordCount; wordIndex++) {
+            long word = buffers.updates[wordIndex];
+            while (word != 0L) {
+                final int bit = Long.numberOfTrailingZeros(word);
+                final int updateOffset = (wordIndex << 6) + bit;
+                if (updateOffset >= updateCapacity) {
+                    return false;
                 }
+                final int column = updateOffset / height;
+                final int x = column >> 4, z = column & 15;
+                final int y = minY + updateOffset % height;
+                if ((x >= localX1) && (x <= localX2) && (z >= localZ1) && (z <= localZ2)
+                        && (y > minY)) {
+                    chunk.markForUpdateChunk(x, y, z);
+                }
+                word &= word - 1L;
             }
         }
         if (profile) {
@@ -299,16 +311,16 @@ public final class NativeFluidFlow {
         private final byte[][] paletteFlags = new byte[256][];
         private byte[] westEdge = new byte[0], eastEdge = new byte[0];
         private byte[] northEdge = new byte[0], southEdge = new byte[0];
-        private byte[] updates = new byte[0];
+        private long[] updates = new long[0];
 
         private void ensure(int sectionCount, int height) {
             final int edgeLength = height * 16;
-            final int updateLength = height * 256;
+            final int updateLength = height * 4;
             if (westEdge.length < edgeLength) westEdge = new byte[edgeLength];
             if (eastEdge.length < edgeLength) eastEdge = new byte[edgeLength];
             if (northEdge.length < edgeLength) northEdge = new byte[edgeLength];
             if (southEdge.length < edgeLength) southEdge = new byte[edgeLength];
-            if (updates.length < updateLength) updates = new byte[updateLength];
+            if (updates.length < updateLength) updates = new long[updateLength];
             if (sectionCount > sectionIndexes.length) {
                 throw new IllegalArgumentException("Too many chunk sections: " + sectionCount);
             }

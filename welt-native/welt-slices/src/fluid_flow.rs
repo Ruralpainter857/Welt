@@ -143,12 +143,15 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let height = height_i64 as usize;
             let edge_length = height.saturating_mul(16);
             let output_length = height.saturating_mul(256);
+            let update_buffer_length = output_length.div_ceil(64);
 
             type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
             type GetObjectArrayElement =
                 unsafe extern "system" fn(*mut JNIEnv, jobject, jint) -> jobject;
             type GetIntArrayElements =
                 unsafe extern "system" fn(*mut JNIEnv, jobject, *mut u8) -> *mut i32;
+            type GetLongArrayElements =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, *mut u8) -> *mut i64;
             type GetByteArrayRegion =
                 unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i8);
             type GetByteArrayElements =
@@ -160,6 +163,8 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 std::mem::transmute(function(env, GET_OBJECT_ARRAY_ELEMENT));
             let get_int_elements: GetIntArrayElements =
                 std::mem::transmute(function(env, GET_INT_ARRAY_ELEMENTS));
+            let get_long_elements: GetLongArrayElements =
+                std::mem::transmute(function(env, GET_LONG_ARRAY_ELEMENTS));
             let get_byte_region: GetByteArrayRegion =
                 std::mem::transmute(function(env, GET_BYTE_ARRAY_REGION));
             let get_byte_elements: GetByteArrayElements =
@@ -171,7 +176,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 || [west_edge, east_edge, north_edge, south_edge]
                     .iter()
                     .any(|&array| get_length(env, array) < edge_length as jint)
-                || get_length(env, updates) < output_length as jint
+                || get_length(env, updates) < update_buffer_length as jint
             {
                 return WeltError::IllegalArgument as jint;
             }
@@ -229,15 +234,15 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                     length: edge_length,
                 });
             }
-            let output_values = get_byte_elements(env, updates, std::ptr::null_mut());
+            let output_values = get_long_elements(env, updates, std::ptr::null_mut());
             if output_values.is_null() {
                 return WeltError::Internal as jint;
             }
-            let mut output = ByteArrayOutput {
+            let mut output = LongArrayOutput {
                 env,
                 array: updates,
                 values: output_values,
-                length: output_length,
+                length: update_buffer_length,
             };
 
             let edge_values: [&[i8]; 4] = [
@@ -246,7 +251,8 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 edges[2].as_slice(),
                 edges[3].as_slice(),
             ];
-            let mut marks = vec![0_i8; output_length];
+            let update_words = output.as_mut_slice();
+            update_words.fill(0);
             for x in 0..16_usize {
                 for z in 0..16_usize {
                     let mut below = match palette_state(&sections, section_min_y, x, z, min_y) {
@@ -299,13 +305,16 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                                 && !lava_contained(below, north, east, south, west));
                         if update {
                             let column = x * 16 + z;
-                            marks[column * height + (y - min_y) as usize] = 1;
+                            let position = column * height + (y - min_y) as usize;
+                            let Some(word) = update_words.get_mut(position / 64) else {
+                                return WeltError::IllegalArgument as jint;
+                            };
+                            *word = ((*word as u64) | (1_u64 << (position & 63))) as i64;
                         }
                         below = material;
                     }
                 }
             }
-            output.as_mut_slice().copy_from_slice(&marks);
             WeltError::Ok as jint
         })
     }

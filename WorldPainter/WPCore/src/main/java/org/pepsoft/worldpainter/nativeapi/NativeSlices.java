@@ -408,7 +408,7 @@ public final class NativeSlices {
                                                     final byte[][] paletteFlags,
                                                     final byte[] westEdge, final byte[] eastEdge,
                                                     final byte[] northEdge, final byte[] southEdge,
-                                                    final byte[] updates) {
+                                                    final long[] updates) {
         final long height = (long) maxY - minY + 1L;
         if (!Native.isFluidFlowExportEnabled() || !NativeLoader.areSlicesAvailable()
                 || minY > maxY || minY < worldMinY || maxY > worldMaxY
@@ -424,7 +424,7 @@ public final class NativeSlices {
                 || height * 16L > Integer.MAX_VALUE || height * 256L > Integer.MAX_VALUE
                 || westEdge.length < height * 16L || eastEdge.length < height * 16L
                 || northEdge.length < height * 16L || southEdge.length < height * 16L
-                || updates.length < height * 256L) {
+                || updates.length < (height * 256L + Long.SIZE - 1L) / Long.SIZE) {
             return false;
         }
         for (int section = 0; section < sectionCount; section++) {
@@ -581,7 +581,7 @@ public final class NativeSlices {
                                                              byte[][] paletteFlags,
                                                              byte[] westEdge, byte[] eastEdge,
                                                              byte[] northEdge, byte[] southEdge,
-                                                             byte[] updates);
+                                                             long[] updates);
 
     private static native int nativeValidateChunkPaletteBuffer(ByteBuffer buffer);
 

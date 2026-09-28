@@ -206,7 +206,10 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
         assumeTrue(Boolean.getBoolean("welt.export.campaign"));
         assumeTrue("welt_slices must be available for native campaigns", NativeLoader.areSlicesAvailable());
         final boolean modernChunkCampaign = Boolean.getBoolean("welt.export.modernChunkCampaign");
-        final int workerCount = modernChunkCampaign ? 1 : 4;
+        final int workerCount = Integer.getInteger("welt.export.workerCount", modernChunkCampaign ? 1 : 4);
+        if (workerCount < 1) {
+            throw new IllegalArgumentException("Export worker count must be positive");
+        }
         final String oldHome = System.getProperty("user.home");
         final String oldThreads = System.getProperty("org.pepsoft.worldpainter.threads");
         final String oldExport = System.getProperty(Native.EXPORT_KEY);
@@ -242,6 +245,19 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
             }
             for (int i = 0; i < Terrain.CUSTOM_TERRAIN_COUNT; i++) {
                 Terrain.setCustomMaterial(i, world.getMixedMaterial(i));
+            }
+
+            if (Boolean.getBoolean("welt.export.javaRepeatOnly")) {
+                final Mode javaMode = modes[0];
+                runExport(world, root, javaMode, "java-repeat-warmup-0", false);
+                runExport(world, root, javaMode, "java-repeat-warmup-1", false);
+                final RunResult first = runExport(world, root, javaMode, "java-repeat-a", false);
+                final RunResult second = runExport(world, root, javaMode, "java-repeat-b", false);
+                assertRegionsEqual("java-repeat", readRegions(first.output), readRegions(second.output));
+                System.out.printf("Java repeat export: %.3f s then %.3f s; deterministic NBT parity on %d chunks.%n",
+                        first.wallNanos / 1_000_000_000.0, second.wallNanos / 1_000_000_000.0,
+                        countChunks(readRegions(second.output)));
+                return;
             }
 
             if (Boolean.getBoolean("welt.export.allocationProfileOnly")) {
@@ -356,6 +372,76 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                         nativeProfile[8] / 1_000_000_000.0,
                         nativeProfile[9], nativeProfile[2] / 1_000_000_000.0,
                         nativeProfile[6]);
+                return;
+            }
+
+            if (Boolean.getBoolean("welt.export.fluidFlowProfileOnly")) {
+                assumeTrue("fluid-flow profiling requires a modern chunk campaign", modernChunkCampaign);
+                final Mode javaMode = modes[0];
+                final Mode fluidMode = modes[2];
+                final List<Long> javaNanos = new ArrayList<>(), fluidNanos = new ArrayList<>();
+                final List<Long> javaHeapPeaks = new ArrayList<>(), fluidHeapPeaks = new ArrayList<>();
+                final List<Long> javaHeapGrowth = new ArrayList<>(), fluidHeapGrowth = new ArrayList<>();
+                final List<Long> javaRssPeaks = new ArrayList<>(), fluidRssPeaks = new ArrayList<>();
+                final List<Long> javaRssGrowth = new ArrayList<>(), fluidRssGrowth = new ArrayList<>();
+                Path javaOutput = null, fluidOutput = null;
+                for (int warmup = 0; warmup < 2; warmup++) {
+                    final boolean reverse = (warmup & 1) != 0;
+                    for (int position = 0; position < 2; position++) {
+                        final boolean useFluid = (position == 1) != reverse;
+                        runExport(world, root, useFluid ? fluidMode : javaMode,
+                                "fluid-ab-warmup-" + warmup + "-" + useFluid, false);
+                    }
+                }
+                for (int round = 0; round < 5; round++) {
+                    final boolean reverse = (round & 1) != 0;
+                    for (int position = 0; position < 2; position++) {
+                        final boolean useFluid = (position == 1) != reverse;
+                        final RunResult result = runExport(world, root,
+                                useFluid ? fluidMode : javaMode,
+                                "fluid-ab-round-" + round + "-" + useFluid, false);
+                        (useFluid ? fluidNanos : javaNanos).add(result.wallNanos);
+                        (useFluid ? fluidHeapPeaks : javaHeapPeaks).add(result.peakHeapBytes);
+                        (useFluid ? fluidHeapGrowth : javaHeapGrowth).add(result.peakHeapGrowthBytes());
+                        (useFluid ? fluidRssPeaks : javaRssPeaks).add(result.peakRssBytes);
+                        (useFluid ? fluidRssGrowth : javaRssGrowth).add(result.peakRssGrowthBytes());
+                        if (round == 4) {
+                            if (useFluid) fluidOutput = result.output;
+                            else javaOutput = result.output;
+                        }
+                    }
+                }
+                assertRegionsEqual("fluid-flow-ab/java", readRegions(javaOutput), readRegions(fluidOutput));
+                final long javaMedian = median(javaNanos), fluidMedian = median(fluidNanos);
+                System.out.printf("Fluid-flow full-export A/B (5 alternating, %d workers): Java %.3f s, "
+                                + "Welt %.3f s, ratio %.3fx; heap peak/growth %.1f/%.1f vs %.1f/%.1f MiB; "
+                                + "RSS peak/growth %s/%s vs %s/%s; runs Java %s, Welt %s; NBT parity on %d chunks.%n",
+                        workerCount, javaMedian / 1_000_000_000.0, fluidMedian / 1_000_000_000.0,
+                        (double) javaMedian / fluidMedian,
+                        median(javaHeapPeaks) / 1048576.0, median(javaHeapGrowth) / 1048576.0,
+                        median(fluidHeapPeaks) / 1048576.0, median(fluidHeapGrowth) / 1048576.0,
+                        formatMiB(medianAvailable(javaRssPeaks)),
+                        formatMiB(medianAvailable(javaRssGrowth)),
+                        formatMiB(medianAvailable(fluidRssPeaks)),
+                        formatMiB(medianAvailable(fluidRssGrowth)),
+                        seconds(javaNanos), seconds(fluidNanos), countChunks(readRegions(fluidOutput)));
+                final String previousFluidProfile = System.getProperty("welt.export.profileFluidFlow");
+                try {
+                    System.setProperty("welt.export.profileFluidFlow", "true");
+                    NativeFluidFlow.resetProfile();
+                    final RunResult profile = runExport(world, root, fluidMode, "fluid-profile", false);
+                    printTimings("fluid-flow-profile", -1, profile);
+                    final long[] stats = NativeFluidFlow.profileSnapshot();
+                    System.out.printf("Fluid-flow details: %d native chunks (%d snapshots, %d live palettes), "
+                                    + "%d Java fallbacks; preparation %.3f s, JNI+Rust %.3f s, "
+                                    + "application %.3f s.%n",
+                            stats[0], stats[5], stats[6], stats[1],
+                            stats[2] / 1_000_000_000.0, stats[3] / 1_000_000_000.0,
+                            stats[4] / 1_000_000_000.0);
+                } finally {
+                    restore("welt.export.profileFluidFlow", previousFluidProfile);
+                    NativeFluidFlow.resetProfile();
+                }
                 return;
             }
 

@@ -61,7 +61,7 @@ public final class NativeFluidFlowJniTest {
             final boolean processed = NativeSlices.findFluidUpdatesForChunk(
                     0, 0, 0, 0, 0, 1, true, false,
                     new int[][]{new int[4096]}, new byte[][]{new byte[]{0}},
-                    new byte[16], new byte[16], new byte[16], new byte[16], new byte[256]);
+                    new byte[16], new byte[16], new byte[16], new byte[16], new long[4]);
             assertTrue("the native fluid JNI entry should accept a valid palette", processed);
         } finally {
             restore(Native.EXPORT_KEY, previousExport);
@@ -82,6 +82,8 @@ public final class NativeFluidFlowJniTest {
             final MC115AnvilChunk chunk = new MC115AnvilChunk(0, 0, 16);
             chunk.setMaterial(2, 0, 3, STONE);
             chunk.setMaterial(2, 2, 3, WATER);
+            chunk.setMaterial(4, 1, 3, WATER);
+            chunk.setMaterial(15, 2, 15, WATER);
             final ChunkPaletteBuffer.LivePaletteView palette =
                     ChunkPaletteBuffer.openPaletteIndexView(chunk, 0, 2);
             assertNotNull(palette);
@@ -98,12 +100,17 @@ public final class NativeFluidFlowJniTest {
                 flags[index] = (byte) state;
             }
             final int height = 3, column = 2 * 16 + 3;
-            final byte[] updates = new byte[height * 256];
+            final long[] updates = new long[height * 4];
             assertTrue(NativeSlices.findFluidUpdatesForChunk(0, 2, 0, 15, palette.minY(), 1,
                     true, false, new int[][]{palette.indexes(0)}, new byte[][]{flags},
                     new byte[height * 16], new byte[height * 16],
                     new byte[height * 16], new byte[height * 16], updates));
-            assertEquals(1, updates[column * height + 2]);
+            final int expectedOffset = column * height + 2;
+            assertEquals(1L, (updates[expectedOffset >>> 6] >>> (expectedOffset & 63)) & 1L);
+            final int secondOffset = (4 * 16 + 3) * height + 1;
+            assertEquals(1L, (updates[secondOffset >>> 6] >>> (secondOffset & 63)) & 1L);
+            final int finalOffset = (15 * 16 + 15) * height + 2;
+            assertEquals(1L, (updates[finalOffset >>> 6] >>> (finalOffset & 63)) & 1L);
         } finally {
             restore(Native.EXPORT_KEY, previousExport);
             restore(Native.FLUID_FLOW_EXPORT_KEY, previousFluidFlow);

@@ -75,6 +75,8 @@ const GET_BYTE_ARRAY_ELEMENTS: usize = 184;
 const RELEASE_BYTE_ARRAY_ELEMENTS: usize = 192;
 const GET_INT_ARRAY_ELEMENTS: usize = 187;
 const RELEASE_INT_ARRAY_ELEMENTS: usize = 195;
+const GET_LONG_ARRAY_ELEMENTS: usize = 188;
+const RELEASE_LONG_ARRAY_ELEMENTS: usize = 196;
 const SET_INT_ARRAY_REGION: usize = 211;
 const SET_LONG_ARRAY_REGION: usize = 212;
 const GET_BYTE_ARRAY_REGION: usize = 200;
@@ -300,6 +302,29 @@ struct ByteArrayOutput {
     array: jobject,
     values: *mut i8,
     length: usize,
+}
+
+struct LongArrayOutput {
+    env: *mut JNIEnv,
+    array: jobject,
+    values: *mut i64,
+    length: usize,
+}
+
+impl LongArrayOutput {
+    fn as_mut_slice(&mut self) -> &mut [i64] {
+        unsafe { slice::from_raw_parts_mut(self.values, self.length) }
+    }
+}
+
+impl Drop for LongArrayOutput {
+    fn drop(&mut self) {
+        type ReleaseLongArrayElements =
+            unsafe extern "system" fn(*mut JNIEnv, jobject, *mut i64, jint);
+        let release: ReleaseLongArrayElements =
+            unsafe { std::mem::transmute(function(self.env, RELEASE_LONG_ARRAY_ELEMENTS)) };
+        unsafe { release(self.env, self.array, self.values, 0) };
+    }
 }
 
 struct WritableIntArray {
