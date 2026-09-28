@@ -141,8 +141,8 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 return WeltError::IllegalArgument as jint;
             }
             let height = height_i64 as usize;
-            let edge_length = height.checked_mul(16).unwrap_or(usize::MAX);
-            let output_length = height.checked_mul(256).unwrap_or(usize::MAX);
+            let edge_length = height.saturating_mul(16);
+            let output_length = height.saturating_mul(256);
 
             type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
             type GetObjectArrayElement =

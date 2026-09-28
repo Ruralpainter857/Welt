@@ -139,7 +139,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer).cast::<u8>();
             let length = capacity(env, buffer);
-            if pointer.is_null() || length < 0 || length > 9_000_000 {
+            if pointer.is_null() || !(0..=9_000_000).contains(&length) {
                 return WeltError::IllegalArgument as jint;
             }
             let bytes = slice::from_raw_parts(pointer, length as usize);

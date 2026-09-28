@@ -74,8 +74,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let materials = get_array_length(env, seeds);
             let section_array_length = get_array_length(env, section_indexes);
             if columns != 256
-                || materials < 0
-                || materials > 64
+                || !(0..=64).contains(&materials)
                 || section_count > 256
                 || section_count > section_array_length
                 || section_count > get_array_length(env, palette_flags)
@@ -141,6 +140,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn apply_palette_results(
     env: *mut JNIEnv,
     min_z: jint,
