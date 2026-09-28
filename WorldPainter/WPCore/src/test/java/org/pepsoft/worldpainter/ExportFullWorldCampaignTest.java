@@ -245,27 +245,70 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
             }
 
             if (Boolean.getBoolean("welt.export.resourcesProfileOnly")) {
-                runExport(world, root, modes[0], "resource-profile-warmup-java", false);
-                runExport(world, root, modes[3], "resource-profile-warmup-native", false);
-                final RunResult javaResult = runExport(world, root, modes[0], "resource-profile-java", false);
+                final List<Long> javaNanos = new ArrayList<>(), nativeNanos = new ArrayList<>();
+                final List<Long> javaHeapPeaks = new ArrayList<>(), nativeHeapPeaks = new ArrayList<>();
+                final List<Long> javaHeapGrowth = new ArrayList<>(), nativeHeapGrowth = new ArrayList<>();
+                final List<Long> javaRssPeaks = new ArrayList<>(), nativeRssPeaks = new ArrayList<>();
+                final List<Long> javaRssGrowth = new ArrayList<>(), nativeRssGrowth = new ArrayList<>();
+                Path javaOutput = null, nativeOutput = null;
+                for (int warmup = 0; warmup < 2; warmup++) {
+                    final boolean reverse = (warmup & 1) != 0;
+                    for (int position = 0; position < 2; position++) {
+                        final boolean useNative = (position == 1) != reverse;
+                        runExport(world, root, useNative ? modes[3] : modes[0],
+                                "resource-ab-warmup-" + warmup + "-" + useNative, false);
+                    }
+                }
+                for (int round = 0; round < 5; round++) {
+                    final boolean reverse = (round & 1) != 0;
+                    for (int position = 0; position < 2; position++) {
+                        final boolean useNative = (position == 1) != reverse;
+                        final RunResult result = runExport(world, root,
+                                useNative ? modes[3] : modes[0],
+                                "resource-ab-round-" + round + "-" + useNative, false);
+                        (useNative ? nativeNanos : javaNanos).add(result.wallNanos);
+                        (useNative ? nativeHeapPeaks : javaHeapPeaks).add(result.peakHeapBytes);
+                        (useNative ? nativeHeapGrowth : javaHeapGrowth).add(result.peakHeapGrowthBytes());
+                        (useNative ? nativeRssPeaks : javaRssPeaks).add(result.peakRssBytes);
+                        (useNative ? nativeRssGrowth : javaRssGrowth).add(result.peakRssGrowthBytes());
+                        if (round == 4) {
+                            if (useNative) nativeOutput = result.output;
+                            else javaOutput = result.output;
+                        }
+                    }
+                }
+                assertRegionsEqual("resource-ab/java", readRegions(javaOutput), readRegions(nativeOutput));
+                final long javaMedian = median(javaNanos), nativeMedian = median(nativeNanos);
+                System.out.printf("Resources full-export A/B (5 alternating, %d workers): Java %.3f s, "
+                                + "Rust %.3f s, ratio %.3fx; runs Java %s, Rust %s; "
+                                + "heap peak/growth %.1f/%.1f vs %.1f/%.1f MiB; "
+                                + "RSS peak/growth %s/%s vs %s/%s; NBT parity on %d chunks.%n",
+                        workerCount, javaMedian / 1_000_000_000.0, nativeMedian / 1_000_000_000.0,
+                        (double) javaMedian / nativeMedian, seconds(javaNanos), seconds(nativeNanos),
+                        median(javaHeapPeaks) / 1048576.0, median(javaHeapGrowth) / 1048576.0,
+                        median(nativeHeapPeaks) / 1048576.0, median(nativeHeapGrowth) / 1048576.0,
+                        formatMiB(medianAvailable(javaRssPeaks)),
+                        formatMiB(medianAvailable(javaRssGrowth)),
+                        formatMiB(medianAvailable(nativeRssPeaks)),
+                        formatMiB(medianAvailable(nativeRssGrowth)), countChunks(readRegions(nativeOutput)));
+
                 final String previousResourceProfile = System.getProperty("welt.export.profileResourcesNative");
-                final RunResult nativeResult;
+                final RunResult nativeProfileResult;
                 final long[] nativeProfile;
                 try {
                     System.setProperty("welt.export.profileResourcesNative", "true");
                     ResourcesExporter.resetNativeProfile();
-                    nativeResult = runExport(world, root, modes[3], "resource-profile-native", false);
+                    nativeProfileResult = runExport(world, root, modes[3], "resource-profile-native", false);
                     nativeProfile = ResourcesExporter.nativeProfileSnapshot();
                 } finally {
                     restore("welt.export.profileResourcesNative", previousResourceProfile);
                 }
-                assertRegionsEqual("resource-profile/java", readRegions(javaResult.output),
-                        readRegions(nativeResult.output));
-                printTimings("resource-profile-java", -1, javaResult);
-                printTimings("resource-profile-native", -1, nativeResult);
+                assertRegionsEqual("resource-profile/java", readRegions(javaOutput),
+                        readRegions(nativeProfileResult.output));
+                printTimings("resource-profile-native", -1, nativeProfileResult);
                 System.out.printf("Resources kernel detail over %d chunks: preparation %.3f s, "
                                 + "JNI+copy+Rust %.3f s (input copy %.3f s, Rust total %.3f s, "
-                                + "Rust setup %.3f s, candidate/noise scan %.3f s, %,d Perlin samples), "
+                                + "Rust setup %.3f s, material/Perlin scan %.3f s, %,d Perlin samples), "
                                 + "Java apply %.3f s; in-place palette chunks %d%n",
                         nativeProfile[3], nativeProfile[0] / 1_000_000_000.0,
                         nativeProfile[1] / 1_000_000_000.0,
@@ -470,7 +513,7 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 final long[] nativeProfile = ResourcesExporter.nativeProfileSnapshot();
                 System.out.printf("Resources native split over %d chunks: Java preparation %.3f s, "
                                 + "JNI+copy+Rust %.3f s (input copies %.3f s, Rust kernel %.3f s; "
-                                + "Rust setup %.3f s, candidate/noise scan %.3f s, %,d Perlin samples), "
+                                + "Rust setup %.3f s, material/Perlin scan %.3f s, %,d Perlin samples), "
                                 + "application %.3f s; in-place palette chunks %d%n",
                         nativeProfile[3], nativeProfile[0] / 1_000_000_000.0,
                         nativeProfile[1] / 1_000_000_000.0,

@@ -22,99 +22,8 @@ struct ResourceNoiseWorkspace {
     dirt_y: Vec<PerlinAxis3D>,
     tiny_z: Vec<PerlinAxis3D>,
     dirt_z: Vec<PerlinAxis3D>,
-    resource_candidate_offsets: Vec<usize>,
-    resource_candidates: Vec<usize>,
-    resource_candidate_key_valid: bool,
-    resource_candidate_min_z: i32,
-    resource_candidate_height: usize,
-    resource_candidate_material_min_z: Vec<i32>,
-    resource_candidate_material_max_z: Vec<i32>,
-    resource_candidate_chances: Vec<u32>,
-    resource_candidate_cached_levels: [bool; 16],
     column_contexts: Vec<ResourceColumnContext>,
     context_epoch: u64,
-}
-
-impl ResourceNoiseWorkspace {
-    fn prepare_resource_candidates(
-        &mut self,
-        min_z: i32,
-        height: usize,
-        material_min_z: &[i32],
-        material_max_z: &[i32],
-        chances: &[f32],
-        resource_values: &[i32],
-    ) {
-        let cache_matches = self.resource_candidate_key_valid
-            && self.resource_candidate_min_z == min_z
-            && self.resource_candidate_height == height
-            && self.resource_candidate_material_min_z == material_min_z
-            && self.resource_candidate_material_max_z == material_max_z
-            && self.resource_candidate_chances.len() == chances.len()
-            && self
-                .resource_candidate_chances
-                .iter()
-                .copied()
-                .eq(chances.iter().map(|chance| chance.to_bits()));
-        if !cache_matches {
-            self.resource_candidate_key_valid = true;
-            self.resource_candidate_min_z = min_z;
-            self.resource_candidate_height = height;
-            self.resource_candidate_material_min_z.clear();
-            self.resource_candidate_material_min_z
-                .extend_from_slice(material_min_z);
-            self.resource_candidate_material_max_z.clear();
-            self.resource_candidate_material_max_z
-                .extend_from_slice(material_max_z);
-            self.resource_candidate_chances.clear();
-            self.resource_candidate_chances
-                .extend(chances.iter().map(|chance| chance.to_bits()));
-            self.resource_candidate_cached_levels = [false; 16];
-            self.reset_resource_candidates(height);
-        }
-
-        let mut used_levels = [false; 16];
-        for &resource_value in resource_values {
-            used_levels[resource_value as usize] = true;
-        }
-        let stride = height + 1;
-        for resource_value in 1..16 {
-            if !used_levels[resource_value] || self.resource_candidate_cached_levels[resource_value]
-            {
-                continue;
-            }
-            let level_offset = resource_value * stride;
-            for z_index in 0..height {
-                let y = min_z + z_index as i32;
-                self.resource_candidate_offsets[level_offset + z_index] =
-                    self.resource_candidates.len();
-                for material in 0..material_min_z.len() {
-                    if chances[material * 16 + resource_value] <= 0.5
-                        && y >= material_min_z[material]
-                        && y <= material_max_z[material]
-                    {
-                        self.resource_candidates.push(material);
-                    }
-                }
-            }
-            self.resource_candidate_offsets[level_offset + height] = self.resource_candidates.len();
-            self.resource_candidate_cached_levels[resource_value] = true;
-        }
-    }
-
-    fn reset_resource_candidates(&mut self, height: usize) {
-        self.resource_candidate_offsets.resize(16 * (height + 1), 0);
-        self.resource_candidate_offsets.fill(0);
-        self.resource_candidates.clear();
-    }
-
-    #[cfg(test)]
-    fn resource_candidate_candidates_for(&self, resource_value: usize, height: usize) -> &[usize] {
-        let stride = height + 1;
-        let offset = resource_value * stride;
-        &self.resource_candidates[self.resource_candidate_offsets[offset]
-            ..self.resource_candidate_offsets[offset + height]]
-    }
 }
 
 #[derive(Default)]
@@ -359,16 +268,6 @@ fn fill_resource_materials_into_impl<const PROFILE: bool>(
         workspace.context_epoch = context_epoch;
 
         let height = height as usize;
-        let stride = height + 1;
-        workspace.prepare_resource_candidates(
-            min_z,
-            height,
-            material_min_z,
-            material_max_z,
-            chances,
-            resource_values,
-        );
-
         let ResourceNoiseWorkspace {
             noises,
             column_contexts,
@@ -378,8 +277,6 @@ fn fill_resource_materials_into_impl<const PROFILE: bool>(
             dirt_y,
             tiny_z,
             dirt_z,
-            resource_candidate_offsets,
-            resource_candidates,
             ..
         } = &mut *workspace;
         let setup_nanos = setup_start
@@ -397,24 +294,31 @@ fn fill_resource_materials_into_impl<const PROFILE: bool>(
             if resource_values[column] == 0 || start_y > end_y {
                 continue;
             }
-            for y in (start_y..=end_y).rev() {
-                let z_index = (y - min_z) as usize;
-                let resource_value = resource_values[column] as usize;
-                let level_offset = resource_value * stride;
-                let candidate_start = resource_candidate_offsets[level_offset + z_index];
-                let candidate_end = resource_candidate_offsets[level_offset + z_index + 1];
-                for &material in &resource_candidates[candidate_start..candidate_end] {
-                    let chance = chances[material * 16 + resource_value];
-                    let is_dirt = dirt_materials[material] != 0;
-                    let (x, y) = if is_dirt {
-                        (dirt_x[column], dirt_y[column])
-                    } else {
-                        (tiny_x[column], tiny_y[column])
-                    };
-                    let slot = &mut column_contexts[column * seeds.len() + material];
-                    if slot.epoch != context_epoch {
-                        slot.context = noises[material].prepare_column_3d(x, y);
-                        slot.epoch = context_epoch;
+            let resource_value = resource_values[column] as usize;
+            for material in 0..seeds.len() {
+                let chance = chances[material * 16 + resource_value];
+                let material_start_y = start_y.max(material_min_z[material]);
+                let material_end_y = end_y.min(material_max_z[material]);
+                if !(chance <= 0.5) || material_start_y > material_end_y {
+                    continue;
+                }
+
+                let is_dirt = dirt_materials[material] != 0;
+                let (x, y) = if is_dirt {
+                    (dirt_x[column], dirt_y[column])
+                } else {
+                    (tiny_x[column], tiny_y[column])
+                };
+                let slot = &mut column_contexts[column * seeds.len() + material];
+                if slot.epoch != context_epoch {
+                    slot.context = noises[material].prepare_column_3d(x, y);
+                    slot.epoch = context_epoch;
+                }
+                for y in (material_start_y..=material_end_y).rev() {
+                    let z_index = (y - min_z) as usize;
+                    let output_index = column * height + z_index;
+                    if output[output_index] != 0 {
+                        continue;
                     }
                     let z = if is_dirt {
                         dirt_z[z_index]
@@ -427,8 +331,7 @@ fn fill_resource_materials_into_impl<const PROFILE: bool>(
                         noise_samples += 1;
                     }
                     if value >= chance {
-                        output[column * height + z_index] = (material + 1) as i8;
-                        break;
+                        output[output_index] = (material + 1) as i8;
                     }
                 }
             }
@@ -446,53 +349,95 @@ fn fill_resource_materials_into_impl<const PROFILE: bool>(
 
 #[cfg(test)]
 mod tests {
-    use super::ResourceNoiseWorkspace;
+    use super::fill_resource_materials_into;
+    use welt_core::noise::PerlinNoise;
 
     #[test]
-    fn candidate_lists_are_reused_and_refreshed_for_changed_inputs() {
-        let mut workspace = ResourceNoiseWorkspace::default();
-        let mut chances = vec![-1.0_f32; 2 * 16];
-        let material_min_z = [-2, -2];
-        let material_max_z = [2, 2];
-        let resource_values = [1, 1];
+    fn material_major_columns_match_historical_material_priority() {
+        let min_z = -17;
+        let max_z = 51;
+        let seeds = [17_i64, -91, 0x1234_5678, i64::MAX - 3];
+        let tiny_x = [-23.5, 3.25, 48.0, -19.0];
+        let tiny_y = [12.125, -3.5, 17.75, 0.0];
+        let dirt_x = [-4.25, 0.75, 8.0, -5.5];
+        let dirt_y = [2.25, -0.875, 3.625, 0.0];
+        let column_min_z = [-17, -8, 0, 34];
+        let column_max_z = [51, 27, 46, 48];
+        let resource_values = [3, 9, 0, 15];
+        let material_min_z = [-15, -2, 6, 40];
+        let material_max_z = [16, 35, 44, 55];
+        let dirt_materials = [0, 1, 0, 1];
+        let thresholds = [-0.1_f32, 0.0, 0.2, 0.48, 0.51, 0.75, f32::NAN];
+        let chances: Vec<f32> = (0..seeds.len())
+            .flat_map(|material| {
+                (0..16).map(move |level| thresholds[(material * 5 + level * 3) % thresholds.len()])
+            })
+            .collect();
+        let noises: Vec<_> = seeds.iter().map(|&seed| PerlinNoise::new(seed)).collect();
+        let height = (max_z - min_z + 1) as usize;
+        let mut expected = vec![0_i8; tiny_x.len() * height];
+        let mut expected_samples = 0_u64;
 
-        workspace.prepare_resource_candidates(
-            -2,
-            5,
+        for column in 0..tiny_x.len() {
+            let start_y = column_min_z[column].max(min_z);
+            let end_y = column_max_z[column].min(max_z);
+            if resource_values[column] == 0 || start_y > end_y {
+                continue;
+            }
+            for y in (start_y..=end_y).rev() {
+                for material in 0..seeds.len() {
+                    let chance = chances[material * 16 + resource_values[column] as usize];
+                    if !(chance <= 0.5)
+                        || y < material_min_z[material]
+                        || y > material_max_z[material]
+                    {
+                        continue;
+                    }
+                    let (x, horizontal_y, z) = if dirt_materials[material] != 0 {
+                        (
+                            dirt_x[column],
+                            dirt_y[column],
+                            f64::from(y as f32 / 16.411_f32),
+                        )
+                    } else {
+                        (
+                            tiny_x[column],
+                            tiny_y[column],
+                            f64::from(y as f32 / 4.099_f32),
+                        )
+                    };
+                    expected_samples += 1;
+                    if noises[material].get_perlin_noise_3d(x, horizontal_y, z) >= chance {
+                        expected[column * height + (y - min_z) as usize] = (material + 1) as i8;
+                        break;
+                    }
+                }
+            }
+        }
+
+        let mut output = vec![0_i8; tiny_x.len() * height];
+        let mut profile = [0_u64; 3];
+        fill_resource_materials_into(
+            min_z,
+            max_z,
+            &tiny_x,
+            &tiny_y,
+            &dirt_x,
+            &dirt_y,
+            &column_min_z,
+            &column_max_z,
+            &resource_values,
+            &seeds,
             &material_min_z,
             &material_max_z,
+            &dirt_materials,
             &chances,
-            &resource_values,
-        );
-        assert_eq!(
-            workspace.resource_candidate_candidates_for(1, 5),
-            &[0, 1, 0, 1, 0, 1, 0, 1, 0, 1]
-        );
+            &mut output,
+            Some(&mut profile),
+        )
+        .unwrap();
 
-        let first_candidates = workspace.resource_candidates.clone();
-        workspace.prepare_resource_candidates(
-            -2,
-            5,
-            &material_min_z,
-            &material_max_z,
-            &chances,
-            &resource_values,
-        );
-        assert_eq!(workspace.resource_candidates, first_candidates);
-
-        chances[1] = 0.75;
-        let changed_min_z = [-2, 0];
-        workspace.prepare_resource_candidates(
-            -2,
-            5,
-            &changed_min_z,
-            &material_max_z,
-            &chances,
-            &resource_values,
-        );
-        assert_eq!(
-            workspace.resource_candidate_candidates_for(1, 5),
-            &[1, 1, 1]
-        );
+        assert_eq!(output, expected);
+        assert_eq!(profile[2], expected_samples);
     }
 }
