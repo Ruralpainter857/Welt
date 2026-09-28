@@ -263,6 +263,12 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 return;
             }
 
+            if (Boolean.getBoolean("welt.export.compactPaletteStorageCampaign")) {
+                assumeTrue("Compact palette storage campaign requires the modern chunk fixture", modernChunkCampaign);
+                runCompactPaletteStorageCampaign(world, root, modes[0], workerCount);
+                return;
+            }
+
             if (Boolean.getBoolean("welt.export.frostResourcesOnlyCampaign")) {
                 assumeTrue("Frost + Resources campaign requires the modern chunk fixture", modernChunkCampaign);
                 runNativeModeCampaign(world, root, modes[0], MODES[4], workerCount, "Frost + Resources");
@@ -935,6 +941,73 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                     formatMiB(medianAvailable(lookupRssPeaks)), formatMiB(medianAvailable(lookupRssGrowth)),
                     formatMiB(medianAvailable(cachedRssPeaks)), formatMiB(medianAvailable(cachedRssGrowth)),
                     seconds(lookupNanos), seconds(cachedNanos), countChunks(cachedChunks));
+        } finally {
+            restore(property, previous);
+        }
+    }
+
+    private static void runCompactPaletteStorageCampaign(World2 world, Path root,
+                                                         Mode javaMode, int workerCount)
+            throws Exception {
+        final String property = "welt.packedArrayCube.compactPaletteStorage";
+        final String previous = System.getProperty(property);
+        final List<Long> plainNanos = new ArrayList<>(), compactNanos = new ArrayList<>();
+        final List<Long> plainHeapPeaks = new ArrayList<>(), compactHeapPeaks = new ArrayList<>();
+        final List<Long> plainHeapGrowth = new ArrayList<>(), compactHeapGrowth = new ArrayList<>();
+        final List<Long> plainRssPeaks = new ArrayList<>(), compactRssPeaks = new ArrayList<>();
+        final List<Long> plainRssGrowth = new ArrayList<>(), compactRssGrowth = new ArrayList<>();
+        final List<Long> pairedRatios = new ArrayList<>();
+        Path plainOutput = null, compactOutput = null;
+        try {
+            for (int warmup = 0; warmup < 2; warmup++) {
+                final boolean reverse = (warmup & 1) != 0;
+                for (int position = 0; position < 2; position++) {
+                    final boolean compact = (position == 1) != reverse;
+                    System.setProperty(property, Boolean.toString(compact));
+                    runExport(world, root, javaMode,
+                            "compact-palette-warmup-" + warmup + (compact ? "-compact" : "-plain"), false);
+                }
+            }
+            for (int round = 0; round < 5; round++) {
+                final boolean reverse = (round & 1) != 0;
+                RunResult plain = null, compact = null;
+                for (int position = 0; position < 2; position++) {
+                    final boolean useCompact = (position == 1) != reverse;
+                    System.setProperty(property, Boolean.toString(useCompact));
+                    final RunResult result = runExport(world, root, javaMode,
+                            "compact-palette-round-" + round + (useCompact ? "-compact" : "-plain"), false);
+                    printTimings(useCompact ? "java-compact-palette" : "java-object-palette", round, result);
+                    (useCompact ? compactNanos : plainNanos).add(result.wallNanos);
+                    (useCompact ? compactHeapPeaks : plainHeapPeaks).add(result.peakHeapBytes);
+                    (useCompact ? compactHeapGrowth : plainHeapGrowth).add(result.peakHeapGrowthBytes());
+                    (useCompact ? compactRssPeaks : plainRssPeaks).add(result.peakRssBytes);
+                    (useCompact ? compactRssGrowth : plainRssGrowth).add(result.peakRssGrowthBytes());
+                    if (useCompact) compact = result;
+                    else plain = result;
+                }
+                pairedRatios.add(Math.round(plain.wallNanos * 1_000_000.0 / compact.wallNanos));
+                if (round == 4) {
+                    plainOutput = plain.output;
+                    compactOutput = compact.output;
+                }
+            }
+            final Map<String, Map<Integer, byte[]>> plainChunks = readRegions(plainOutput);
+            final Map<String, Map<Integer, byte[]>> compactChunks = readRegions(compactOutput);
+            assertRegionsEqual("Java/compact-palette-storage", plainChunks, compactChunks);
+            final long plainMedian = median(plainNanos), compactMedian = median(compactNanos);
+            System.out.printf("Java compact palette full-export A/B (%d alternating, %d workers): "
+                            + "object palette %.3f s, compact palette %.3f s, paired ratio %.3fx; "
+                            + "runs %s / %s; heap peak/growth %.1f/%.1f vs %.1f/%.1f MiB; "
+                            + "RSS peak/growth %s/%s vs %s/%s; exact NBT parity on %d chunks.%n",
+                    plainNanos.size(), workerCount, plainMedian / 1_000_000_000.0,
+                    compactMedian / 1_000_000_000.0, median(pairedRatios) / 1_000_000.0,
+                    seconds(plainNanos), seconds(compactNanos),
+                    median(plainHeapPeaks) / 1048576.0, median(plainHeapGrowth) / 1048576.0,
+                    median(compactHeapPeaks) / 1048576.0, median(compactHeapGrowth) / 1048576.0,
+                    formatMiB(medianAvailable(plainRssPeaks)),
+                    formatMiB(medianAvailable(plainRssGrowth)),
+                    formatMiB(medianAvailable(compactRssPeaks)),
+                    formatMiB(medianAvailable(compactRssGrowth)), countChunks(compactChunks));
         } finally {
             restore(property, previous);
         }
