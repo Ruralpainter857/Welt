@@ -731,14 +731,8 @@ public final class MC115AnvilChunk extends MCNamedBlocksChunk implements Section
 
     private int getDataByte(byte[] array, int x, int y, int z) {
         int blockOffset = blockOffset(x, y, z);
-        byte dataByte = array[blockOffset / 2];
-        if (blockOffset % 2 == 0) {
-            // Even byte -> least significant bits
-            return dataByte & 0x0F;
-        } else {
-            // Odd byte -> most significant bits
-            return (dataByte & 0xF0) >> 4;
-        }
+        int dataByte = array[blockOffset >>> 1] & 0xff;
+        return (dataByte >>> ((blockOffset & 1) << 2)) & 0x0f;
     }
 
     private void setDataByte(byte[] array, int x, int y, int z, int dataValue) {
