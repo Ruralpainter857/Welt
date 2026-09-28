@@ -922,7 +922,14 @@ public final class Material implements Serializable {
      * water.
      */
     public boolean containsWater() {
-        return watery || waterlogged || (isNamed(MC_WATER) && (getProperty(LEVEL, 0) == 0));
+        byte cached = containsWaterCache;
+        if (cached == 0) {
+            final boolean hasWater = watery || waterlogged
+                    || (isNamed(MC_WATER) && (getProperty(LEVEL, 0) == 0));
+            cached = (byte) (hasWater ? 2 : 1);
+            containsWaterCache = cached;
+        }
+        return cached == 2;
     }
 
     private HorizontalOrientationScheme[] determineHorizontalOrientations(Identity identity, String override) {
@@ -1526,6 +1533,8 @@ public final class Material implements Serializable {
 
     /** Whether the {@code waterlogged} property is true for this material variant. */
     private final transient boolean waterlogged;
+
+    private transient volatile byte containsWaterCache;
 
     /**
      * Whether the block contains nothing physical and is fully transparent.

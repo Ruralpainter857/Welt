@@ -402,6 +402,24 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
             // sampling adds measurable overhead to a short whole-world export.
             final RunResult profile = runExport(world, root, MODES[0], "profile-java", true);
             printTimings("java-jfr", -1, profile);
+            if (modernChunkCampaign) {
+                final Path nativeRecordingFile = root.resolve("resources-fluid-native.jfr");
+                try (Recording recording = new Recording()) {
+                    recording.setName("Welt native resources and fluid export");
+                    recording.enable("jdk.ExecutionSample").withPeriod(Duration.ofMillis(10));
+                    recording.enable("jdk.ThreadCPULoad").withPeriod(Duration.ofMillis(1_000));
+                    recording.start();
+                    try {
+                        runExport(world, root,
+                                new Mode("profile-resources-fluid-native", true, false, true, true),
+                                "profile-resources-fluid-native", false);
+                    } finally {
+                        recording.stop();
+                        recording.dump(nativeRecordingFile);
+                    }
+                }
+                System.out.println("Native resources/fluid JFR recording retained at " + nativeRecordingFile);
+            }
 
             // Split the native Resources path into Java input preparation,
             // the complete JNI call (including JNI copies and Rust compute),
@@ -478,6 +496,10 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                     }
                     NativeFluidFlow.resetProfile();
                 }
+            }
+
+            if (Boolean.getBoolean("welt.export.profileOnly")) {
+                return;
             }
 
             // Reverse the order on alternating rounds to limit thermal and cache bias.

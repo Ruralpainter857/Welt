@@ -29,6 +29,17 @@ public final class Property<V> {
 
     @SuppressWarnings("unchecked") // Responsibility of client
     public V fromString(String str) {
+        if (type == Integer.class) {
+            try {
+                return (V) Integer.valueOf(str);
+            } catch (NumberFormatException e) {
+                final InvocationTargetException wrapped = new InvocationTargetException(e);
+                throw new RuntimeException(wrapped.getClass().getSimpleName()
+                        + " when trying to parse\"" + str + "\" to " + type, wrapped);
+            }
+        } else if (type == Boolean.class) {
+            return (V) Boolean.valueOf(str);
+        }
         if (valueOfMethod == null) {
             return (V) str;
         } else {

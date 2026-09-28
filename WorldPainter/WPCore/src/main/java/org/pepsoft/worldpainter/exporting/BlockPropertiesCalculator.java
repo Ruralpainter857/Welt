@@ -328,6 +328,7 @@ public class BlockPropertiesCalculator {
                 changedBlock = true;
             }
         }
+        final int opacity = ((skyLight || blockLight) && !material.opaque) ? getOpacity(material) : 0;
         if (skyLight) {
             final int currentSkylightLevel = chunk.getSkyLightLevel(xInChunk, y, zInChunk);
             final int newSkylightLevel;
@@ -335,7 +336,7 @@ public class BlockPropertiesCalculator {
                 newSkylightLevel = 0;
             } else {
                 newSkylightLevel = (currentSkylightLevel < 15)
-                        ? calculateSkyLightLevel(chunk, x, y, z, material) : 15;
+                        ? calculateSkyLightLevel(chunk, x, y, z, material, opacity) : 15;
             }
             if (newSkylightLevel != currentSkylightLevel) {
                 chunk.setSkyLightLevel(xInChunk, y, zInChunk, newSkylightLevel);
@@ -346,7 +347,7 @@ public class BlockPropertiesCalculator {
             final int currentBlockLightLevel = chunk.getBlockLightLevel(xInChunk, y, zInChunk);
             final int newBlockLightLevel = material.opaque
                     ? (material.blockLight > 0 ? currentBlockLightLevel : 0)
-                    : max(currentBlockLightLevel, calculateBlockLightLevel(chunk, x, y, z));
+                    : max(currentBlockLightLevel, calculateBlockLightLevel(chunk, x, y, z, material, opacity));
             if (newBlockLightLevel != currentBlockLightLevel) {
                 chunk.setBlockLightLevel(xInChunk, y, zInChunk, newBlockLightLevel);
                 changedBlock = true;
@@ -545,7 +546,7 @@ public class BlockPropertiesCalculator {
                                 chunk.setMaterial(xInChunk, y, zInChunk, material);
                                 if (skyLight) {
                                     final int currentSkylightLevel = chunk.getSkyLightLevel(xInChunk, y, zInChunk);
-                                    final int newSkyLightLevel = (currentSkylightLevel < 15) ? calculateSkyLightLevel(chunk, x, y, z, material) : 15;
+                                    final int newSkyLightLevel = (currentSkylightLevel < 15) ? calculateSkyLightLevel(chunk, x, y, z, material, getOpacity(material)) : 15;
                                     if (newSkyLightLevel != currentSkylightLevel) {
                                         chunk.setSkyLightLevel(xInChunk, y, zInChunk, newSkyLightLevel);
                                         // As a quick hack to avoid the worst lighting bugs, propagate new daylight down
@@ -563,7 +564,7 @@ public class BlockPropertiesCalculator {
                                 }
                                 if (blockLight) {
                                     final int currentBlockLightLevel = chunk.getBlockLightLevel(xInChunk, y, zInChunk);
-                                    final int newBlockLightLevel = calculateBlockLightLevel(chunk, x, y, z);
+                                    final int newBlockLightLevel = calculateBlockLightLevel(chunk, x, y, z, material, getOpacity(material));
                                     if (newBlockLightLevel != currentBlockLightLevel) {
                                         chunk.setBlockLightLevel(xInChunk, y, zInChunk, newBlockLightLevel);
                                     }
@@ -620,7 +621,7 @@ public class BlockPropertiesCalculator {
     }
 
     // MC coordinate system
-    private int calculateSkyLightLevel(Chunk chunk, int x, int y, int z, Material material) {
+    private int calculateSkyLightLevel(Chunk chunk, int x, int y, int z, Material material, int opacity) {
         int skyLightLevel = getSkyLightLevelAt(chunk, x, y + 1, z);
         if ((skyLightLevel == 15)
                 && (waterOpacity == 1)
@@ -660,12 +661,12 @@ public class BlockPropertiesCalculator {
                 }
             }
         }
-        return max(highestSurroundingSkyLight - max(getOpacity(material), 1), 0);
+        return max(highestSurroundingSkyLight - max(opacity, 1), 0);
     }
 
     // MC coordinate system
-    private int calculateBlockLightLevel(Chunk chunk, int x, int y, int z) {
-        Material material = chunk.getMaterial(x & 0xf, y, z & 0xf);
+    private int calculateBlockLightLevel(Chunk chunk, int x, int y, int z,
+                                         Material material, int opacity) {
         int blockLightLevel = getBlockLightLevelAt(chunk, x, y + 1, z);
         int highestSurroundingBlockLight = blockLightLevel;
         if (highestSurroundingBlockLight < 15) {
@@ -698,7 +699,7 @@ public class BlockPropertiesCalculator {
                 }
             }
         }
-        return max(highestSurroundingBlockLight - max(getOpacity(material), 1), 0);
+        return max(highestSurroundingBlockLight - max(opacity, 1), 0);
     }
 
     // MC coordinate system
