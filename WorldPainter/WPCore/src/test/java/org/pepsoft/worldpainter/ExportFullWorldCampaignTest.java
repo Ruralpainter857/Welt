@@ -248,6 +248,12 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 Terrain.setCustomMaterial(i, world.getMixedMaterial(i));
             }
 
+            if (Boolean.getBoolean("welt.export.frostOnlyCampaign")) {
+                assumeTrue("Frost-only campaign requires the modern chunk fixture", modernChunkCampaign);
+                runFrostOnlyCampaign(world, root, modes[0], MODES[2], workerCount);
+                return;
+            }
+
             if (Boolean.getBoolean("welt.export.javaRepeatOnly")) {
                 final Mode javaMode = modes[0];
                 runExport(world, root, javaMode, "java-repeat-warmup-0", false);
@@ -827,6 +833,63 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
     private static CaptureRun runCaptureExport(World2 world, Path root, String round, boolean capture)
             throws Exception {
         return runCaptureExport(world, root, round, capture, false);
+    }
+
+    private static void runFrostOnlyCampaign(World2 world, Path root, Mode javaMode,
+                                             Mode frostMode, int workerCount) throws Exception {
+        final List<Long> javaNanos = new ArrayList<>(), frostNanos = new ArrayList<>();
+        final List<Long> javaHeapPeaks = new ArrayList<>(), frostHeapPeaks = new ArrayList<>();
+        final List<Long> javaHeapGrowth = new ArrayList<>(), frostHeapGrowth = new ArrayList<>();
+        final List<Long> javaRssPeaks = new ArrayList<>(), frostRssPeaks = new ArrayList<>();
+        final List<Long> javaRssGrowth = new ArrayList<>(), frostRssGrowth = new ArrayList<>();
+        Path javaOutput = null, frostOutput = null;
+        final boolean reverseOrder = Boolean.getBoolean("welt.export.frostReverseOrder");
+
+        for (int warmup = 0; warmup < 2; warmup++) {
+            if (((warmup & 1) == 0) != reverseOrder) {
+                runExport(world, root, javaMode, "frost-ab-warmup-java-" + warmup, false);
+                runExport(world, root, frostMode, "frost-ab-warmup-native-" + warmup, false);
+            } else {
+                runExport(world, root, frostMode, "frost-ab-warmup-native-" + warmup, false);
+                runExport(world, root, javaMode, "frost-ab-warmup-java-" + warmup, false);
+            }
+        }
+
+        for (int round = 0; round < 5; round++) {
+            final Mode[] order = (((round & 1) == 0) != reverseOrder)
+                    ? new Mode[]{javaMode, frostMode} : new Mode[]{frostMode, javaMode};
+            for (Mode mode : order) {
+                final boolean frost = mode == frostMode;
+                final RunResult result = runExport(world, root, mode,
+                        "frost-ab-round-" + round, false);
+                printTimings(frost ? "frost-native" : "frost-java", round, result);
+                (frost ? frostNanos : javaNanos).add(result.wallNanos);
+                (frost ? frostHeapPeaks : javaHeapPeaks).add(result.peakHeapBytes);
+                (frost ? frostHeapGrowth : javaHeapGrowth).add(result.peakHeapGrowthBytes());
+                (frost ? frostRssPeaks : javaRssPeaks).add(result.peakRssBytes);
+                (frost ? frostRssGrowth : javaRssGrowth).add(result.peakRssGrowthBytes());
+                if (round == 4) {
+                    if (frost) frostOutput = result.output;
+                    else javaOutput = result.output;
+                }
+            }
+        }
+
+        final Map<String, Map<Integer, byte[]>> javaChunks = readRegions(javaOutput);
+        final Map<String, Map<Integer, byte[]>> frostChunks = readRegions(frostOutput);
+        assertRegionsEqual("frost-only/java", javaChunks, frostChunks);
+        final long javaMedian = median(javaNanos), frostMedian = median(frostNanos);
+        System.out.printf("Frost full-export A/B (5 alternating, %d workers): Java %.3f s, "
+                        + "Welt %.3f s, ratio %.3fx; runs Java %s, Welt %s; "
+                        + "heap peak/growth %.1f/%.1f vs %.1f/%.1f MiB; "
+                        + "RSS peak/growth %s/%s vs %s/%s; NBT parity on %d chunks.%n",
+                workerCount, javaMedian / 1_000_000_000.0, frostMedian / 1_000_000_000.0,
+                (double) javaMedian / frostMedian, seconds(javaNanos), seconds(frostNanos),
+                median(javaHeapPeaks) / 1048576.0, median(javaHeapGrowth) / 1048576.0,
+                median(frostHeapPeaks) / 1048576.0, median(frostHeapGrowth) / 1048576.0,
+                formatMiB(medianAvailable(javaRssPeaks)), formatMiB(medianAvailable(javaRssGrowth)),
+                formatMiB(medianAvailable(frostRssPeaks)), formatMiB(medianAvailable(frostRssGrowth)),
+                countChunks(frostChunks));
     }
 
     private static CaptureRun runCaptureExport(World2 world, Path root, String round,
