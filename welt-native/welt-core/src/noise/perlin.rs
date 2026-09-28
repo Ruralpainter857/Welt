@@ -530,15 +530,9 @@ impl FastPerlin {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 fn supports_hardware_fma() -> bool {
-    #[cfg(target_arch = "x86_64")]
-    {
-        std::arch::is_x86_feature_detected!("fma")
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        false
-    }
+    std::arch::is_x86_feature_detected!("fma")
 }
 
 /// Emulates Java's `Math.fma(float, float, float)` with a single final f32 rounding.
