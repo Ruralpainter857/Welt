@@ -188,6 +188,8 @@ jobs:
       - name: Measure baseline full-world exports
         working-directory: baseline/WorldPainter
         shell: bash
+        env:
+          JAVA_TOOL_OPTIONS: -Djava.io.tmpdir=${{ runner.temp }}
         run: |
           mvn --batch-mode --no-transfer-progress -Pnative -pl WPCore -am \
             '-Dtest=ExportFullWorldCampaignTest' \
@@ -214,6 +216,8 @@ jobs:
       - name: Measure candidate full-world exports
         working-directory: candidate/WorldPainter
         shell: bash
+        env:
+          JAVA_TOOL_OPTIONS: -Djava.io.tmpdir=${{ runner.temp }}
         run: |
           mvn --batch-mode --no-transfer-progress -Pnative -pl WPCore -am \
             '-Dtest=ExportFullWorldCampaignTest' \
