@@ -22,6 +22,7 @@ import java.awt.*;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static java.util.Collections.singleton;
 import static org.pepsoft.minecraft.Constants.MC_SNOW;
@@ -33,6 +34,32 @@ import static org.pepsoft.worldpainter.exporting.SecondPassLayerExporter.Stage.A
  * @author pepijn
  */
 public class FrostExporter extends AbstractLayerExporter<Frost> implements SecondPassLayerExporter {
+    private static final AtomicLong NATIVE_PROFILE_PREPARATION_NANOS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_JNI_NANOS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_APPLICATION_NANOS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_CALLS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_COLUMNS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_FALLBACK_COLUMNS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_PACKED_CELLS = new AtomicLong();
+
+    public static void resetNativeProfile() {
+        NATIVE_PROFILE_PREPARATION_NANOS.set(0);
+        NATIVE_PROFILE_JNI_NANOS.set(0);
+        NATIVE_PROFILE_APPLICATION_NANOS.set(0);
+        NATIVE_PROFILE_CALLS.set(0);
+        NATIVE_PROFILE_COLUMNS.set(0);
+        NATIVE_PROFILE_FALLBACK_COLUMNS.set(0);
+        NATIVE_PROFILE_PACKED_CELLS.set(0);
+    }
+
+    /** Returns preparation, JNI, application nanoseconds, calls, columns, fallbacks and packed cells. */
+    public static long[] nativeProfileSnapshot() {
+        return new long[]{NATIVE_PROFILE_PREPARATION_NANOS.get(), NATIVE_PROFILE_JNI_NANOS.get(),
+                NATIVE_PROFILE_APPLICATION_NANOS.get(), NATIVE_PROFILE_CALLS.get(),
+                NATIVE_PROFILE_COLUMNS.get(), NATIVE_PROFILE_FALLBACK_COLUMNS.get(),
+                NATIVE_PROFILE_PACKED_CELLS.get()};
+    }
+
     public FrostExporter(Dimension dimension, Platform platform, ExporterSettings settings) {
         super(dimension, platform, (settings != null) ? settings : new FrostSettings(), Frost.INSTANCE);
     }
@@ -108,12 +135,15 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
         final Chunk[] chunksByColumn = new Chunk[batchCapacity];
         final boolean[] active = new boolean[batchCapacity];
         final long totalColumns = (long) area.width * area.height;
+        final boolean profile = Boolean.getBoolean("welt.export.profileFrostNative");
 
         for (long batchStart = 0; batchStart < totalColumns; batchStart += batchCapacity) {
+            final long preparationStart = profile ? System.nanoTime() : 0L;
             final int currentCount = (int) Math.min(batchCapacity, totalColumns - batchStart);
             java.util.Arrays.fill(packedSlots, 0, currentCount, -1);
             java.util.Arrays.fill(active, 0, currentCount, false);
             int nativeCount = 0;
+            int activeCount = 0;
             for (int local = 0; local < currentCount; local++) {
                 final long index = batchStart + local;
                 final int x = area.x + (int) (index / area.height);
@@ -122,6 +152,7 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
                     continue;
                 }
                 active[local] = true;
+                activeCount++;
                 final Chunk chunk = world.getChunk(x >> 4, y >> 4);
                 final Chunk editingChunk = world.getChunkForEditing(x >> 4, y >> 4);
                 chunksByColumn[local] = editingChunk;
@@ -156,12 +187,27 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
                 packedCellCount += length;
             }
 
+            if (profile) {
+                NATIVE_PROFILE_PREPARATION_NANOS.addAndGet(System.nanoTime() - preparationStart);
+            }
+            final long nativeStart = profile ? System.nanoTime() : 0L;
             final boolean nativeBatchSucceeded = nativeCount > 0
                     && NativeSlices.frostColumns(batchMinZ, maxZ, nativeCount,
                     packedMaxZ, frostEverywhere, snowUnderTrees, mode, flags, snowLayers,
                     highest, heightsFloat, heightsInt, frostBitCounts, updates);
+            if (profile) {
+                if (nativeCount > 0) {
+                    NATIVE_PROFILE_CALLS.incrementAndGet();
+                    NATIVE_PROFILE_COLUMNS.addAndGet(nativeCount);
+                    NATIVE_PROFILE_PACKED_CELLS.addAndGet(packedCellCount);
+                    NATIVE_PROFILE_JNI_NANOS.addAndGet(System.nanoTime() - nativeStart);
+                }
+                NATIVE_PROFILE_FALLBACK_COLUMNS.addAndGet(
+                        nativeBatchSucceeded ? activeCount - nativeCount : activeCount);
+            }
 
             // Keep Java's original x/y mutation order, including fallback columns.
+            final long applicationStart = profile ? System.nanoTime() : 0L;
             for (int local = 0; local < currentCount; local++) {
                 if (!active[local]) {
                     continue;
@@ -180,6 +226,9 @@ public class FrostExporter extends AbstractLayerExporter<Frost> implements Secon
                     applyJavaColumn(world, x, y, highestByColumn[local],
                             frostEverywhere, snowUnderTrees, mode, random);
                 }
+            }
+            if (profile) {
+                NATIVE_PROFILE_APPLICATION_NANOS.addAndGet(System.nanoTime() - applicationStart);
             }
         }
     }

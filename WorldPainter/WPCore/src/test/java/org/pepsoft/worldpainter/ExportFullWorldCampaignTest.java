@@ -10,7 +10,10 @@ import org.pepsoft.util.TextProgressReceiver;
 import org.pepsoft.worldpainter.exporting.WorldExportSettings;
 import org.pepsoft.worldpainter.exporting.WorldExporter;
 import org.pepsoft.worldpainter.exporting.BlockPropertiesCalculator;
+import org.pepsoft.worldpainter.Tile;
+import org.pepsoft.worldpainter.layers.Frost;
 import org.pepsoft.worldpainter.layers.exporters.ResourcesExporter;
+import org.pepsoft.worldpainter.layers.exporters.FrostExporter;
 import org.pepsoft.worldpainter.layers.plants.Plants;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
@@ -243,6 +246,12 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                     : MODES;
             if (modernChunkCampaign) {
                 world.setPlatform(DefaultPlugin.JAVA_ANVIL_1_15);
+                // The saved fixture has no Frost bits, which would make the
+                // Frost benchmark a no-op. Give every existing tile active
+                // Frost columns so Java and native paths exercise real work.
+                for (Tile tile : world.getDimension(DIM_NORMAL).getTiles()) {
+                    tile.setBitLayerValue(Frost.INSTANCE);
+                }
             }
             for (int i = 0; i < Terrain.CUSTOM_TERRAIN_COUNT; i++) {
                 Terrain.setCustomMaterial(i, world.getMixedMaterial(i));
@@ -987,6 +996,26 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 formatMiB(medianAvailable(javaRssPeaks)), formatMiB(medianAvailable(javaRssGrowth)),
                 formatMiB(medianAvailable(frostRssPeaks)), formatMiB(medianAvailable(frostRssGrowth)),
                 countChunks(frostChunks));
+
+        final String previousFrostProfile = System.getProperty("welt.export.profileFrostNative");
+        try {
+            System.setProperty("welt.export.profileFrostNative", "true");
+            FrostExporter.resetNativeProfile();
+            final RunResult profile = runExport(world, root, frostMode, modeName + "-profile", false);
+            printTimings(modeName + "-profile", -1, profile);
+            final Map<String, Map<Integer, byte[]>> profileChunks = readRegions(profile.output);
+            assertRegionsEqual(label + "/profile", javaChunks, profileChunks);
+            final long[] profileStats = FrostExporter.nativeProfileSnapshot();
+            System.out.printf("Frost batch detail for %s: preparation %.3f s, JNI+Rust %.3f s, "
+                            + "Java application/fallback %.3f s; %d JNI calls, %d native columns, "
+                            + "%d fallback columns, %d packed cells.%n",
+                    label, profileStats[0] / 1_000_000_000.0,
+                    profileStats[1] / 1_000_000_000.0, profileStats[2] / 1_000_000_000.0,
+                    profileStats[3], profileStats[4], profileStats[5], profileStats[6]);
+        } finally {
+            restore("welt.export.profileFrostNative", previousFrostProfile);
+            FrostExporter.resetNativeProfile();
+        }
     }
 
     private static CaptureRun runCaptureExport(World2 world, Path root, String round,
