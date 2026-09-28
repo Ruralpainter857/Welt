@@ -82,6 +82,8 @@ import static org.pepsoft.worldpainter.util.ThreadUtils.chooseThreadCount;
  * @author pepijn
  */
 public class Dimension extends InstanceKeeper implements TileProvider, Serializable, Tile.Listener, Cloneable, UndoListener {
+    private static final ThreadLocal<Point> TILE_LOOKUP_POINT = ThreadLocal.withInitial(Point::new);
+
     public Dimension(World2 world, String name, long minecraftSeed, TileFactory tileFactory, Anchor anchor) {
         this(world, name, minecraftSeed, tileFactory, anchor, true);
     }
@@ -249,7 +251,7 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
     public boolean isTilePresent(final int x, final int y) {
         readLock.lock();
         try {
-            return tiles.containsKey(new Point(x, y));
+            return tiles.containsKey(tileLookupPoint(x, y));
         } finally {
             readLock.unlock();
         }
@@ -273,7 +275,7 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
                     || (y > (highestY + borderSize))))) {
                 // Couldn't possibly be a border tile
                 return false;
-            } else if (tiles.containsKey(new Point(x, y))) {
+            } else if (tiles.containsKey(tileLookupPoint(x, y))) {
                 // There's a tile in the dimension at these coordinates, so not a
                 // border tile
                 return false;
@@ -284,10 +286,10 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
             } else {
                 for (int r = 1; r <= borderSize; r++) {
                     for (int i = 0; i <= (r * 2); i++) {
-                        if (tiles.containsKey(new Point(x + i - r, y - r))
-                                || tiles.containsKey(new Point(x + r, y + i - r))
-                                || tiles.containsKey(new Point(x + r - i, y + r))
-                                || tiles.containsKey(new Point(x - r, y - i + r))) {
+                        if (tiles.containsKey(tileLookupPoint(x + i - r, y - r))
+                                || tiles.containsKey(tileLookupPoint(x + r, y + i - r))
+                                || tiles.containsKey(tileLookupPoint(x + r - i, y + r))
+                                || tiles.containsKey(tileLookupPoint(x - r, y - i + r))) {
                             // Found a tile in the dimension <= borderSize tiles
                             // away, so this is a border tile
                             return true;
@@ -314,10 +316,16 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
     public Tile getTile(final int x, final int y) {
         readLock.lock();
         try {
-            return tiles.get(new Point(x, y));
+            return tiles.get(tileLookupPoint(x, y));
         } finally {
             readLock.unlock();
         }
+    }
+
+    private static Point tileLookupPoint(final int x, final int y) {
+        final Point point = TILE_LOOKUP_POINT.get();
+        point.setLocation(x, y);
+        return point;
     }
 
     public Tile getTile(final Point coords) {
@@ -342,7 +350,7 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
     public Tile getTileForEditing(final int x, final int y) {
         readLock.lock();
         try {
-            Tile tile = tiles.get(new Point(x, y));
+            Tile tile = tiles.get(tileLookupPoint(x, y));
             if ((tile != null) && eventsInhibited && (!tile.isEventsInhibited())) {
                 tile.inhibitEvents();
                 dirtyTiles.add(tile);
@@ -2552,7 +2560,8 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
                         final List<Tile> tileList = new ArrayList<>();
                         for (int tileX = 0; tileX < 4; tileX++) {
                             for (int tileY = 0; tileY < 4; tileY++) {
-                                final Tile tile = tiles.get(new Point((regionX << 2) | tileX, (regionY << 2) | tileY));
+                                final Tile tile = tiles.get(
+                                        tileLookupPoint((regionX << 2) | tileX, (regionY << 2) | tileY));
                                 if (tile != null) {
                                     tile.prepareForSaving();
                                     tileList.add(tile);
