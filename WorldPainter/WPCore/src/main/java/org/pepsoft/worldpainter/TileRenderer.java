@@ -224,6 +224,9 @@ public final class TileRenderer {
         final int scale = 1 << -zoom;
         final boolean nativeShading = (zoom == 0) && Native.isRenderEnabled()
                 && NativeLoader.areSlicesAvailable();
+        if (nativeShading && (renderShadeAmounts == null)) {
+            renderShadeAmounts = new long[TILE_SIZE * TILE_SIZE];
+        }
         final Graphics2D g2 = (Graphics2D) image.getGraphics();
         try {
             g2.setComposite(AlphaComposite.Src);
@@ -539,7 +542,7 @@ public final class TileRenderer {
 
     private final Set<Layer> hiddenLayers = new HashSet<>(Collections.singletonList(FloodWithLava.INSTANCE));
     private final int[] intHeightCache = new int[TILE_SIZE * TILE_SIZE], intFluidHeightCache = new int[TILE_SIZE * TILE_SIZE];
-    private final long[] renderShadeAmounts = new long[TILE_SIZE * TILE_SIZE];
+    private long[] renderShadeAmounts;
     private final float[] floatHeightCache = new float[TILE_SIZE * TILE_SIZE];
     private final BufferedImage bufferedImage;
     private final int[] renderBuffer;
