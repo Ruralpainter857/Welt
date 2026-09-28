@@ -30,7 +30,8 @@ public class PackedArrayCube<T> {
         bitsPerCoordinate = (int) Math.ceil(Math.log(size) / Math.log(2));
         arraySize = size * size * size;
         paletteIndexStorage = Boolean.getBoolean("welt.packedArrayCube.compactPaletteStorage")
-                || ((type == Material.class) && Native.isResourcesExportEnabled());
+                || ((type == Material.class)
+                    && Native.isResourcesExportEnabled());
         values = paletteIndexStorage ? null : (T[]) Array.newInstance(type, arraySize);
         if (paletteIndexStorage) {
             buildEmptyPaletteIndexView();

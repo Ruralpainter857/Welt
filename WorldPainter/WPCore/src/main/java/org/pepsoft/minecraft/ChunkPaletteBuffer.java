@@ -13,6 +13,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -44,6 +45,8 @@ public final class ChunkPaletteBuffer {
     private static final int MAX_CHUNK_CELLS = 16 * 16 * 4096;
 
     private static final ThreadLocal<Arena> ARENAS = ThreadLocal.withInitial(Arena::new);
+    private static final ThreadLocal<PaletteSnapshotArena> PALETTE_SNAPSHOTS =
+            ThreadLocal.withInitial(PaletteSnapshotArena::new);
     private static final AtomicLong PROFILE_NANOS = new AtomicLong();
     private static final AtomicLong PROFILE_CHUNKS = new AtomicLong();
     private static final AtomicLong PROFILE_CELLS = new AtomicLong();
@@ -183,6 +186,88 @@ public final class ChunkPaletteBuffer {
         return new LivePaletteView(firstSectionY, cubes);
     }
 
+    /**
+     * Opens a palette-index view for a read-only native pass. Canonical palette
+     * storage is used when present; object-backed chunks are encoded into
+     * worker-reused scratch arrays without changing the chunk representation.
+     */
+    public static LivePaletteView openPaletteIndexView(Chunk chunk, int minBlockY, int maxBlockY) {
+        final LivePaletteView live = openLivePaletteView(chunk, minBlockY, maxBlockY);
+        if (live != null) {
+            return live;
+        }
+        if (chunk == null || chunk.isReadOnly() || minBlockY > maxBlockY
+                || minBlockY < chunk.getMinHeight() || maxBlockY >= chunk.getMaxHeight()
+                || (chunk.getMinHeight() & 15) != 0 || (chunk.getMaxHeight() & 15) != 0) {
+            return null;
+        }
+
+        final int sectionCount = ((maxBlockY - minBlockY) >> 4) + 1;
+        if (sectionCount <= 0 || sectionCount > 256) {
+            return null;
+        }
+        final int firstSection = (minBlockY - chunk.getMinHeight()) >> 4;
+        final int firstSectionY = chunk.getMinHeight() + (firstSection << 4);
+        final PaletteSnapshotArena arena = PALETTE_SNAPSHOTS.get();
+        arena.ensure(sectionCount);
+
+        final MC115AnvilChunk.Section[] sections115;
+        final MC118AnvilChunk.Section[] sections118;
+        final int firstStoredSection118;
+        if (chunk instanceof MC115AnvilChunk anvil115) {
+            sections115 = anvil115.getSections();
+            if (firstSection < 0 || firstSection + sectionCount > sections115.length) {
+                return null;
+            }
+            sections118 = null;
+            firstStoredSection118 = 0;
+        } else if (chunk instanceof MC118AnvilChunk anvil118) {
+            sections115 = null;
+            sections118 = anvil118.getSections();
+            firstStoredSection118 = (chunk.getMinHeight() >> 4) + anvil118.undergroundSections;
+            if (firstStoredSection118 + firstSection < 0
+                    || firstStoredSection118 + firstSection + sectionCount > sections118.length) {
+                return null;
+            }
+        } else {
+            return null;
+        }
+
+        for (int section = 0; section < sectionCount; section++) {
+            arena.clearPalette();
+            final int[] indexes = arena.sectionIndexes[section];
+            final PackedArrayCube<Material> materials;
+            final Material singleMaterial;
+            if (sections115 != null) {
+                final MC115AnvilChunk.Section source = sections115[firstSection + section];
+                materials = (source != null) ? source.materials : null;
+                singleMaterial = AIR;
+            } else {
+                final MC118AnvilChunk.Section source = sections118[
+                        firstStoredSection118 + firstSection + section];
+                materials = (source != null) ? source.materials : null;
+                singleMaterial = (source != null && source.singleMaterial != null)
+                        ? source.singleMaterial : AIR;
+            }
+
+            if (materials == null) {
+                final int paletteIndex = arena.paletteIndex(singleMaterial);
+                Arrays.fill(indexes, paletteIndex);
+            } else {
+                materials.copyValuesTo(arena.materialValues, 0);
+                for (int cell = 0; cell < indexes.length; cell++) {
+                    final Material material = arena.materialValues[cell];
+                    indexes[cell] = arena.paletteIndex((material != null) ? material : AIR);
+                }
+            }
+            if (!arena.storePalette(section)) {
+                return null;
+            }
+        }
+        return new LivePaletteView(firstSectionY, arena.sectionIndexes,
+                arena.sectionPalettes, arena.sectionPaletteSizes, sectionCount);
+    }
+
     @SuppressWarnings("unchecked")
     private static PackedArrayCube<Material>[] newCubeArray(int length) {
         return (PackedArrayCube<Material>[]) new PackedArrayCube<?>[length];
@@ -192,23 +277,110 @@ public final class ChunkPaletteBuffer {
     public static final class LivePaletteView {
         private final int minY;
         private final PackedArrayCube<Material>[] sections;
+        private final int[][] snapshotIndexes;
+        private final Material[][] snapshotPalettes;
+        private final int[] snapshotPaletteSizes;
+        private final int snapshotSectionCount;
+        private final boolean snapshot;
 
         private LivePaletteView(int minY, PackedArrayCube<Material>[] sections) {
             this.minY = minY;
             this.sections = sections;
+            snapshotIndexes = null;
+            snapshotPalettes = null;
+            snapshotPaletteSizes = null;
+            snapshotSectionCount = 0;
+            snapshot = false;
+        }
+
+        private LivePaletteView(int minY, int[][] indexes, Material[][] palettes, int[] paletteSizes,
+                                int sectionCount) {
+            this.minY = minY;
+            sections = null;
+            snapshotIndexes = indexes;
+            snapshotPalettes = palettes;
+            snapshotPaletteSizes = paletteSizes;
+            snapshotSectionCount = sectionCount;
+            snapshot = true;
         }
 
         public int minY() { return minY; }
-        public int sectionCount() { return sections.length; }
+        public boolean isSnapshot() { return snapshot; }
+        public int sectionCount() { return (sections != null) ? sections.length : snapshotSectionCount; }
         public int[] indexes(int section) {
-            return sections[section].getPaletteIndexesForBulkUpdate();
+            return (sections != null) ? sections[section].getPaletteIndexesForBulkUpdate()
+                    : snapshotIndexes[section];
         }
-        public int paletteSize(int section) { return sections[section].getPaletteIndexCount(); }
+        public int paletteSize(int section) {
+            return (sections != null) ? sections[section].getPaletteIndexCount()
+                    : snapshotPaletteSizes[section];
+        }
         public Material paletteMaterial(int section, int paletteIndex) {
-            return sections[section].getPaletteValue(paletteIndex);
+            return (sections != null) ? sections[section].getPaletteValue(paletteIndex)
+                    : snapshotPalettes[section][paletteIndex];
         }
         public int paletteIndex(int section, Material material) {
-            return sections[section].ensurePaletteIndexForBulkUpdate(material);
+            return (sections != null) ? sections[section].ensurePaletteIndexForBulkUpdate(material) : -1;
+        }
+    }
+
+    private static final class PaletteSnapshotArena {
+        private int[][] sectionIndexes = new int[0][];
+        private Material[][] sectionPalettes = new Material[0][];
+        private int[] sectionPaletteSizes = new int[0];
+        private Material[] materialValues = new Material[4096];
+        private Material[] paletteWork = new Material[16];
+        private final IdentityHashMap<Material, Integer> paletteLookup = new IdentityHashMap<>();
+        private int paletteSize;
+
+        private void ensure(int sectionCount) {
+            if (sectionIndexes.length < sectionCount) {
+                sectionIndexes = Arrays.copyOf(sectionIndexes, sectionCount);
+                sectionPalettes = Arrays.copyOf(sectionPalettes, sectionCount);
+                sectionPaletteSizes = Arrays.copyOf(sectionPaletteSizes, sectionCount);
+            }
+            for (int section = 0; section < sectionCount; section++) {
+                if (sectionIndexes[section] == null) {
+                    sectionIndexes[section] = new int[4096];
+                }
+                if (sectionPalettes[section] == null) {
+                    sectionPalettes[section] = new Material[16];
+                }
+            }
+        }
+
+        private void clearPalette() {
+            paletteLookup.clear();
+            Arrays.fill(paletteWork, null);
+            paletteSize = 0;
+        }
+
+        private int paletteIndex(Material material) {
+            final Integer found = paletteLookup.get(material);
+            if (found != null) {
+                return found;
+            }
+            if (paletteSize == 4096) {
+                return -1;
+            }
+            if (paletteSize == paletteWork.length) {
+                paletteWork = Arrays.copyOf(paletteWork, paletteWork.length << 1);
+            }
+            final int index = paletteSize++;
+            paletteWork[index] = material;
+            paletteLookup.put(material, index);
+            return index;
+        }
+
+        private boolean storePalette(int section) {
+            Material[] target = sectionPalettes[section];
+            if (target.length < paletteSize) {
+                target = sectionPalettes[section] = Arrays.copyOf(target,
+                        Integer.highestOneBit(paletteSize - 1) << 1);
+            }
+            System.arraycopy(paletteWork, 0, target, 0, paletteSize);
+            sectionPaletteSizes[section] = paletteSize;
+            return paletteSize > 0;
         }
     }
 

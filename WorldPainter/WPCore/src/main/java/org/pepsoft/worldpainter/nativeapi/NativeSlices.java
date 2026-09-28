@@ -399,6 +399,51 @@ public final class NativeSlices {
         }
     }
 
+    /** Finds ordered fluid updates using one chunk's palette and precomputed neighbouring edges. */
+    public static boolean findFluidUpdatesForChunk(final int minY, final int maxY,
+                                                    final int worldMinY, final int worldMaxY,
+                                                    final int sectionMinY, final int sectionCount,
+                                                    final boolean flowWater, final boolean flowLava,
+                                                    final int[][] sectionIndexes,
+                                                    final byte[][] paletteFlags,
+                                                    final byte[] westEdge, final byte[] eastEdge,
+                                                    final byte[] northEdge, final byte[] southEdge,
+                                                    final byte[] updates) {
+        final long height = (long) maxY - minY + 1L;
+        if (!Native.isFluidFlowExportEnabled() || !NativeLoader.areSlicesAvailable()
+                || minY > maxY || minY < worldMinY || maxY > worldMaxY
+                || height > 4096L || (sectionMinY & 15) != 0
+                || sectionCount <= 0 || sectionCount > 256
+                || sectionIndexes == null || paletteFlags == null
+                || sectionCount > sectionIndexes.length || sectionCount > paletteFlags.length
+                || westEdge == null || eastEdge == null || northEdge == null || southEdge == null
+                || updates == null || !flowWater && !flowLava
+                || minY < sectionMinY
+                || maxY >= sectionMinY + (long) sectionCount * 16L
+                || sectionCount != (((maxY - sectionMinY) >> 4) + 1)
+                || height * 16L > Integer.MAX_VALUE || height * 256L > Integer.MAX_VALUE
+                || westEdge.length < height * 16L || eastEdge.length < height * 16L
+                || northEdge.length < height * 16L || southEdge.length < height * 16L
+                || updates.length < height * 256L) {
+            return false;
+        }
+        for (int section = 0; section < sectionCount; section++) {
+            if (sectionIndexes[section] == null || sectionIndexes[section].length != 4096
+                    || paletteFlags[section] == null || paletteFlags[section].length == 0
+                    || paletteFlags[section].length > 65_536) {
+                return false;
+            }
+        }
+        try {
+            return nativeFindFluidUpdatesForChunk(minY, maxY, worldMinY, worldMaxY,
+                    sectionMinY, sectionCount, flowWater ? 1 : 0, flowLava ? 1 : 0,
+                    sectionIndexes, paletteFlags, westEdge, eastEdge, northEdge, southEdge,
+                    updates) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
 
     /** False leaves the FrostExporter on its original Java path. */
     public static boolean frostColumn(final int minZ, final int maxZ, final int highestNonAir,
@@ -527,6 +572,16 @@ public final class NativeSlices {
                                                            int[][] sectionIndexes,
                                                            byte[][] paletteFlags, int[][] outputPaletteIndexes,
                                                            long[] applyNanos);
+
+    private static native int nativeFindFluidUpdatesForChunk(int minY, int maxY,
+                                                             int worldMinY, int worldMaxY,
+                                                             int sectionMinY, int sectionCount,
+                                                             int flowWater, int flowLava,
+                                                             int[][] sectionIndexes,
+                                                             byte[][] paletteFlags,
+                                                             byte[] westEdge, byte[] eastEdge,
+                                                             byte[] northEdge, byte[] southEdge,
+                                                             byte[] updates);
 
     private static native int nativeValidateChunkPaletteBuffer(ByteBuffer buffer);
 

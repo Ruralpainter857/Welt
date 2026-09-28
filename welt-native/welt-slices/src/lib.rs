@@ -23,6 +23,7 @@ use welt_nbt::packed_array::{pack_indices, unpack_indices};
 use welt_render::shade::shade_pixels;
 
 mod chunk_buffer;
+mod fluid_flow;
 mod resource_palette;
 
 #[cfg(windows)]

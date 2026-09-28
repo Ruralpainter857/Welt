@@ -14,6 +14,7 @@ import org.pepsoft.worldpainter.layers.exporters.ResourcesExporter;
 import org.pepsoft.worldpainter.layers.plants.Plants;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.platforms.NativeFluidFlow;
 import org.pepsoft.worldpainter.plugins.PlatformManager;
 
 import java.io.ByteArrayInputStream;
@@ -211,6 +212,8 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
         final String oldExport = System.getProperty(Native.EXPORT_KEY);
         final String oldFrost = System.getProperty(Native.FROST_EXPORT_KEY);
         final String oldResources = System.getProperty(Native.RESOURCES_EXPORT_KEY);
+        final String oldFluidFlow = System.getProperty(Native.FLUID_FLOW_EXPORT_KEY);
+        final String oldFluidFlowProfile = System.getProperty("welt.export.profileFluidFlow");
         final String oldBlockPropertiesFrontier = System.getProperty("welt.export.blockPropertiesFrontier");
         final String oldBlockPropertiesFrontierProfile = System.getProperty("welt.export.profileBlockPropertiesFrontier");
         final String oldCaptureProfile = System.getProperty("welt.export.profileChunkCapture");
@@ -229,7 +232,10 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 world = worldIO.getWorld();
             }
             final Mode[] modes = modernChunkCampaign
-                    ? new Mode[]{MODES[0], MODES[1], new Mode("resources", true, false, true)}
+                    ? new Mode[]{MODES[0], MODES[1],
+                            new Mode("fluid-flow", true, false, false, true),
+                            new Mode("resources", true, false, true),
+                            new Mode("resources-fluid", true, false, true, true)}
                     : MODES;
             if (modernChunkCampaign) {
                 world.setPlatform(DefaultPlugin.JAVA_ANVIL_1_15);
@@ -431,6 +437,49 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 }
             }
 
+            if (modernChunkCampaign) {
+                final String previousFluidProfile = System.getProperty("welt.export.profileFluidFlow");
+                try {
+                    System.setProperty("welt.export.profileFluidFlow", "true");
+                    NativeFluidFlow.resetProfile();
+                    final RunResult fluidProfile = runExport(world, root,
+                            new Mode("fluid-flow-profile", true, false, false, true),
+                            "profile-fluid-flow", false);
+                    printTimings("fluid-flow-profile", -1, fluidProfile);
+                    final long[] fluidProfileStats = NativeFluidFlow.profileSnapshot();
+                    System.out.printf("Passe fluide native: %d chunks natifs (%d snapshots, %d palettes live), "
+                                    + "%d replis Java; "
+                                    + "préparation %.3f s, JNI+Rust %.3f s, application %.3f s%n",
+                            fluidProfileStats[0], fluidProfileStats[5], fluidProfileStats[6],
+                            fluidProfileStats[1], fluidProfileStats[2] / 1_000_000_000.0,
+                            fluidProfileStats[3] / 1_000_000_000.0, fluidProfileStats[4] / 1_000_000_000.0);
+                    org.junit.Assert.assertTrue("modern campaign must exercise native fluid chunks",
+                            fluidProfileStats[0] > 0);
+
+                    NativeFluidFlow.resetProfile();
+                    final RunResult combinedProfile = runExport(world, root,
+                            new Mode("resources-fluid-profile", true, false, true, true),
+                            "profile-resources-fluid", false);
+                    printTimings("resources-fluid-profile", -1, combinedProfile);
+                    final long[] combinedFluidStats = NativeFluidFlow.profileSnapshot();
+                    System.out.printf("Passe fluide combinée: %d chunks natifs (%d snapshots, %d palettes live), "
+                                    + "%d replis Java; préparation %.3f s, JNI+Rust %.3f s, application %.3f s%n",
+                            combinedFluidStats[0], combinedFluidStats[5], combinedFluidStats[6],
+                            combinedFluidStats[1], combinedFluidStats[2] / 1_000_000_000.0,
+                            combinedFluidStats[3] / 1_000_000_000.0,
+                            combinedFluidStats[4] / 1_000_000_000.0);
+                    org.junit.Assert.assertTrue("combined resources/fluid mode must exercise native chunks",
+                            combinedFluidStats[0] > 0);
+                } finally {
+                    if (previousFluidProfile == null) {
+                        System.clearProperty("welt.export.profileFluidFlow");
+                    } else {
+                        System.setProperty("welt.export.profileFluidFlow", previousFluidProfile);
+                    }
+                    NativeFluidFlow.resetProfile();
+                }
+            }
+
             // Reverse the order on alternating rounds to limit thermal and cache bias.
             for (int round = 0; round < 5; round++) {
                 final Mode[] order = modes.clone();
@@ -526,6 +575,8 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
             restore(Native.EXPORT_KEY, oldExport);
             restore(Native.FROST_EXPORT_KEY, oldFrost);
             restore(Native.RESOURCES_EXPORT_KEY, oldResources);
+            restore(Native.FLUID_FLOW_EXPORT_KEY, oldFluidFlow);
+            restore("welt.export.profileFluidFlow", oldFluidFlowProfile);
             restore("welt.export.blockPropertiesFrontier", oldBlockPropertiesFrontier);
             restore("welt.export.profileBlockPropertiesFrontier", oldBlockPropertiesFrontierProfile);
             restore("welt.export.profileChunkCapture", oldCaptureProfile);
@@ -562,6 +613,7 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
         Native.setExportEnabled(mode.export);
         System.setProperty(Native.FROST_EXPORT_KEY, Boolean.toString(mode.frost));
         System.setProperty(Native.RESOURCES_EXPORT_KEY, Boolean.toString(mode.resources));
+        System.setProperty(Native.FLUID_FLOW_EXPORT_KEY, Boolean.toString(mode.fluidFlow));
         final Path output = root.resolve(round + "-" + mode.name);
         Files.createDirectories(output);
         System.gc();
@@ -863,13 +915,18 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
 
     private static final class Mode {
         private final String name;
-        private final boolean export, frost, resources;
+        private final boolean export, frost, resources, fluidFlow;
 
         private Mode(String name, boolean export, boolean frost, boolean resources) {
+            this(name, export, frost, resources, false);
+        }
+
+        private Mode(String name, boolean export, boolean frost, boolean resources, boolean fluidFlow) {
             this.name = name;
             this.export = export;
             this.frost = frost;
             this.resources = resources;
+            this.fluidFlow = fluidFlow;
         }
     }
 

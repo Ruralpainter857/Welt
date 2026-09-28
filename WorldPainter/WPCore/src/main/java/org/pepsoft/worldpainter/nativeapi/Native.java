@@ -64,6 +64,7 @@ public final class Native {
     /** Slower export slices require explicit opt-in even when export acceleration is enabled. */
     public static final String FROST_EXPORT_KEY = "wp.native.export.frost";
     public static final String RESOURCES_EXPORT_KEY = "wp.native.export.resources";
+    public static final String FLUID_FLOW_EXPORT_KEY = "wp.native.export.fluidFlow";
 
     private static final String DEFAULT_VALUE = "false";
 
@@ -122,6 +123,11 @@ public final class Native {
     public static boolean isResourcesExportEnabled() {
         return isExportEnabled()
                 && Boolean.parseBoolean(System.getProperty(RESOURCES_EXPORT_KEY, DEFAULT_VALUE));
+    }
+
+    public static boolean isFluidFlowExportEnabled() {
+        return isExportEnabled()
+                && Boolean.parseBoolean(System.getProperty(FLUID_FLOW_EXPORT_KEY, DEFAULT_VALUE));
     }
 
     /**
