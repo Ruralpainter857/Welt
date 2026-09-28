@@ -139,7 +139,7 @@ public class BlockPropertiesCalculator {
             initialChunkHeightCache.clear();
             initialChunkHeightCache = null;
         }
-        useChangedBlockFrontier = Boolean.getBoolean(FRONTIER_PROPERTY);
+        useChangedBlockFrontier = Boolean.parseBoolean(System.getProperty(FRONTIER_PROPERTY, "true"));
         if (useChangedBlockFrontier) {
             initialiseChangedBlockFrontier(x1InChunks, x2InChunks, z1InChunks, z2InChunks);
         } else {
@@ -209,9 +209,9 @@ public class BlockPropertiesCalculator {
 
     /**
      * Propagates the selected block properties within the current dirty area.
-     * By default the historical rectangular scan is used. An opt-in exact
-     * frontier schedules only changed cells and their six face neighbours on
-     * subsequent passes. Returns {@code false} when no values changed.
+     * An exact frontier schedules only changed cells and their six face
+     * neighbours on subsequent passes. Set {@code welt.export.blockPropertiesFrontier=false}
+     * to use the historical rectangular scan. Returns {@code false} when no values changed.
      */
     public boolean secondPass() {
         final int x1InChunks = dirtyArea.getX1() >> 4, z1InChunks = dirtyArea.getZ1() >> 4,
