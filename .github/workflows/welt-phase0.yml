@@ -14,7 +14,7 @@ on:
         description: Revision before the Resources candidate cache
         required: true
         type: string
-        default: 12dd94c
+        default: 12dd94ce7b69ccc7cff63aa5a9e247c83a8c7c18
       candidate_ref:
         description: Revision to measure
         required: true
