@@ -238,7 +238,7 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 Terrain.setCustomMaterial(i, world.getMixedMaterial(i));
             }
 
-            if (!Boolean.getBoolean("welt.export.modernChunkCampaign")) {
+            if (!modernChunkCampaign || Boolean.getBoolean("welt.export.includeFrontierCampaign")) {
             // Measure the exact changed-cell frontier against the existing
             // rectangular scan on complete exports, and compare decompressed
             // chunk NBT before including the candidate in the main campaign.
@@ -361,7 +361,8 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
             }
             System.setProperty("welt.export.blockPropertiesFrontier", "true");
             } else {
-                System.setProperty("welt.export.blockPropertiesFrontier", "false");
+                System.setProperty("welt.export.blockPropertiesFrontier",
+                        Boolean.toString(Boolean.getBoolean("welt.export.enableFrontierInCampaign")));
             }
             if (Boolean.getBoolean("welt.export.frontierOnly")) {
                 return;
