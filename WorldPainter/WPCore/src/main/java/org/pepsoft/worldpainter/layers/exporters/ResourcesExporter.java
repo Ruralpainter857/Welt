@@ -51,6 +51,9 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
     private static final AtomicLong NATIVE_PROFILE_APPLY_NANOS = new AtomicLong();
     private static final AtomicLong NATIVE_PROFILE_CHUNKS = new AtomicLong();
     private static final AtomicLong NATIVE_PROFILE_PALETTE_CHUNKS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_PALETTE_VIEWS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_PALETTE_VIEW_MISSES = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_PALETTE_REJECTIONS = new AtomicLong();
 
     /** Resets optional, out-of-band timings for the native Resources path. */
     public static void resetNativeProfile() {
@@ -64,6 +67,9 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
         NATIVE_PROFILE_APPLY_NANOS.set(0);
         NATIVE_PROFILE_CHUNKS.set(0);
         NATIVE_PROFILE_PALETTE_CHUNKS.set(0);
+        NATIVE_PROFILE_PALETTE_VIEWS.set(0);
+        NATIVE_PROFILE_PALETTE_VIEW_MISSES.set(0);
+        NATIVE_PROFILE_PALETTE_REJECTIONS.set(0);
     }
 
     /** Returns preparation, JNI-call, result-application nanoseconds and chunk count. */
@@ -72,7 +78,9 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
                 NATIVE_PROFILE_APPLY_NANOS.get(), NATIVE_PROFILE_CHUNKS.get(),
                 NATIVE_PROFILE_COPY_NANOS.get(), NATIVE_PROFILE_RUST_NANOS.get(),
                 NATIVE_PROFILE_PALETTE_CHUNKS.get(), NATIVE_PROFILE_RUST_SETUP_NANOS.get(),
-                NATIVE_PROFILE_RUST_SCAN_NANOS.get(), NATIVE_PROFILE_RUST_NOISE_SAMPLES.get()};
+                NATIVE_PROFILE_RUST_SCAN_NANOS.get(), NATIVE_PROFILE_RUST_NOISE_SAMPLES.get(),
+                NATIVE_PROFILE_PALETTE_VIEWS.get(), NATIVE_PROFILE_PALETTE_VIEW_MISSES.get(),
+                NATIVE_PROFILE_PALETTE_REJECTIONS.get()};
     }
 
     public ResourcesExporter(Dimension dimension, Platform platform, ExporterSettings settings) {
@@ -288,6 +296,10 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
         final ChunkPaletteBuffer.LivePaletteView paletteView =
                 ChunkPaletteBuffer.openLivePaletteView(chunk, effectiveMinZ, effectiveMaxZ,
                         nativePaletteTargets);
+        if (profile) {
+            (paletteView != null ? NATIVE_PROFILE_PALETTE_VIEWS : NATIVE_PROFILE_PALETTE_VIEW_MISSES)
+                    .incrementAndGet();
+        }
         if (paletteView != null) {
             final int sectionCount = paletteView.sectionCount();
             final int[][] sectionIndexes = buffers.sectionIndexes;
@@ -345,6 +357,9 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
                     NATIVE_PROFILE_PALETTE_CHUNKS.incrementAndGet();
                 }
                 return true;
+            }
+            if (profile) {
+                NATIVE_PROFILE_PALETTE_REJECTIONS.incrementAndGet();
             }
         }
 

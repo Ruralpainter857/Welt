@@ -381,7 +381,8 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 System.out.printf("Resources kernel detail over %d chunks: preparation %.3f s, "
                                 + "JNI+copy+Rust %.3f s (input copy %.3f s, Rust total %.3f s, "
                                 + "Rust setup %.3f s, material/Perlin scan %.3f s, %,d Perlin samples), "
-                                + "Java apply %.3f s; in-place palette chunks %d%n",
+                                + "Java apply %.3f s; in-place palette chunks %d "
+                                + "(live views %d, view misses %d, native palette rejects %d)%n",
                         nativeProfile[3], nativeProfile[0] / 1_000_000_000.0,
                         nativeProfile[1] / 1_000_000_000.0,
                         nativeProfile[4] / 1_000_000_000.0,
@@ -389,7 +390,7 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                         nativeProfile[7] / 1_000_000_000.0,
                         nativeProfile[8] / 1_000_000_000.0,
                         nativeProfile[9], nativeProfile[2] / 1_000_000_000.0,
-                        nativeProfile[6]);
+                        nativeProfile[6], nativeProfile[10], nativeProfile[11], nativeProfile[12]);
                 return;
             }
 
@@ -657,7 +658,8 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 System.out.printf("Resources native split over %d chunks: Java preparation %.3f s, "
                                 + "JNI+copy+Rust %.3f s (input copies %.3f s, Rust kernel %.3f s; "
                                 + "Rust setup %.3f s, material/Perlin scan %.3f s, %,d Perlin samples), "
-                                + "application %.3f s; in-place palette chunks %d%n",
+                                + "application %.3f s; in-place palette chunks %d "
+                                + "(live views %d, view misses %d, native palette rejects %d)%n",
                         nativeProfile[3], nativeProfile[0] / 1_000_000_000.0,
                         nativeProfile[1] / 1_000_000_000.0,
                         nativeProfile[4] / 1_000_000_000.0,
@@ -666,7 +668,7 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                         nativeProfile[8] / 1_000_000_000.0,
                         nativeProfile[9],
                         nativeProfile[2] / 1_000_000_000.0,
-                        nativeProfile[6]);
+                        nativeProfile[6], nativeProfile[10], nativeProfile[11], nativeProfile[12]);
                 if (modernChunkCampaign) {
                     org.junit.Assert.assertTrue("modern campaign must exercise in-place palette updates",
                             nativeProfile[6] > 0);
