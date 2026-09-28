@@ -565,7 +565,8 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             heightMapMandelbrotCount = 0;
             heightMapBandedCount = 0;
             heightMapNinePatchCount = 0;
-            return appendHeightMapNode(heightMap);
+            return appendHeightMapNode(heightMap)
+                    && ((heightMapNinePatchCount == 0) || Native.isNinePatchGenEnabled());
         }
 
         private boolean appendHeightMapNode(HeightMap heightMap) {

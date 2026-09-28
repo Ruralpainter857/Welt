@@ -25,31 +25,36 @@ package org.pepsoft.worldpainter.nativeapi;
  * volée (pas de mise en cache) afin de permettre une <strong>bascule
  * réversible</strong> à l'exécution, y compris en cours de test :</p>
  * <ul>
- *   <li>{@code wp.native.gen} : génération de terrain ;</li>
- *   <li>{@code wp.native.render} : rendu 2D ;</li>
- *   <li>{@code wp.native.export} : export de monde.</li>
+ *   <li>{@code wp.native.gen} : génération de terrain (défaut : {@code true}) ;</li>
+ *   <li>{@code wp.native.gen.ninePatch} : calcul NinePatch natif, opt-in ;</li>
+ *   <li>{@code wp.native.render} : rendu 2D (défaut : {@code false}) ;</li>
+ *   <li>{@code wp.native.export} : export de monde (défaut : {@code false}).</li>
  * </ul>
  * <p>Les chemins Frost et Resources restent en Java avec le seul flag export :
  * leurs benchmarks natifs sont actuellement plus lents. Pour les mesurer
  * séparément, activer aussi {@code wp.native.export.frost} ou
  * {@code wp.native.export.resources}.</p>
  *
- * <p>La valeur par défaut de chaque flag est {@code false} : sans configuration
- * explicite, WorldPainter utilise le chemin Java historique, garantissant
- * l'équivalence comportementale par défaut. Si un flag est activé mais que la
- * bibliothèque native est absente (voir
+ * <p>La génération native est activée par défaut ; le rendu et l'export restent
+ * désactivés par défaut. Chaque valeur peut être remplacée par une propriété
+ * système. Les opérations natives gardent un repli Java lorsqu'elles ne sont
+ * pas disponibles ou ne couvrent pas le cas. Si le flag de génération est actif
+ * mais que la bibliothèque native est absente (voir
  * {@link NativeLoader#isNativeAvailable()}), le repli est <em>silencieux</em>
- * vers le chemin Java : aucun flag ne provoque d'erreur.</p>
+ * vers le chemin Java : l'accélération ne provoque pas d'erreur.</p>
  *
- * <p>Les valeurs reconnues comme vraies sont {@code "true"} (insensible à la
- * casse) ; toute autre valeur, y compris une propriété absente, vaut
- * {@code false}.</p>
+ * <p>La valeur {@code "true"} est reconnue sans distinction de casse ; toute
+ * autre valeur explicite est traitée comme {@code false}. Une propriété absente
+ * utilise la valeur par défaut du volet indiqué ci-dessus.</p>
  */
 public final class Native {
     /**
      * Clé de propriété système du volet « génération ».
      */
     public static final String GEN_KEY = "wp.native.gen";
+
+    /** Opt-in for the NinePatch generator, which can be slower than Java on some systems. */
+    public static final String NINE_PATCH_GEN_KEY = "wp.native.gen.ninePatch";
 
     /**
      * Clé de propriété système du volet « rendu ».
@@ -67,6 +72,7 @@ public final class Native {
     public static final String FLUID_FLOW_EXPORT_KEY = "wp.native.export.fluidFlow";
 
     private static final String DEFAULT_VALUE = "false";
+    private static final String DEFAULT_GEN_VALUE = "true";
 
     private Native() {
         // Classe utilitaire : pas d'instanciation.
@@ -77,14 +83,22 @@ public final class Native {
      * Indique si le volet « génération » doit utiliser l'accélération native.
      *
      * <p>Lit la propriété système {@code wp.native.gen} (défaut :
-     * {@code false}). L'appelant doit également vérifier
+     * {@code true}). L'appelant doit également vérifier
      * {@link NativeLoader#isNativeAvailable()} : en cas de bibliothèque
      * absente, le repli est silencieux vers le chemin Java.</p>
      *
      * @return {@code true} si la génération native est activée
      */
     public static boolean isGenEnabled() {
-        return Boolean.parseBoolean(System.getProperty(GEN_KEY, DEFAULT_VALUE));
+        return Boolean.parseBoolean(System.getProperty(GEN_KEY, DEFAULT_GEN_VALUE));
+    }
+
+    /**
+     * NinePatch has a separate opt-in because it regresses tile creation on some systems.
+     */
+    public static boolean isNinePatchGenEnabled() {
+        return isGenEnabled()
+                && Boolean.parseBoolean(System.getProperty(NINE_PATCH_GEN_KEY, DEFAULT_VALUE));
     }
 
     /**
@@ -139,6 +153,11 @@ public final class Native {
      */
     public static void setGenEnabled(final boolean enabled) {
         System.setProperty(GEN_KEY, Boolean.toString(enabled));
+    }
+
+    /** Enables or disables the native NinePatch height-map kernel. */
+    public static void setNinePatchGenEnabled(final boolean enabled) {
+        System.setProperty(NINE_PATCH_GEN_KEY, Boolean.toString(enabled));
     }
 
     /**

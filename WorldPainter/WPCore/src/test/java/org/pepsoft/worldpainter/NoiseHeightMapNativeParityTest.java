@@ -16,12 +16,41 @@ import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import java.util.Arrays;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeTrue;
 
 /** Compares the production JNI bulk path with NoiseHeightMap's Java output. */
 public final class NoiseHeightMapNativeParityTest {
+    @Test
+    public void nativeGenerationDefaultsOnAndCanBeDisabled() {
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        final String previousNinePatchFlag = System.getProperty(Native.NINE_PATCH_GEN_KEY);
+        try {
+            System.clearProperty(Native.GEN_KEY);
+            System.clearProperty(Native.NINE_PATCH_GEN_KEY);
+            assertTrue("native generation should be enabled by default", Native.isGenEnabled());
+            assertFalse("NinePatch should keep its Java path by default", Native.isNinePatchGenEnabled());
+            Native.setNinePatchGenEnabled(true);
+            assertTrue("NinePatch native path should be explicitly selectable", Native.isNinePatchGenEnabled());
+            Native.setGenEnabled(false);
+            assertFalse("the Java fallback must remain explicitly selectable", Native.isGenEnabled());
+            assertFalse("the NinePatch override must still require native generation", Native.isNinePatchGenEnabled());
+        } finally {
+            if (previousFlag == null) {
+                System.clearProperty(Native.GEN_KEY);
+            } else {
+                System.setProperty(Native.GEN_KEY, previousFlag);
+            }
+            if (previousNinePatchFlag == null) {
+                System.clearProperty(Native.NINE_PATCH_GEN_KEY);
+            } else {
+                System.setProperty(Native.NINE_PATCH_GEN_KEY, previousNinePatchFlag);
+            }
+        }
+    }
+
     @Test
     public void nativeBulkMatchesJavaBitForBit() {
         assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());

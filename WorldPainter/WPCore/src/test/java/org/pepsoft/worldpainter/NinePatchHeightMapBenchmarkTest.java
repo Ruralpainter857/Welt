@@ -2,7 +2,6 @@ package org.pepsoft.worldpainter;
 
 import org.junit.Test;
 import org.pepsoft.worldpainter.heightMaps.NinePatchHeightMap;
-import org.pepsoft.worldpainter.heightMaps.NinePatchHeightMap;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.themes.SimpleTheme;
@@ -22,6 +21,7 @@ public final class NinePatchHeightMapBenchmarkTest {
     public void compareJavaAndNativeTileCreation() throws Exception {
         assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
         final String previousFlag = System.getProperty(Native.GEN_KEY);
+        final String previousNinePatchFlag = System.getProperty(Native.NINE_PATCH_GEN_KEY);
         try {
             final HeightMapTileFactory factory = new HeightMapTileFactory(0x57454c54L,
                     new NinePatchHeightMap(96, 48, 640, 120.25),
@@ -62,11 +62,17 @@ public final class NinePatchHeightMapBenchmarkTest {
             } else {
                 System.setProperty(Native.GEN_KEY, previousFlag);
             }
+            if (previousNinePatchFlag == null) {
+                System.clearProperty(Native.NINE_PATCH_GEN_KEY);
+            } else {
+                System.setProperty(Native.NINE_PATCH_GEN_KEY, previousNinePatchFlag);
+            }
         }
     }
 
     private static double sample(HeightMapTileFactory factory, int tileCount, int round, boolean nativePath) {
         Native.setGenEnabled(nativePath);
+        Native.setNinePatchGenEnabled(nativePath);
         final long start = System.nanoTime();
         int check = 0;
         for (int i = 0; i < tileCount; i++) {

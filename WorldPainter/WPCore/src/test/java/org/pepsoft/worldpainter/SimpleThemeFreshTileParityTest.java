@@ -281,6 +281,7 @@ public final class SimpleThemeFreshTileParityTest {
     public void nativeNinePatchHeightMapMatchesJavaFreshTile() {
         assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
         final String previousFlag = System.getProperty(Native.GEN_KEY);
+        final String previousNinePatchFlag = System.getProperty(Native.NINE_PATCH_GEN_KEY);
         try {
             final int[][] parameters = {{0, 8, 12}, {7, 0, 10}, {9, 6, 0}, {16, 11, 13}};
             for (final int[] parameter : parameters) {
@@ -299,8 +300,10 @@ public final class SimpleThemeFreshTileParityTest {
                         final HeightMapTileFactory nativeFactory = new HeightMapTileFactory(73L, nativeMap,
                                 0, 256, false, createSimpleTheme(false));
                         Native.setGenEnabled(false);
+                        Native.setNinePatchGenEnabled(false);
                         final Tile javaTile = javaFactory.createTile(tile[0], tile[1]);
                         Native.setGenEnabled(true);
+                        Native.setNinePatchGenEnabled(true);
                         final Tile nativeTile = nativeFactory.createTile(tile[0], tile[1]);
                         for (int x = 0; x < Constants.TILE_SIZE; x++) {
                             for (int y = 0; y < Constants.TILE_SIZE; y++) {
@@ -321,6 +324,11 @@ public final class SimpleThemeFreshTileParityTest {
                 System.clearProperty(Native.GEN_KEY);
             } else {
                 System.setProperty(Native.GEN_KEY, previousFlag);
+            }
+            if (previousNinePatchFlag == null) {
+                System.clearProperty(Native.NINE_PATCH_GEN_KEY);
+            } else {
+                System.setProperty(Native.NINE_PATCH_GEN_KEY, previousNinePatchFlag);
             }
         }
     }
