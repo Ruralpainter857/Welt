@@ -20,6 +20,11 @@ on:
         required: true
         type: string
         default: dev-oesphy
+      profile_only:
+        description: Stop after warmups and diagnostic profiles without timed campaign trials
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -189,6 +194,7 @@ jobs:
             '-Dsurefire.failIfNoSpecifiedTests=false' \
             '-Dwelt.export.campaign=true' \
             '-Dwelt.export.modernChunkCampaign=true' \
+            '-Dwelt.export.profileOnly=${{ inputs.profile_only }}' \
             test
 
       - name: Upload baseline measurements
@@ -214,6 +220,7 @@ jobs:
             '-Dsurefire.failIfNoSpecifiedTests=false' \
             '-Dwelt.export.campaign=true' \
             '-Dwelt.export.modernChunkCampaign=true' \
+            '-Dwelt.export.profileOnly=${{ inputs.profile_only }}' \
             test
 
       - name: Upload candidate measurements
@@ -222,4 +229,12 @@ jobs:
         with:
           name: welt-export-campaign-candidate
           path: candidate/WorldPainter/WPCore/target/surefire-reports/*ExportFullWorldCampaignTest*
+          if-no-files-found: warn
+
+      - name: Upload JFR recordings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: welt-export-campaign-jfr
+          path: ${{ runner.temp }}/welt-full-export-campaign-*/*.jfr
           if-no-files-found: warn
