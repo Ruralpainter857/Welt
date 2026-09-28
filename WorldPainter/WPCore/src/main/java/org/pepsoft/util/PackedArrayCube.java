@@ -207,12 +207,19 @@ public class PackedArrayCube<T> {
     }
 
     private int paletteIndexFor(T value) {
+        if (reuseLastPaletteIndex && (value == lastPaletteValue) && (lastPaletteIndex >= 0)) {
+            return lastPaletteIndex;
+        }
         Integer index = indexedPaletteLookup.get(value);
         if (index == null) {
             index = indexedPalette.length;
             indexedPalette = Arrays.copyOf(indexedPalette, index + 1);
             indexedPalette[index] = value;
             indexedPaletteLookup.put(value, index);
+        }
+        if (reuseLastPaletteIndex) {
+            lastPaletteValue = value;
+            lastPaletteIndex = index;
         }
         return index;
     }
@@ -499,9 +506,13 @@ public class PackedArrayCube<T> {
     private final boolean straddleLongs;
     private final T[] values;
     private final boolean paletteIndexStorage;
+    private final boolean reuseLastPaletteIndex = Boolean.parseBoolean(
+            System.getProperty("welt.packedArrayCube.reuseLastPaletteIndex", "true"));
     private int[] paletteIndexes;
     private T[] indexedPalette;
     private Map<T, Integer> indexedPaletteLookup;
+    private T lastPaletteValue;
+    private int lastPaletteIndex = -1;
 
     public class PackedData {
         public PackedData(long[] data, T[] palette) {

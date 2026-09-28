@@ -248,6 +248,12 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 Terrain.setCustomMaterial(i, world.getMixedMaterial(i));
             }
 
+            if (Boolean.getBoolean("welt.export.paletteIndexCacheOnlyCampaign")) {
+                assumeTrue("Palette-index cache campaign requires the modern chunk fixture", modernChunkCampaign);
+                runPaletteIndexCacheCampaign(world, root, modes[3], workerCount);
+                return;
+            }
+
             if (Boolean.getBoolean("welt.export.frostOnlyCampaign")) {
                 assumeTrue("Frost-only campaign requires the modern chunk fixture", modernChunkCampaign);
                 runFrostOnlyCampaign(world, root, modes[0], MODES[2], workerCount);
@@ -837,6 +843,88 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
         return runCaptureExport(world, root, round, capture, false);
     }
 
+    private static void runPaletteIndexCacheCampaign(World2 world, Path root, Mode resourcesMode,
+                                                     int workerCount) throws Exception {
+        final String property = "welt.packedArrayCube.reuseLastPaletteIndex";
+        final String previous = System.getProperty(property);
+        final List<Long> lookupNanos = new ArrayList<>(), cachedNanos = new ArrayList<>();
+        final List<Long> lookupHeapPeaks = new ArrayList<>(), cachedHeapPeaks = new ArrayList<>();
+        final List<Long> lookupHeapGrowth = new ArrayList<>(), cachedHeapGrowth = new ArrayList<>();
+        final List<Long> lookupRssPeaks = new ArrayList<>(), cachedRssPeaks = new ArrayList<>();
+        final List<Long> lookupRssGrowth = new ArrayList<>(), cachedRssGrowth = new ArrayList<>();
+        final List<Long> pairedRatios = new ArrayList<>();
+        final List<Long> lookupTerrainNanos = new ArrayList<>(), cachedTerrainNanos = new ArrayList<>();
+        final List<Long> pairedTerrainRatios = new ArrayList<>();
+        Path lookupOutput = null, cachedOutput = null;
+        try {
+            for (int warmup = 0; warmup < 2; warmup++) {
+                final boolean cacheFirst = (warmup & 1) != 0;
+                for (int position = 0; position < 2; position++) {
+                    final boolean cached = (position == 0) == cacheFirst;
+                    System.setProperty(property, Boolean.toString(cached));
+                    runExport(world, root, resourcesMode,
+                            "palette-index-cache-warmup-" + warmup + (cached ? "-cached" : "-lookup"), false);
+                }
+            }
+
+            for (int round = 0; round < 5; round++) {
+                final boolean cacheFirst = (round & 1) != 0;
+                RunResult lookup = null, cached = null;
+                for (int position = 0; position < 2; position++) {
+                    final boolean useCache = (position == 0) == cacheFirst;
+                    System.setProperty(property, Boolean.toString(useCache));
+                    final RunResult result = runExport(world, root, resourcesMode,
+                            "palette-index-cache-round-" + round + (useCache ? "-cached" : "-lookup"), false);
+                    printTimings(useCache ? "palette-cache" : "palette-lookup", round, result);
+                    if (useCache) cached = result;
+                    else lookup = result;
+                }
+                lookupNanos.add(lookup.wallNanos);
+                cachedNanos.add(cached.wallNanos);
+                lookupHeapPeaks.add(lookup.peakHeapBytes);
+                cachedHeapPeaks.add(cached.peakHeapBytes);
+                lookupHeapGrowth.add(lookup.peakHeapGrowthBytes());
+                cachedHeapGrowth.add(cached.peakHeapGrowthBytes());
+                lookupRssPeaks.add(lookup.peakRssBytes);
+                cachedRssPeaks.add(cached.peakRssBytes);
+                lookupRssGrowth.add(lookup.peakRssGrowthBytes());
+                cachedRssGrowth.add(cached.peakRssGrowthBytes());
+                pairedRatios.add(Math.round(lookup.wallNanos * 1_000_000.0 / cached.wallNanos));
+                final long lookupTerrain = stageNanos(lookup, "TERRAIN_GENERATION");
+                final long cachedTerrain = stageNanos(cached, "TERRAIN_GENERATION");
+                lookupTerrainNanos.add(lookupTerrain);
+                cachedTerrainNanos.add(cachedTerrain);
+                pairedTerrainRatios.add(Math.round(lookupTerrain * 1_000_000.0 / cachedTerrain));
+                if (round == 4) {
+                    lookupOutput = lookup.output;
+                    cachedOutput = cached.output;
+                }
+            }
+
+            final Map<String, Map<Integer, byte[]>> lookupChunks = readRegions(lookupOutput);
+            final Map<String, Map<Integer, byte[]>> cachedChunks = readRegions(cachedOutput);
+            assertRegionsEqual("palette-index-last-value-cache", lookupChunks, cachedChunks);
+            System.out.printf("Palette-index last-value cache full Resources export A/B (%d alternating, %d workers): "
+                            + "identity-map lookup %.3f s, cached %.3f s, paired full-export ratio %.3fx; "
+                            + "terrain median %.3f vs %.3f s, paired ratio %.3fx; "
+                            + "heap peak/growth %.1f/%.1f vs %.1f/%.1f MiB; RSS peak/growth %s/%s vs %s/%s; "
+                            + "runs lookup %s, cached %s; exact NBT parity on %d chunks.%n",
+                    lookupNanos.size(), workerCount,
+                    median(lookupNanos) / 1_000_000_000.0, median(cachedNanos) / 1_000_000_000.0,
+                    median(pairedRatios) / 1_000_000.0,
+                    median(lookupTerrainNanos) / 1_000_000_000.0,
+                    median(cachedTerrainNanos) / 1_000_000_000.0,
+                    median(pairedTerrainRatios) / 1_000_000.0,
+                    median(lookupHeapPeaks) / 1048576.0, median(lookupHeapGrowth) / 1048576.0,
+                    median(cachedHeapPeaks) / 1048576.0, median(cachedHeapGrowth) / 1048576.0,
+                    formatMiB(medianAvailable(lookupRssPeaks)), formatMiB(medianAvailable(lookupRssGrowth)),
+                    formatMiB(medianAvailable(cachedRssPeaks)), formatMiB(medianAvailable(cachedRssGrowth)),
+                    seconds(lookupNanos), seconds(cachedNanos), countChunks(cachedChunks));
+        } finally {
+            restore(property, previous);
+        }
+    }
+
     private static void runFrostOnlyCampaign(World2 world, Path root, Mode javaMode,
                                              Mode frostMode, int workerCount) throws Exception {
         final List<Long> javaNanos = new ArrayList<>(), frostNanos = new ArrayList<>();
@@ -983,6 +1071,18 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                         entry.getKey(), entry.getValue() / 1_000_000_000.0));
         if (result.jfr != null) System.out.print("; JFR=" + result.jfr);
         System.out.println();
+    }
+
+    private static long stageNanos(RunResult result, String stageName) {
+        long total = 0;
+        for (ChunkFactory.Stats dimension : result.stats.values()) {
+            for (Map.Entry<Object, AtomicLong> timing : dimension.timings.entrySet()) {
+                if (stageName.equals(String.valueOf(timing.getKey()))) {
+                    total += timing.getValue().get();
+                }
+            }
+        }
+        return total;
     }
 
     private static Map<String, Map<Integer, byte[]>> readRegions(Path root) throws IOException {
