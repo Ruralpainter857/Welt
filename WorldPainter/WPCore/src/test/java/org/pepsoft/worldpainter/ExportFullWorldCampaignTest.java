@@ -244,6 +244,40 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 Terrain.setCustomMaterial(i, world.getMixedMaterial(i));
             }
 
+            if (Boolean.getBoolean("welt.export.resourcesProfileOnly")) {
+                runExport(world, root, modes[0], "resource-profile-warmup-java", false);
+                runExport(world, root, modes[3], "resource-profile-warmup-native", false);
+                final RunResult javaResult = runExport(world, root, modes[0], "resource-profile-java", false);
+                final String previousResourceProfile = System.getProperty("welt.export.profileResourcesNative");
+                final RunResult nativeResult;
+                final long[] nativeProfile;
+                try {
+                    System.setProperty("welt.export.profileResourcesNative", "true");
+                    ResourcesExporter.resetNativeProfile();
+                    nativeResult = runExport(world, root, modes[3], "resource-profile-native", false);
+                    nativeProfile = ResourcesExporter.nativeProfileSnapshot();
+                } finally {
+                    restore("welt.export.profileResourcesNative", previousResourceProfile);
+                }
+                assertRegionsEqual("resource-profile/java", readRegions(javaResult.output),
+                        readRegions(nativeResult.output));
+                printTimings("resource-profile-java", -1, javaResult);
+                printTimings("resource-profile-native", -1, nativeResult);
+                System.out.printf("Resources kernel detail over %d chunks: preparation %.3f s, "
+                                + "JNI+copy+Rust %.3f s (input copy %.3f s, Rust total %.3f s, "
+                                + "Rust setup %.3f s, candidate/noise scan %.3f s, %,d Perlin samples), "
+                                + "Java apply %.3f s; in-place palette chunks %d%n",
+                        nativeProfile[3], nativeProfile[0] / 1_000_000_000.0,
+                        nativeProfile[1] / 1_000_000_000.0,
+                        nativeProfile[4] / 1_000_000_000.0,
+                        nativeProfile[5] / 1_000_000_000.0,
+                        nativeProfile[7] / 1_000_000_000.0,
+                        nativeProfile[8] / 1_000_000_000.0,
+                        nativeProfile[9], nativeProfile[2] / 1_000_000_000.0,
+                        nativeProfile[6]);
+                return;
+            }
+
             if (!modernChunkCampaign || Boolean.getBoolean("welt.export.includeFrontierCampaign")) {
             // Measure the exact changed-cell frontier against the existing
             // rectangular scan on complete exports, and compare decompressed
@@ -435,12 +469,16 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 printTimings("resources-profile", -1, resourceProfile);
                 final long[] nativeProfile = ResourcesExporter.nativeProfileSnapshot();
                 System.out.printf("Resources native split over %d chunks: Java preparation %.3f s, "
-                                + "JNI+copy+Rust %.3f s (input copies %.3f s, Rust kernel %.3f s), "
+                                + "JNI+copy+Rust %.3f s (input copies %.3f s, Rust kernel %.3f s; "
+                                + "Rust setup %.3f s, candidate/noise scan %.3f s, %,d Perlin samples), "
                                 + "application %.3f s; in-place palette chunks %d%n",
                         nativeProfile[3], nativeProfile[0] / 1_000_000_000.0,
                         nativeProfile[1] / 1_000_000_000.0,
                         nativeProfile[4] / 1_000_000_000.0,
                         nativeProfile[5] / 1_000_000_000.0,
+                        nativeProfile[7] / 1_000_000_000.0,
+                        nativeProfile[8] / 1_000_000_000.0,
+                        nativeProfile[9],
                         nativeProfile[2] / 1_000_000_000.0,
                         nativeProfile[6]);
                 if (modernChunkCampaign) {

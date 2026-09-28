@@ -327,7 +327,7 @@ public final class NativeSlices {
                 || materialMaxZ.length != seeds.length || dirtMaterials.length != seeds.length
                 || chances.length != seeds.length * 16L || tinyX.length * height > 1_048_576L
                 || output.length != tinyX.length * height
-                || (profileNanos != null && profileNanos.length != 2)) {
+                || (profileNanos != null && profileNanos.length != 5)) {
             return false;
         }
         try {
@@ -371,7 +371,7 @@ public final class NativeSlices {
                 || sectionCount > paletteFlags.length || sectionCount > outputPaletteIndexes.length
                 || minZ < sectionMinY || maxZ >= sectionMinY + (long) sectionCount * 16L
                 || sectionCount != (((maxZ - sectionMinY) >> 4) + 1)
-                || (profileNanos != null && profileNanos.length != 2)
+                || (profileNanos != null && profileNanos.length != 5)
                 || (applyNanos != null && applyNanos.length != 1)) {
             return false;
         }

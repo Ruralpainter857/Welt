@@ -45,6 +45,9 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
     private static final AtomicLong NATIVE_PROFILE_CALL_NANOS = new AtomicLong();
     private static final AtomicLong NATIVE_PROFILE_COPY_NANOS = new AtomicLong();
     private static final AtomicLong NATIVE_PROFILE_RUST_NANOS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_RUST_SETUP_NANOS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_RUST_SCAN_NANOS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_RUST_NOISE_SAMPLES = new AtomicLong();
     private static final AtomicLong NATIVE_PROFILE_APPLY_NANOS = new AtomicLong();
     private static final AtomicLong NATIVE_PROFILE_CHUNKS = new AtomicLong();
     private static final AtomicLong NATIVE_PROFILE_PALETTE_CHUNKS = new AtomicLong();
@@ -55,6 +58,9 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
         NATIVE_PROFILE_CALL_NANOS.set(0);
         NATIVE_PROFILE_COPY_NANOS.set(0);
         NATIVE_PROFILE_RUST_NANOS.set(0);
+        NATIVE_PROFILE_RUST_SETUP_NANOS.set(0);
+        NATIVE_PROFILE_RUST_SCAN_NANOS.set(0);
+        NATIVE_PROFILE_RUST_NOISE_SAMPLES.set(0);
         NATIVE_PROFILE_APPLY_NANOS.set(0);
         NATIVE_PROFILE_CHUNKS.set(0);
         NATIVE_PROFILE_PALETTE_CHUNKS.set(0);
@@ -65,7 +71,8 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
         return new long[]{NATIVE_PROFILE_PREP_NANOS.get(), NATIVE_PROFILE_CALL_NANOS.get(),
                 NATIVE_PROFILE_APPLY_NANOS.get(), NATIVE_PROFILE_CHUNKS.get(),
                 NATIVE_PROFILE_COPY_NANOS.get(), NATIVE_PROFILE_RUST_NANOS.get(),
-                NATIVE_PROFILE_PALETTE_CHUNKS.get()};
+                NATIVE_PROFILE_PALETTE_CHUNKS.get(), NATIVE_PROFILE_RUST_SETUP_NANOS.get(),
+                NATIVE_PROFILE_RUST_SCAN_NANOS.get(), NATIVE_PROFILE_RUST_NOISE_SAMPLES.get()};
     }
 
     public ResourcesExporter(Dimension dimension, Platform platform, ExporterSettings settings) {
@@ -330,6 +337,9 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
                     NATIVE_PROFILE_CALL_NANOS.addAndGet(nativeEnd - paletteNativeStart);
                     NATIVE_PROFILE_COPY_NANOS.addAndGet(buffers.nativeProfileNanos[0]);
                     NATIVE_PROFILE_RUST_NANOS.addAndGet(buffers.nativeProfileNanos[1]);
+                    NATIVE_PROFILE_RUST_SETUP_NANOS.addAndGet(buffers.nativeProfileNanos[2]);
+                    NATIVE_PROFILE_RUST_SCAN_NANOS.addAndGet(buffers.nativeProfileNanos[3]);
+                    NATIVE_PROFILE_RUST_NOISE_SAMPLES.addAndGet(buffers.nativeProfileNanos[4]);
                     NATIVE_PROFILE_APPLY_NANOS.addAndGet(buffers.nativeApplyNanos[0]);
                     NATIVE_PROFILE_CHUNKS.incrementAndGet();
                     NATIVE_PROFILE_PALETTE_CHUNKS.incrementAndGet();
@@ -351,6 +361,9 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
             NATIVE_PROFILE_CALL_NANOS.addAndGet(nativeEnd - nativeStart);
             NATIVE_PROFILE_COPY_NANOS.addAndGet(buffers.nativeProfileNanos[0]);
             NATIVE_PROFILE_RUST_NANOS.addAndGet(buffers.nativeProfileNanos[1]);
+            NATIVE_PROFILE_RUST_SETUP_NANOS.addAndGet(buffers.nativeProfileNanos[2]);
+            NATIVE_PROFILE_RUST_SCAN_NANOS.addAndGet(buffers.nativeProfileNanos[3]);
+            NATIVE_PROFILE_RUST_NOISE_SAMPLES.addAndGet(buffers.nativeProfileNanos[4]);
             NATIVE_PROFILE_CHUNKS.incrementAndGet();
         }
         final long applyStart = profile ? System.nanoTime() : 0L;
@@ -413,7 +426,7 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
         private final int[][] sectionIndexes = new int[256][];
         private final byte[][] paletteFlags = new byte[256][];
         private final int[][] outputPaletteIndexes = new int[256][];
-        private final long[] nativeProfileNanos = new long[2];
+        private final long[] nativeProfileNanos = new long[5];
         private final long[] nativeApplyNanos = new long[1];
         private int nextOutputSlot;
 

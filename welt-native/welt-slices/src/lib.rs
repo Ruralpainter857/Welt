@@ -1537,7 +1537,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             if !(1..=256).contains(&columns) || !(0..=64).contains(&materials) {
                 return WeltError::IllegalArgument as jint;
             }
-            if !profile_nanos.is_null() && get_array_length(env, profile_nanos) != 2 {
+            if !profile_nanos.is_null() && get_array_length(env, profile_nanos) != 5 {
                 return WeltError::IllegalArgument as jint;
             }
             let expected_output = i64::from(columns) * height;
@@ -1596,100 +1596,108 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 values: output_ptr,
                 length: expected_output as usize,
             };
-            let (result, copy_nanos, kernel_nanos) = RESOURCE_NOISE_INPUTS.with(|workspace| {
-                let mut values = workspace.borrow_mut();
-                values.tiny_x.resize(columns as usize, 0.0);
-                values.tiny_y.resize(columns as usize, 0.0);
-                values.dirt_x.resize(columns as usize, 0.0);
-                values.dirt_y.resize(columns as usize, 0.0);
-                values.column_min_z.resize(columns as usize, 0);
-                values.column_max_z.resize(columns as usize, 0);
-                values.resource_values.resize(columns as usize, 0);
-                values.seeds.resize(materials as usize, 0);
-                values.material_min_z.resize(materials as usize, 0);
-                values.material_max_z.resize(materials as usize, 0);
-                values.raw_dirt_materials.resize(materials as usize, 0);
-                values.dirt_materials.resize(materials as usize, 0);
-                values.chances.resize(chance_count, 0.0);
-                get_double(env, tiny_x, 0, columns, values.tiny_x.as_mut_ptr());
-                get_double(env, tiny_y, 0, columns, values.tiny_y.as_mut_ptr());
-                get_double(env, dirt_x, 0, columns, values.dirt_x.as_mut_ptr());
-                get_double(env, dirt_y, 0, columns, values.dirt_y.as_mut_ptr());
-                get_int(
-                    env,
-                    column_min_z,
-                    0,
-                    columns,
-                    values.column_min_z.as_mut_ptr(),
-                );
-                get_int(
-                    env,
-                    column_max_z,
-                    0,
-                    columns,
-                    values.column_max_z.as_mut_ptr(),
-                );
-                get_int(
-                    env,
-                    resource_values,
-                    0,
-                    columns,
-                    values.resource_values.as_mut_ptr(),
-                );
-                get_int(
-                    env,
-                    material_min_z,
-                    0,
-                    materials,
-                    values.material_min_z.as_mut_ptr(),
-                );
-                get_int(
-                    env,
-                    material_max_z,
-                    0,
-                    materials,
-                    values.material_max_z.as_mut_ptr(),
-                );
-                get_long(env, seeds, 0, materials, values.seeds.as_mut_ptr());
-                get_byte(
-                    env,
-                    dirt_materials,
-                    0,
-                    materials,
-                    values.raw_dirt_materials.as_mut_ptr(),
-                );
-                get_float(
-                    env,
-                    chances,
-                    0,
-                    chance_count as jint,
-                    values.chances.as_mut_ptr(),
-                );
-                for index in 0..materials as usize {
-                    values.dirt_materials[index] = values.raw_dirt_materials[index] as u8;
-                }
-                let copy_nanos = copies_start.elapsed().as_nanos().min(i64::MAX as u128) as i64;
-                let kernel_start = std::time::Instant::now();
-                let result = fill_resource_materials_into(
-                    min_z,
-                    max_z,
-                    &values.tiny_x,
-                    &values.tiny_y,
-                    &values.dirt_x,
-                    &values.dirt_y,
-                    &values.column_min_z,
-                    &values.column_max_z,
-                    &values.resource_values,
-                    &values.seeds,
-                    &values.material_min_z,
-                    &values.material_max_z,
-                    &values.dirt_materials,
-                    &values.chances,
-                    output_values.as_mut_slice(),
-                );
-                let kernel_nanos = kernel_start.elapsed().as_nanos().min(i64::MAX as u128) as i64;
-                (result, copy_nanos, kernel_nanos)
-            });
+            let (result, copy_nanos, kernel_nanos, kernel_detail) =
+                RESOURCE_NOISE_INPUTS.with(|workspace| {
+                    let mut values = workspace.borrow_mut();
+                    let mut kernel_detail = [0_u64; 3];
+                    values.tiny_x.resize(columns as usize, 0.0);
+                    values.tiny_y.resize(columns as usize, 0.0);
+                    values.dirt_x.resize(columns as usize, 0.0);
+                    values.dirt_y.resize(columns as usize, 0.0);
+                    values.column_min_z.resize(columns as usize, 0);
+                    values.column_max_z.resize(columns as usize, 0);
+                    values.resource_values.resize(columns as usize, 0);
+                    values.seeds.resize(materials as usize, 0);
+                    values.material_min_z.resize(materials as usize, 0);
+                    values.material_max_z.resize(materials as usize, 0);
+                    values.raw_dirt_materials.resize(materials as usize, 0);
+                    values.dirt_materials.resize(materials as usize, 0);
+                    values.chances.resize(chance_count, 0.0);
+                    get_double(env, tiny_x, 0, columns, values.tiny_x.as_mut_ptr());
+                    get_double(env, tiny_y, 0, columns, values.tiny_y.as_mut_ptr());
+                    get_double(env, dirt_x, 0, columns, values.dirt_x.as_mut_ptr());
+                    get_double(env, dirt_y, 0, columns, values.dirt_y.as_mut_ptr());
+                    get_int(
+                        env,
+                        column_min_z,
+                        0,
+                        columns,
+                        values.column_min_z.as_mut_ptr(),
+                    );
+                    get_int(
+                        env,
+                        column_max_z,
+                        0,
+                        columns,
+                        values.column_max_z.as_mut_ptr(),
+                    );
+                    get_int(
+                        env,
+                        resource_values,
+                        0,
+                        columns,
+                        values.resource_values.as_mut_ptr(),
+                    );
+                    get_int(
+                        env,
+                        material_min_z,
+                        0,
+                        materials,
+                        values.material_min_z.as_mut_ptr(),
+                    );
+                    get_int(
+                        env,
+                        material_max_z,
+                        0,
+                        materials,
+                        values.material_max_z.as_mut_ptr(),
+                    );
+                    get_long(env, seeds, 0, materials, values.seeds.as_mut_ptr());
+                    get_byte(
+                        env,
+                        dirt_materials,
+                        0,
+                        materials,
+                        values.raw_dirt_materials.as_mut_ptr(),
+                    );
+                    get_float(
+                        env,
+                        chances,
+                        0,
+                        chance_count as jint,
+                        values.chances.as_mut_ptr(),
+                    );
+                    for index in 0..materials as usize {
+                        values.dirt_materials[index] = values.raw_dirt_materials[index] as u8;
+                    }
+                    let copy_nanos = copies_start.elapsed().as_nanos().min(i64::MAX as u128) as i64;
+                    let kernel_start = std::time::Instant::now();
+                    let result = fill_resource_materials_into(
+                        min_z,
+                        max_z,
+                        &values.tiny_x,
+                        &values.tiny_y,
+                        &values.dirt_x,
+                        &values.dirt_y,
+                        &values.column_min_z,
+                        &values.column_max_z,
+                        &values.resource_values,
+                        &values.seeds,
+                        &values.material_min_z,
+                        &values.material_max_z,
+                        &values.dirt_materials,
+                        &values.chances,
+                        output_values.as_mut_slice(),
+                        if profile_nanos.is_null() {
+                            None
+                        } else {
+                            Some(&mut kernel_detail)
+                        },
+                    );
+                    let kernel_nanos =
+                        kernel_start.elapsed().as_nanos().min(i64::MAX as u128) as i64;
+                    (result, copy_nanos, kernel_nanos, kernel_detail)
+                });
             if result.is_err() {
                 return WeltError::IllegalArgument as jint;
             }
@@ -1699,7 +1707,13 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                     unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i64);
                 let set_long: SetLongArrayRegion =
                     std::mem::transmute(function(env, SET_LONG_ARRAY_REGION));
-                let timings = [copy_nanos, kernel_nanos];
+                let timings = [
+                    copy_nanos,
+                    kernel_nanos,
+                    kernel_detail[0] as i64,
+                    kernel_detail[1] as i64,
+                    kernel_detail[2] as i64,
+                ];
                 set_long(
                     env,
                     profile_nanos,

@@ -79,7 +79,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 || section_count > section_array_length
                 || section_count > get_array_length(env, palette_flags)
                 || section_count > get_array_length(env, output_palette_indexes)
-                || (!profile_nanos.is_null() && get_array_length(env, profile_nanos) != 2)
+                || (!profile_nanos.is_null() && get_array_length(env, profile_nanos) != 5)
                 || (!apply_nanos.is_null() && get_array_length(env, apply_nanos) != 1)
                 || i64::from(min_z) < i64::from(section_min_y)
                 || i64::from(max_z) >= i64::from(section_min_y) + i64::from(section_count) * 16

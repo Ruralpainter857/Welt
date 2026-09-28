@@ -175,6 +175,7 @@ pub fn fill_resource_materials(
         dirt_materials,
         chances,
         &mut output,
+        None,
     )?;
     Ok(output)
 }
@@ -198,6 +199,71 @@ pub fn fill_resource_materials_into(
     dirt_materials: &[u8],
     chances: &[f32],
     output: &mut [i8],
+    profile: Option<&mut [u64]>,
+) -> Result<(), ResourceNoiseError> {
+    let profile_enabled = profile.is_some();
+    if profile.as_ref().is_some_and(|values| values.len() != 3) {
+        return Err(ResourceNoiseError::InvalidInputLengths);
+    }
+    if profile_enabled {
+        fill_resource_materials_into_impl::<true>(
+            min_z,
+            max_z,
+            tiny_x,
+            tiny_y,
+            dirt_x,
+            dirt_y,
+            column_min_z,
+            column_max_z,
+            resource_values,
+            seeds,
+            material_min_z,
+            material_max_z,
+            dirt_materials,
+            chances,
+            output,
+            profile,
+        )
+    } else {
+        fill_resource_materials_into_impl::<false>(
+            min_z,
+            max_z,
+            tiny_x,
+            tiny_y,
+            dirt_x,
+            dirt_y,
+            column_min_z,
+            column_max_z,
+            resource_values,
+            seeds,
+            material_min_z,
+            material_max_z,
+            dirt_materials,
+            chances,
+            output,
+            None,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fill_resource_materials_into_impl<const PROFILE: bool>(
+    min_z: i32,
+    max_z: i32,
+    tiny_x: &[f64],
+    tiny_y: &[f64],
+    dirt_x: &[f64],
+    dirt_y: &[f64],
+    column_min_z: &[i32],
+    column_max_z: &[i32],
+    resource_values: &[i32],
+    seeds: &[i64],
+    material_min_z: &[i32],
+    material_max_z: &[i32],
+    dirt_materials: &[u8],
+    chances: &[f32],
+    output: &mut [i8],
+    mut profile: Option<&mut [u64]>,
 ) -> Result<(), ResourceNoiseError> {
     let height = i64::from(max_z) - i64::from(min_z) + 1;
     if height <= 0 || height > 4096 || tiny_x.is_empty() || tiny_x.len() > 256 || seeds.len() > 64 {
@@ -235,6 +301,11 @@ pub fn fill_resource_materials_into(
         return Err(ResourceNoiseError::InvalidInputLengths);
     }
     output.fill(0);
+    let setup_start = if PROFILE {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
     RESOURCE_NOISE_WORKSPACE.with(|workspace| {
         let mut workspace = workspace.borrow_mut();
         while workspace.noises.len() < seeds.len() {
@@ -311,6 +382,15 @@ pub fn fill_resource_materials_into(
             resource_candidates,
             ..
         } = &mut *workspace;
+        let setup_nanos = setup_start
+            .map(|start| start.elapsed().as_nanos().min(u64::MAX as u128) as u64)
+            .unwrap_or(0);
+        let scan_start = if PROFILE {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+        let mut noise_samples = 0_u64;
         for column in 0..columns {
             let start_y = column_min_z[column].max(min_z);
             let end_y = column_max_z[column].min(max_z);
@@ -343,12 +423,22 @@ pub fn fill_resource_materials_into(
                     };
                     let value =
                         noises[material].get_perlin_noise_3d_column_prepared(&mut slot.context, z);
+                    if PROFILE {
+                        noise_samples += 1;
+                    }
                     if value >= chance {
                         output[column * height + z_index] = (material + 1) as i8;
                         break;
                     }
                 }
             }
+        }
+        if let Some(profile) = profile.as_deref_mut() {
+            profile[0] = setup_nanos;
+            profile[1] = scan_start
+                .map(|start| start.elapsed().as_nanos().min(u64::MAX as u128) as u64)
+                .unwrap_or(0);
+            profile[2] = noise_samples;
         }
         Ok(())
     })

@@ -255,7 +255,7 @@ public final class ResourceNoiseNativeParityTest {
             final int[][] outputPaletteIndexes = {{
                     view.paletteIndex(0, targets[0]), view.paletteIndex(0, targets[1])
             }};
-            final long[] profileNanos = new long[2], applyNanos = new long[1];
+            final long[] profileNanos = new long[5], applyNanos = new long[1];
             final byte[] resultBuffer = new byte[selected.length];
             assertTrue(NativeSlices.resourceMaterialsIntoPalette(minY, maxY,
                     tinyX, tinyY, dirtX, dirtY, columnMinY, columnMaxY, resourceValues,
@@ -263,6 +263,7 @@ public final class ResourceNoiseNativeParityTest {
                     resultBuffer, view.minY(), indexes.length, indexes, paletteFlags, outputPaletteIndexes,
                     profileNanos, applyNanos));
             assertArrayEquals(selected, resultBuffer);
+            assertTrue("profile counts Perlin evaluations", profileNanos[4] > 0);
 
             for (int y = minY; y <= maxY; y++) {
                 for (int z = 0; z < 16; z++) {
