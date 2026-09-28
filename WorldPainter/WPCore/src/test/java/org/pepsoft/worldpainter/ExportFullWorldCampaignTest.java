@@ -320,6 +320,7 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                         final RunResult result = runExport(world, root,
                                 useNative ? modes[3] : modes[0],
                                 "resource-ab-round-" + round + "-" + useNative, false);
+                        printTimings(useNative ? "resources-rust" : "resources-java", round, result);
                         (useNative ? nativeNanos : javaNanos).add(result.wallNanos);
                         (useNative ? nativeHeapPeaks : javaHeapPeaks).add(result.peakHeapBytes);
                         (useNative ? nativeHeapGrowth : javaHeapGrowth).add(result.peakHeapGrowthBytes());
@@ -331,12 +332,17 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                         }
                     }
                 }
-                assertRegionsEqual("resource-ab/java", readRegions(javaOutput), readRegions(nativeOutput));
+                AssertionError parityFailure = null;
+                try {
+                    assertRegionsEqual("resource-ab/java", readRegions(javaOutput), readRegions(nativeOutput));
+                } catch (AssertionError failure) {
+                    parityFailure = failure;
+                }
                 final long javaMedian = median(javaNanos), nativeMedian = median(nativeNanos);
                 System.out.printf("Resources full-export A/B (5 alternating, %d workers): Java %.3f s, "
                                 + "Rust %.3f s, ratio %.3fx; runs Java %s, Rust %s; "
                                 + "heap peak/growth %.1f/%.1f vs %.1f/%.1f MiB; "
-                                + "RSS peak/growth %s/%s vs %s/%s; NBT parity on %d chunks.%n",
+                                + "RSS peak/growth %s/%s vs %s/%s; NBT %s on %d chunks.%n",
                         workerCount, javaMedian / 1_000_000_000.0, nativeMedian / 1_000_000_000.0,
                         (double) javaMedian / nativeMedian, seconds(javaNanos), seconds(nativeNanos),
                         median(javaHeapPeaks) / 1048576.0, median(javaHeapGrowth) / 1048576.0,
@@ -344,7 +350,12 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                         formatMiB(medianAvailable(javaRssPeaks)),
                         formatMiB(medianAvailable(javaRssGrowth)),
                         formatMiB(medianAvailable(nativeRssPeaks)),
-                        formatMiB(medianAvailable(nativeRssGrowth)), countChunks(readRegions(nativeOutput)));
+                        formatMiB(medianAvailable(nativeRssGrowth)),
+                        (parityFailure == null) ? "parity" : "mismatch",
+                        countChunks(readRegions(nativeOutput)));
+                if (parityFailure != null) {
+                    throw parityFailure;
+                }
 
                 final String previousResourceProfile = System.getProperty("welt.export.profileResourcesNative");
                 final RunResult nativeProfileResult;
