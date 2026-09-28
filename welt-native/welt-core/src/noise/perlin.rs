@@ -238,6 +238,7 @@ fn unique_lattices(axes: &[PerlinAxis2D]) -> (Vec<i32>, Vec<usize>) {
 #[derive(Clone, Debug)]
 struct FastPerlin {
     pairs: [u16; 256],
+    #[cfg(target_arch = "x86_64")]
     hardware_fma: bool,
 }
 
@@ -258,6 +259,7 @@ impl FastPerlin {
         }
         Self {
             pairs,
+            #[cfg(target_arch = "x86_64")]
             hardware_fma: supports_hardware_fma(),
         }
     }
