@@ -238,7 +238,8 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                     ? new Mode[]{MODES[0], MODES[1],
                             new Mode("fluid-flow", true, false, false, true),
                             new Mode("resources", true, false, true),
-                            new Mode("resources-fluid", true, false, true, true)}
+                            new Mode("resources-fluid", true, false, true, true),
+                            MODES[2]}
                     : MODES;
             if (modernChunkCampaign) {
                 world.setPlatform(DefaultPlugin.JAVA_ANVIL_1_15);
