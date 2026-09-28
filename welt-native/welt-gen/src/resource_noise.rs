@@ -336,7 +336,7 @@ pub fn fill_resource_materials_into(
                     let value =
                         noises[material].get_perlin_noise_3d_column_prepared(&mut slot.context, z);
                     if value >= chance {
-                        output[column * height as usize + z_index] = (material + 1) as i8;
+                        output[column * height + z_index] = (material + 1) as i8;
                         break;
                     }
                 }

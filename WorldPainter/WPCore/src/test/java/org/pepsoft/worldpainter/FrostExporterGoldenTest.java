@@ -119,8 +119,8 @@ public final class FrostExporterGoldenTest {
             }
             final Path checkedIn = Path.of("..", "..", "welt-native", "golden", "frost-export-golden.txt");
             assertEquals("Run with -Dwelt.frost.golden.output=<path> to regenerate the Java golden",
-                    Files.readString(checkedIn, StandardCharsets.UTF_8),
-                    Files.readString(generated, StandardCharsets.UTF_8));
+                    normalizeLineEndings(Files.readString(checkedIn, StandardCharsets.UTF_8)),
+                    normalizeLineEndings(Files.readString(generated, StandardCharsets.UTF_8)));
         } finally {
             Files.deleteIfExists(generated);
             if (previousFlag == null) {
@@ -130,6 +130,10 @@ public final class FrostExporterGoldenTest {
             }
             restoreFrostFlag(previousFrostFlag);
         }
+    }
+
+    private static String normalizeLineEndings(String text) {
+        return text.replace("\r\n", "\n");
     }
 
     private static void restoreFrostFlag(String previous) {
