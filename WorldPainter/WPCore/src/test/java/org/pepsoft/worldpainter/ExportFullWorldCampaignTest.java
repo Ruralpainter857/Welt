@@ -244,6 +244,44 @@ public final class ExportFullWorldCampaignTest extends AbstractTool {
                 Terrain.setCustomMaterial(i, world.getMixedMaterial(i));
             }
 
+            if (Boolean.getBoolean("welt.export.allocationProfileOnly")) {
+                final Mode javaMode = new Mode("java", false, false, false);
+                final Mode resourcesMode = new Mode("resources-native", true, false, true);
+                for (int warmup = 0; warmup < 2; warmup++) {
+                    if ((warmup & 1) == 0) {
+                        runExport(world, root, javaMode, "allocation-warmup-java-" + warmup, false);
+                        runExport(world, root, resourcesMode, "allocation-warmup-native-" + warmup, false);
+                    } else {
+                        runExport(world, root, resourcesMode, "allocation-warmup-native-" + warmup, false);
+                        runExport(world, root, javaMode, "allocation-warmup-java-" + warmup, false);
+                    }
+                }
+                final RunResult javaProfile = runExport(world, root, javaMode, "allocation-profile-java", true);
+                printTimings("allocation-java", -1, javaProfile);
+                final Path nativeRecordingFile = root.resolve("resources-native-allocations.jfr");
+                final RunResult nativeProfile;
+                try (Recording recording = new Recording()) {
+                    recording.setName("Welt full export native Resources allocations");
+                    recording.enable("jdk.ExecutionSample").withPeriod(Duration.ofMillis(10));
+                    recording.enable("jdk.ThreadCPULoad").withPeriod(Duration.ofSeconds(1));
+                    recording.enable("jdk.ObjectAllocationSample");
+                    recording.start();
+                    try {
+                        nativeProfile = runExport(world, root, resourcesMode,
+                                "allocation-profile-native", false);
+                    } finally {
+                        recording.stop();
+                        recording.dump(nativeRecordingFile);
+                    }
+                }
+                printTimings("allocation-native", -1, nativeProfile);
+                assertRegionsEqual("allocation-profile-java-native",
+                        readRegions(javaProfile.output), readRegions(nativeProfile.output));
+                System.out.println("Java/native allocation JFRs captured after warmup; NBT parity on "
+                        + countChunks(readRegions(nativeProfile.output)) + " chunks.");
+                return;
+            }
+
             if (Boolean.getBoolean("welt.export.resourcesProfileOnly")) {
                 final List<Long> javaNanos = new ArrayList<>(), nativeNanos = new ArrayList<>();
                 final List<Long> javaHeapPeaks = new ArrayList<>(), nativeHeapPeaks = new ArrayList<>();
