@@ -346,12 +346,14 @@ public final class MC115AnvilChunk extends MCNamedBlocksChunk implements Section
     @Override
     public int getSkyLightLevel(int x, int y, int z) {
         final int level = y >> 4;
-        final Section section = sections[level];
-        if ((z < 0) || (z >= maxHeight) || (section == null) || (section.skyLight == null)) {
+        if ((z < 0) || (z >= maxHeight)) {
             return (level > highestSectionWithSkylight) ? 15 : 0;
-        } else {
-            return getDataByte(section.skyLight, x, y, z);
         }
+        final Section section = sections[level];
+        if ((section == null) || (section.skyLight == null)) {
+            return (level > highestSectionWithSkylight) ? 15 : 0;
+        }
+        return getDataByte(section.skyLight, x, y, z);
     }
 
     @Override
@@ -385,12 +387,14 @@ public final class MC115AnvilChunk extends MCNamedBlocksChunk implements Section
     @Override
     public int getBlockLightLevel(int x, int y, int z) {
         final int level = y >> 4;
-        final Section section = sections[level];
-        if ((z < 0) || (z >= maxHeight) || (section == null) || (section.blockLight == null)) {
+        if ((z < 0) || (z >= maxHeight)) {
             return 0;
-        } else {
-            return getDataByte(section.blockLight, x, y, z);
         }
+        final Section section = sections[level];
+        if ((section == null) || (section.blockLight == null)) {
+            return 0;
+        }
+        return getDataByte(section.blockLight, x, y, z);
     }
 
     @Override
