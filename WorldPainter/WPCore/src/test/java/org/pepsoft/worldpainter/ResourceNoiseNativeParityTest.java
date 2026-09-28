@@ -11,6 +11,7 @@ import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeTrue;
@@ -95,6 +96,79 @@ public final class ResourceNoiseNativeParityTest {
                 System.setProperty(Native.EXPORT_KEY, previousFlag);
             }
         }
+    }
+
+    @Test
+    public void cachedCandidateListsRefreshWhenChancesAndVerticalBoundsChange() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.EXPORT_KEY);
+        Native.setExportEnabled(true);
+        try {
+            final int minY = -8, maxY = 8;
+            final double[] tinyX = {0.25}, tinyY = {-0.75}, dirtX = {0.25}, dirtY = {-0.75};
+            final int[] columnMinY = {minY}, columnMaxY = {maxY}, resourceValues = {1};
+            final long[] seeds = {0x54a31L, 0x81721L};
+            final int[] materialMinY = {minY, minY}, materialMaxY = {maxY, maxY};
+            final byte[] dirtMaterials = {0, 1};
+            final float[] chances = new float[seeds.length * 16];
+            java.util.Arrays.fill(chances, -1.0f);
+
+            final byte[] initial = NativeSlices.resourceMaterials(minY, maxY,
+                    tinyX, tinyY, dirtX, dirtY, columnMinY, columnMaxY,
+                    resourceValues, seeds, materialMinY, materialMaxY, dirtMaterials, chances);
+            assertNotNull("initial native resource-noise result", initial);
+            assertArrayEquals(javaResourceReference(minY, maxY, tinyX, tinyY, dirtX, dirtY,
+                    columnMinY, columnMaxY, resourceValues, seeds, materialMinY, materialMaxY,
+                    dirtMaterials, chances), initial);
+
+            materialMinY[1] = 0;
+            chances[1] = 0.75f;
+            final byte[] changed = NativeSlices.resourceMaterials(minY, maxY,
+                    tinyX, tinyY, dirtX, dirtY, columnMinY, columnMaxY,
+                    resourceValues, seeds, materialMinY, materialMaxY, dirtMaterials, chances);
+            assertNotNull("updated native resource-noise result", changed);
+            assertArrayEquals(javaResourceReference(minY, maxY, tinyX, tinyY, dirtX, dirtY,
+                    columnMinY, columnMaxY, resourceValues, seeds, materialMinY, materialMaxY,
+                    dirtMaterials, chances), changed);
+            assertFalse("changed candidate inputs must change output", java.util.Arrays.equals(initial, changed));
+        } finally {
+            restore(Native.EXPORT_KEY, previousFlag);
+        }
+    }
+
+    private static byte[] javaResourceReference(int minY, int maxY,
+                                                 double[] tinyX, double[] tinyY,
+                                                 double[] dirtX, double[] dirtY,
+                                                 int[] columnMinY, int[] columnMaxY,
+                                                 int[] resourceValues, long[] seeds,
+                                                 int[] materialMinY, int[] materialMaxY,
+                                                 byte[] dirtMaterials, float[] chances) {
+        final int height = maxY - minY + 1;
+        final byte[] output = new byte[tinyX.length * height];
+        final PerlinNoise[] noises = new PerlinNoise[seeds.length];
+        for (int material = 0; material < seeds.length; material++) {
+            noises[material] = new PerlinNoise(seeds[material]);
+        }
+        for (int column = 0; column < tinyX.length; column++) {
+            final int resourceValue = resourceValues[column];
+            for (int y = Math.max(minY, columnMinY[column]);
+                 y <= Math.min(maxY, columnMaxY[column]); y++) {
+                for (int material = 0; material < seeds.length; material++) {
+                    final float chance = chances[material * 16 + resourceValue];
+                    if (chance > 0.5f || y < materialMinY[material] || y > materialMaxY[material]) {
+                        continue;
+                    }
+                    final float noise = dirtMaterials[material] != 0
+                            ? noises[material].getPerlinNoise(dirtX[column], dirtY[column], y / 16.411f)
+                            : noises[material].getPerlinNoise(tinyX[column], tinyY[column], y / 4.099f);
+                    if (noise >= chance) {
+                        output[column * height + y - minY] = (byte) (material + 1);
+                        break;
+                    }
+                }
+            }
+        }
+        return output;
     }
 
     @Test
