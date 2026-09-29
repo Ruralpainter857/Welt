@@ -847,6 +847,79 @@ public final class SimpleThemeFreshTileParityTest {
     }
 
     @Test
+    public void batchedLavaFloodCandidateMatchesPerCellFactory() throws Exception {
+        final HeightMapTileFactory legacyFactory = new HeightMapTileFactory(42L,
+                createFrostExerciseHeightMap(), 0, 256, true, createNoisyMixedSimpleTheme(true));
+        final HeightMapTileFactory batchedFactory = new HeightMapTileFactory(42L,
+                createFrostExerciseHeightMap(), 0, 256, true, createNoisyMixedSimpleTheme(false));
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        try {
+            Native.setGenEnabled(false);
+            resetSimpleThemeRandom(0x57454c54L);
+            final Tile legacy = legacyFactory.createTile(-3, 7);
+            resetSimpleThemeRandom(0x57454c54L);
+            final Tile batched = batchedFactory.createTile(-3, 7);
+            for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                    assertEquals("height at " + x + ',' + y,
+                            Float.floatToRawIntBits(legacy.getHeight(x, y)),
+                            Float.floatToRawIntBits(batched.getHeight(x, y)));
+                    assertEquals("water at " + x + ',' + y,
+                            legacy.getWaterLevel(x, y), batched.getWaterLevel(x, y));
+                    assertEquals("terrain at " + x + ',' + y,
+                            legacy.getTerrain(x, y), batched.getTerrain(x, y));
+                    assertEquals("lava at " + x + ',' + y,
+                            legacy.getBitLayerValue(FloodWithLava.INSTANCE, x, y),
+                            batched.getBitLayerValue(FloodWithLava.INSTANCE, x, y));
+                    assertEquals("Resources at " + x + ',' + y,
+                            legacy.getLayerValue(Resources.INSTANCE, x, y),
+                            batched.getLayerValue(Resources.INSTANCE, x, y));
+                    assertEquals("Biome at " + x + ',' + y,
+                            legacy.getLayerValue(Biome.INSTANCE, x, y),
+                            batched.getLayerValue(Biome.INSTANCE, x, y));
+                }
+            }
+        } finally {
+            restoreGenerationFlag(previousFlag);
+        }
+    }
+
+    @Test
+    public void lavaFloodBatchPathMatchesWhenThemeDoesNotOverrideLavaLayer() throws Exception {
+        final HeightMapTileFactory legacyFactory = new HeightMapTileFactory(42L,
+                createFrostExerciseHeightMap(), 0, 256, true, createNoisySimpleTheme(true));
+        final HeightMapTileFactory batchedFactory = new HeightMapTileFactory(42L,
+                createFrostExerciseHeightMap(), 0, 256, true, createNoisySimpleTheme(false));
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        try {
+            Native.setGenEnabled(false);
+            resetSimpleThemeRandom(0x57454c54L);
+            final Tile legacy = legacyFactory.createTile(-3, 7);
+            resetSimpleThemeRandom(0x57454c54L);
+            final Tile batched = batchedFactory.createTile(-3, 7);
+            for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                    assertEquals("height at " + x + ',' + y,
+                            Float.floatToRawIntBits(legacy.getHeight(x, y)),
+                            Float.floatToRawIntBits(batched.getHeight(x, y)));
+                    assertEquals("water at " + x + ',' + y,
+                            legacy.getWaterLevel(x, y), batched.getWaterLevel(x, y));
+                    assertEquals("terrain at " + x + ',' + y,
+                            legacy.getTerrain(x, y), batched.getTerrain(x, y));
+                    assertEquals("lava at " + x + ',' + y,
+                            legacy.getBitLayerValue(FloodWithLava.INSTANCE, x, y),
+                            batched.getBitLayerValue(FloodWithLava.INSTANCE, x, y));
+                    assertEquals("Frost at " + x + ',' + y,
+                            legacy.getBitLayerValue(Frost.INSTANCE, x, y),
+                            batched.getBitLayerValue(Frost.INSTANCE, x, y));
+                }
+            }
+        } finally {
+            restoreGenerationFlag(previousFlag);
+        }
+    }
+
+    @Test
     public void nativeScaledAndRotatedHeightMapMatchesJavaFreshTile() {
         assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
         final String previousFlag = System.getProperty(Native.GEN_KEY);
@@ -1108,10 +1181,66 @@ public final class SimpleThemeFreshTileParityTest {
                 cellwiseLayerMemory, groupedLayerMemory);
     }
 
+    @Test
+    public void benchmarkLavaFloodBatchCandidateWhenRequested() throws Exception {
+        assumeTrue(Boolean.getBoolean("welt.simpletheme.lava-flood.benchmark"));
+        final HeightMapTileFactory legacyFactory = new HeightMapTileFactory(73L,
+                createFrostExerciseHeightMap(), 0, 256, true, createNoisySimpleTheme(true));
+        final HeightMapTileFactory batchedFactory = new HeightMapTileFactory(73L,
+                createFrostExerciseHeightMap(), 0, 256, true, createNoisySimpleTheme(false));
+        final int tileCount = 24, rounds = 9;
+        final double[] legacyMillis = new double[rounds];
+        final double[] batchedMillis = new double[rounds];
+        for (int warmup = 0; warmup < 3; warmup++) {
+            benchmarkFloodFactoryTiles(legacyFactory, tileCount, warmup);
+            benchmarkFloodFactoryTiles(batchedFactory, tileCount, warmup);
+        }
+        for (int round = 0; round < rounds; round++) {
+            if ((round & 1) == 0) {
+                legacyMillis[round] = benchmarkFloodFactoryTiles(legacyFactory, tileCount, round);
+                batchedMillis[round] = benchmarkFloodFactoryTiles(batchedFactory, tileCount, round);
+            } else {
+                batchedMillis[round] = benchmarkFloodFactoryTiles(batchedFactory, tileCount, round);
+                legacyMillis[round] = benchmarkFloodFactoryTiles(legacyFactory, tileCount, round);
+            }
+        }
+        java.util.Arrays.sort(legacyMillis);
+        java.util.Arrays.sort(batchedMillis);
+        final BenchmarkMemorySupport.Snapshot legacyMemory = BenchmarkMemorySupport.measure(
+                () -> benchmarkFloodFactoryTiles(legacyFactory, tileCount, rounds));
+        final BenchmarkMemorySupport.Snapshot batchedMemory = BenchmarkMemorySupport.measure(
+                () -> benchmarkFloodFactoryTiles(batchedFactory, tileCount, rounds));
+        final int median = rounds / 2;
+        System.out.printf("Fresh flood-with-lava tiles: Java fallback %.3f ms/tile, batched candidate %.3f, "
+                        + "ratio %.3fx fallback_memory=[%s] candidate_memory=[%s]%n",
+                legacyMillis[median], batchedMillis[median], legacyMillis[median] / batchedMillis[median],
+                legacyMemory, batchedMemory);
+    }
+
     private static double benchmarkMixedTiles(HeightMapTileFactory factory, int tileCount, int round)
             throws Exception {
         resetSimpleThemeRandom(0x57454c54L);
         return benchmarkTiles(factory, tileCount, round, false);
+    }
+
+    private static double benchmarkFloodFactoryTiles(HeightMapTileFactory factory, int tileCount, int round)
+            throws Exception {
+        resetSimpleThemeRandom(0x57454c54L);
+        if (factory.isFloodWithLava()) {
+            return benchmarkTiles(factory, tileCount, round, false);
+        }
+        Native.setGenEnabled(false);
+        final long start = System.nanoTime();
+        int sink = 0;
+        for (int tileIndex = 0; tileIndex < tileCount; tileIndex++) {
+            final int tileX = Math.floorMod(tileIndex * 7 + round, 9) - 4;
+            final int tileY = Math.floorMod(tileIndex * 13 + round * 3, 9) - 4;
+            final Tile tile = factory.createTile(tileX, tileY);
+            tile.setBitLayerValue(FloodWithLava.INSTANCE);
+            sink ^= Float.floatToRawIntBits(tile.getHeight(tileIndex & 127, (tileIndex * 17) & 127));
+        }
+        benchmarkSink ^= sink;
+        return (System.nanoTime() - start) / 1_000_000.0 / tileCount;
     }
 
     private static double benchmarkMixedLayerPath(HeightMap heightMap, SimpleTheme theme, int tileCount,

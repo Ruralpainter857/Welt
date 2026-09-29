@@ -35,6 +35,7 @@ import java.awt.geom.AffineTransform;
 import java.awt.geom.Point2D;
 import java.io.IOException;
 import java.io.ObjectInputStream;
+import java.util.Map;
 import java.util.SortedMap;
 
 import static org.pepsoft.util.MathUtils.clamp;
@@ -161,8 +162,14 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                     nativeConstant = ((ConstantHeightMap) sum.getHeightMap2()).getHeight();
                 }
             }
-            final boolean freshSimpleTheme = (theme.getClass() == SimpleTheme.class) && !floodWithLava;
-            final boolean batchFreshSimpleTheme = freshSimpleTheme
+            final boolean isSimpleTheme = theme.getClass() == SimpleTheme.class;
+            final boolean freshSimpleTheme = isSimpleTheme && !floodWithLava;
+            final Map<?, ?> simpleThemeLayerMap = isSimpleTheme
+                    ? ((SimpleTheme) theme).getLayerMap() : null;
+            final boolean themeConfiguresFloodWithLava = (simpleThemeLayerMap != null)
+                    && simpleThemeLayerMap.containsValue(FloodWithLava.INSTANCE);
+            final boolean batchFreshSimpleTheme = isSimpleTheme
+                    && (!floodWithLava || !themeConfiguresFloodWithLava)
                     && (isBatchSafeHeightMap(heightMap) || isNativeBandedHeightMap(heightMap)
                     || isNativeSlopeHeightMap(heightMap)
                     || isNativeDisplacementHeightMap(heightMap)
@@ -395,6 +402,9 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                             }
                         }
                     }
+                }
+                if (floodWithLava) {
+                    tile.setBitLayerValue(FloodWithLava.INSTANCE);
                 }
                 return tile;
             }
