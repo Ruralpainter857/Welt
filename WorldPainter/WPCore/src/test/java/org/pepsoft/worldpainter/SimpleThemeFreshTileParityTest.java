@@ -1040,6 +1040,160 @@ public final class SimpleThemeFreshTileParityTest {
     }
 
     @Test
+    public void benchmarkFreshTileMixedRandomLayersWhenRequested() throws Exception {
+        assumeTrue(Boolean.getBoolean("welt.simpletheme.mixed.layers.benchmark"));
+        final HeightMapTileFactory legacyFactory = new HeightMapTileFactory(73L,
+                createFrostExerciseHeightMap(), 0, 256, false, createNoisyMixedSimpleTheme(true));
+        final HeightMapTileFactory batchedFactory = new HeightMapTileFactory(73L,
+                createFrostExerciseHeightMap(), 0, 256, false, createNoisyMixedSimpleTheme(false));
+        final int tileCount = 24, rounds = 9;
+        final double[] legacyMillis = new double[rounds];
+        final double[] batchedMillis = new double[rounds];
+        for (int warmup = 0; warmup < 3; warmup++) {
+            benchmarkMixedTiles(legacyFactory, tileCount, warmup);
+            benchmarkMixedTiles(batchedFactory, tileCount, warmup);
+        }
+        for (int round = 0; round < rounds; round++) {
+            if ((round & 1) == 0) {
+                legacyMillis[round] = benchmarkMixedTiles(legacyFactory, tileCount, round);
+                batchedMillis[round] = benchmarkMixedTiles(batchedFactory, tileCount, round);
+            } else {
+                batchedMillis[round] = benchmarkMixedTiles(batchedFactory, tileCount, round);
+                legacyMillis[round] = benchmarkMixedTiles(legacyFactory, tileCount, round);
+            }
+        }
+        java.util.Arrays.sort(legacyMillis);
+        java.util.Arrays.sort(batchedMillis);
+        final BenchmarkMemorySupport.Snapshot legacyMemory = BenchmarkMemorySupport.measure(
+                () -> benchmarkMixedTiles(legacyFactory, tileCount, rounds));
+        final BenchmarkMemorySupport.Snapshot batchedMemory = BenchmarkMemorySupport.measure(
+                () -> benchmarkMixedTiles(batchedFactory, tileCount, rounds));
+        final int median = rounds / 2;
+        System.out.printf("Fresh mixed random-bit SimpleTheme Java %.3f ms/tile, grouped %.3f, ratio %.3fx "
+                        + "legacy_memory=[%s] grouped_memory=[%s]%n",
+                legacyMillis[median], batchedMillis[median], legacyMillis[median] / batchedMillis[median],
+                legacyMemory, batchedMemory);
+
+        final HeightMap mixedHeightMap = createFrostExerciseHeightMap();
+        final SimpleTheme mixedTheme = createNoisyMixedSimpleTheme(false);
+        final double[] cellwiseLayerMillis = new double[rounds];
+        final double[] groupedLayerMillis = new double[rounds];
+        for (int warmup = 0; warmup < 3; warmup++) {
+            benchmarkMixedLayerPath(mixedHeightMap, mixedTheme, tileCount, warmup, false);
+            benchmarkMixedLayerPath(mixedHeightMap, mixedTheme, tileCount, warmup, true);
+        }
+        for (int round = 0; round < rounds; round++) {
+            if ((round & 1) == 0) {
+                cellwiseLayerMillis[round] = benchmarkMixedLayerPath(
+                        mixedHeightMap, mixedTheme, tileCount, round, false);
+                groupedLayerMillis[round] = benchmarkMixedLayerPath(
+                        mixedHeightMap, mixedTheme, tileCount, round, true);
+            } else {
+                groupedLayerMillis[round] = benchmarkMixedLayerPath(
+                        mixedHeightMap, mixedTheme, tileCount, round, true);
+                cellwiseLayerMillis[round] = benchmarkMixedLayerPath(
+                        mixedHeightMap, mixedTheme, tileCount, round, false);
+            }
+        }
+        java.util.Arrays.sort(cellwiseLayerMillis);
+        java.util.Arrays.sort(groupedLayerMillis);
+        final BenchmarkMemorySupport.Snapshot cellwiseLayerMemory = BenchmarkMemorySupport.measure(
+                () -> benchmarkMixedLayerPath(mixedHeightMap, mixedTheme, tileCount, rounds, false));
+        final BenchmarkMemorySupport.Snapshot groupedLayerMemory = BenchmarkMemorySupport.measure(
+                () -> benchmarkMixedLayerPath(mixedHeightMap, mixedTheme, tileCount, rounds, true));
+        System.out.printf("Fresh tile, same batched height/terrain path: random-layer fallback %.3f ms/tile, "
+                        + "grouped deterministic layers %.3f, ratio %.3fx fallback_memory=[%s] grouped_memory=[%s]%n",
+                cellwiseLayerMillis[median], groupedLayerMillis[median],
+                cellwiseLayerMillis[median] / groupedLayerMillis[median],
+                cellwiseLayerMemory, groupedLayerMemory);
+    }
+
+    private static double benchmarkMixedTiles(HeightMapTileFactory factory, int tileCount, int round)
+            throws Exception {
+        resetSimpleThemeRandom(0x57454c54L);
+        return benchmarkTiles(factory, tileCount, round, false);
+    }
+
+    private static double benchmarkMixedLayerPath(HeightMap heightMap, SimpleTheme theme, int tileCount,
+                                                  int round, boolean groupedLayers) throws Exception {
+        resetSimpleThemeRandom(0x57454c54L);
+        final int area = Constants.TILE_SIZE * Constants.TILE_SIZE;
+        final float[] heights = new float[area];
+        final int[] intHeights = new int[area];
+        final byte[] terrainOrdinals = new byte[area];
+        Native.setGenEnabled(false);
+        final long start = System.nanoTime();
+        int sink = 0;
+        for (int tileIndex = 0; tileIndex < tileCount; tileIndex++) {
+            final int tileX = Math.floorMod(tileIndex * 7 + round, 9) - 4;
+            final int tileY = Math.floorMod(tileIndex * 13 + round * 3, 9) - 4;
+            final int worldTileX = tileX << Constants.TILE_SIZE_BITS;
+            final int worldTileY = tileY << Constants.TILE_SIZE_BITS;
+            final Tile tile = new Tile(tileX, tileY, 0, 256);
+            tile.inhibitEvents();
+            try {
+                for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                    for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                        final int index = x | (y << Constants.TILE_SIZE_BITS);
+                        heights[index] = org.pepsoft.util.MathUtils.clamp(0,
+                                (float) heightMap.getHeight(worldTileX + x, worldTileY + y), 255);
+                    }
+                }
+                final int[] quantisedHeights = tile.initializeHeightAndWaterLevels(
+                        heights, theme.getWaterHeight(), intHeights);
+                int lowestHeight = Integer.MAX_VALUE;
+                int highestHeight = Integer.MIN_VALUE;
+                for (int height : quantisedHeights) {
+                    lowestHeight = Math.min(lowestHeight, height);
+                    highestHeight = Math.max(highestHeight, height);
+                }
+                for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                    for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                        final int index = x | (y << Constants.TILE_SIZE_BITS);
+                        terrainOrdinals[index] = (byte) theme
+                                .getTerrainForFreshTile(tile, x, y, quantisedHeights[index]).ordinal();
+                    }
+                }
+                tile.initializeTerrainOrdinals(terrainOrdinals);
+                if (groupedLayers) {
+                    if (!theme.applyDeterministicLayersToFreshTile(tile, quantisedHeights,
+                            lowestHeight, highestHeight, terrainOrdinals)) {
+                        if (theme.applyDeterministicValueLayersToFreshTile(tile, quantisedHeights,
+                                lowestHeight, highestHeight, terrainOrdinals)) {
+                            for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                                for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                                    theme.applyBitLayersToFreshTile(tile, x, y,
+                                            quantisedHeights[x | (y << Constants.TILE_SIZE_BITS)]);
+                                }
+                            }
+                        } else {
+                            for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                                for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                                    theme.applyLayersToFreshTile(tile, x, y,
+                                            quantisedHeights[x | (y << Constants.TILE_SIZE_BITS)]);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                        for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                            theme.applyLayersToFreshTile(tile, x, y,
+                                    quantisedHeights[x | (y << Constants.TILE_SIZE_BITS)]);
+                        }
+                    }
+                }
+                sink ^= Float.floatToRawIntBits(tile.getHeight(tileIndex & 127, (tileIndex * 17) & 127));
+                sink ^= tile.getLayerValue(Resources.INSTANCE, tileIndex & 127, (tileIndex * 17) & 127);
+            } finally {
+                tile.releaseEvents();
+            }
+        }
+        benchmarkSink ^= sink;
+        return (System.nanoTime() - start) / 1_000_000.0 / tileCount;
+    }
+
+    @Test
     public void benchmarkLinearBandedHeightMapWhenRequested() throws Exception {
         assumeTrue(Boolean.getBoolean("welt.banded.linear.benchmark"));
         assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
@@ -1422,6 +1576,22 @@ public final class SimpleThemeFreshTileParityTest {
             return new SimpleTheme(0L, 62, ranges, layers, 0, 256, true, true) { };
         }
         return new SimpleTheme(0L, 62, ranges, layers, 0, 256, true, true);
+    }
+
+    private static SimpleTheme createNoisyMixedSimpleTheme(boolean legacyPerCellPath) {
+        final SortedMap<Integer, Terrain> ranges = new TreeMap<>();
+        ranges.put(-1, Terrain.GRASS);
+        ranges.put(126, Terrain.PERMADIRT);
+        ranges.put(158, Terrain.STONE_MIX);
+        final Map<Filter, Layer> layers = new java.util.LinkedHashMap<>();
+        layers.put(new HeightFilter(0, 256, 70, 180, true), FloodWithLava.INSTANCE);
+        layers.put(new HeightFilter(0, 256, 55, 200, false), Resources.INSTANCE);
+        layers.put(new HeightFilter(0, 256, 80, 170, false), Biome.INSTANCE);
+        final SimpleTheme theme = legacyPerCellPath
+                ? new SimpleTheme(0L, 62, ranges, layers, 0, 256, true, true) { }
+                : new SimpleTheme(0L, 62, ranges, layers, 0, 256, true, true);
+        theme.setDiscreteValues(java.util.Collections.singletonMap(Biome.INSTANCE, 4));
+        return theme;
     }
 
     private static HeightMap createFrostExerciseHeightMap() {
