@@ -2,6 +2,7 @@
 
 use crate::noise_height_map::{NoiseHeightMapBulk, NoiseHeightMapError};
 use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
+use std::cell::RefCell;
 
 pub const MAX_PROGRAM_NODES: usize = 64;
 pub const MAX_NOISE_VALUES: usize = 1_048_576;
@@ -64,6 +65,41 @@ enum NoiseMapEvaluator {
 }
 
 impl NoiseMapEvaluator {
+    fn configure_fast_noise_lite(
+        &mut self,
+        height: f64,
+        frequency: f64,
+        octaves: i32,
+        effective_seed: i64,
+        noise_type_code: i32,
+        fractal_type_code: i32,
+    ) -> Result<(), HeightMapTreeError> {
+        if let Self::FastNoiseLite(map) = self {
+            if map.matches_configuration(
+                height,
+                frequency,
+                octaves,
+                effective_seed,
+                noise_type_code,
+                fractal_type_code,
+            ) {
+                return Ok(());
+            }
+        }
+        let Some(map) = FastNoiseLiteHeightMapBulk::new(
+            height,
+            frequency,
+            octaves,
+            effective_seed,
+            noise_type_code,
+            fractal_type_code,
+        ) else {
+            return Err(HeightMapTreeError::InvalidProgram);
+        };
+        *self = Self::FastNoiseLite(map);
+        Ok(())
+    }
+
     fn get_value(&self, x: f64, y: f64) -> f64 {
         match self {
             Self::Legacy(map) => map.get_value(x, y),
@@ -89,9 +125,25 @@ impl NoiseMapEvaluator {
     }
 }
 
+#[derive(Default)]
+struct HeightMapTreeScratch {
+    noise_maps: Vec<NoiseMapEvaluator>,
+    parsed: Vec<ParsedNode>,
+}
+
+std::thread_local! {
+    static HEIGHT_MAP_TREE_SCRATCH: RefCell<HeightMapTreeScratch> =
+        RefCell::new(HeightMapTreeScratch::default());
+}
+
 struct FastNoiseLiteHeightMapBulk {
     noise: FastNoiseLite,
     height: f64,
+    frequency: f64,
+    octaves: i32,
+    effective_seed: i64,
+    noise_type_code: i32,
+    fractal_type_code: i32,
 }
 
 impl FastNoiseLiteHeightMapBulk {
@@ -133,7 +185,32 @@ impl FastNoiseLiteHeightMapBulk {
         noise.set_fractal_lacunarity(Some(2.0));
         noise.set_fractal_gain(Some(0.5));
         noise.set_frequency(Some(frequency as f32));
-        Some(Self { noise, height })
+        Some(Self {
+            noise,
+            height,
+            frequency,
+            octaves,
+            effective_seed,
+            noise_type_code,
+            fractal_type_code,
+        })
+    }
+
+    fn matches_configuration(
+        &self,
+        height: f64,
+        frequency: f64,
+        octaves: i32,
+        effective_seed: i64,
+        noise_type_code: i32,
+        fractal_type_code: i32,
+    ) -> bool {
+        self.height.to_bits() == height.to_bits()
+            && self.frequency.to_bits() == frequency.to_bits()
+            && self.octaves == octaves
+            && self.effective_seed == effective_seed
+            && self.noise_type_code == noise_type_code
+            && self.fractal_type_code == fractal_type_code
     }
 
     #[inline]
@@ -185,6 +262,29 @@ pub fn fill_height_map_tree(
     height: usize,
     output: &mut [f64],
 ) -> Result<(), HeightMapTreeError> {
+    HEIGHT_MAP_TREE_SCRATCH.with(|scratch| {
+        let mut scratch = scratch.borrow_mut();
+        fill_height_map_tree_with_scratch(
+            nodes,
+            origin_x,
+            origin_y,
+            width,
+            height,
+            output,
+            &mut scratch,
+        )
+    })
+}
+
+fn fill_height_map_tree_with_scratch(
+    nodes: &[HeightMapNode],
+    origin_x: i32,
+    origin_y: i32,
+    width: usize,
+    height: usize,
+    output: &mut [f64],
+    scratch: &mut HeightMapTreeScratch,
+) -> Result<(), HeightMapTreeError> {
     if nodes.is_empty() {
         return Err(HeightMapTreeError::InvalidProgram);
     }
@@ -201,6 +301,8 @@ pub fn fill_height_map_tree(
         });
     }
 
+    scratch.parsed.clear();
+
     if let [HeightMapNode::Banded {
         segment1_length,
         segment1_end_height,
@@ -209,6 +311,7 @@ pub fn fill_height_map_tree(
         smooth,
     }] = nodes
     {
+        scratch.noise_maps.clear();
         for x in 0..width {
             let banded_value = banded_height(
                 origin_x.wrapping_add(x as i32) as f32,
@@ -232,6 +335,7 @@ pub fn fill_height_map_tree(
         height: map_height,
     }] = nodes
     {
+        scratch.noise_maps.clear();
         for x in 0..width {
             let world_x = origin_x.wrapping_add(x as i32) as f32;
             for y in 0..height {
@@ -250,8 +354,9 @@ pub fn fill_height_map_tree(
     }
 
     let mut depth = 0_usize;
-    let mut noise_maps = Vec::new();
-    let mut parsed = Vec::with_capacity(nodes.len());
+    let mut noise_map_count = 0_usize;
+    let noise_maps = &mut scratch.noise_maps;
+    let parsed = &mut scratch.parsed;
     for &node in nodes {
         match node {
             HeightMapNode::Constant(value) => {
@@ -269,13 +374,16 @@ pub fn fill_height_map_tree(
                         NoiseHeightMapError::TooManyOctaves(octaves),
                     ));
                 }
-                noise_maps.push(NoiseMapEvaluator::Legacy(NoiseHeightMapBulk::new(
-                    d_height,
-                    scale,
-                    octaves,
-                    effective_seed,
-                )?));
-                parsed.push(ParsedNode::Noise(noise_maps.len() - 1));
+                let noise_index = noise_map_count;
+                let map = NoiseHeightMapBulk::new(d_height, scale, octaves, effective_seed)?;
+                let evaluator = NoiseMapEvaluator::Legacy(map);
+                if noise_index == noise_maps.len() {
+                    noise_maps.push(evaluator);
+                } else {
+                    noise_maps[noise_index] = evaluator;
+                }
+                parsed.push(ParsedNode::Noise(noise_index));
+                noise_map_count += 1;
                 depth += 1;
             }
             HeightMapNode::FastNoiseLite {
@@ -286,18 +394,31 @@ pub fn fill_height_map_tree(
                 noise_type,
                 fractal_type,
             } => {
-                let Some(map) = FastNoiseLiteHeightMapBulk::new(
-                    height,
-                    frequency,
-                    octaves,
-                    effective_seed,
-                    noise_type,
-                    fractal_type,
-                ) else {
-                    return Err(HeightMapTreeError::InvalidProgram);
-                };
-                noise_maps.push(NoiseMapEvaluator::FastNoiseLite(map));
-                parsed.push(ParsedNode::Noise(noise_maps.len() - 1));
+                let noise_index = noise_map_count;
+                if noise_index == noise_maps.len() {
+                    let Some(map) = FastNoiseLiteHeightMapBulk::new(
+                        height,
+                        frequency,
+                        octaves,
+                        effective_seed,
+                        noise_type,
+                        fractal_type,
+                    ) else {
+                        return Err(HeightMapTreeError::InvalidProgram);
+                    };
+                    noise_maps.push(NoiseMapEvaluator::FastNoiseLite(map));
+                } else {
+                    noise_maps[noise_index].configure_fast_noise_lite(
+                        height,
+                        frequency,
+                        octaves,
+                        effective_seed,
+                        noise_type,
+                        fractal_type,
+                    )?;
+                }
+                parsed.push(ParsedNode::Noise(noise_index));
+                noise_map_count += 1;
                 depth += 1;
             }
             HeightMapNode::Mandelbrot => {
@@ -383,6 +504,7 @@ pub fn fill_height_map_tree(
             }
         }
     }
+    noise_maps.truncate(noise_map_count);
     if depth != 1 {
         return Err(HeightMapTreeError::InvalidProgram);
     }
@@ -418,7 +540,7 @@ pub fn fill_height_map_tree(
     let mut stack = [0.0_f64; MAX_PROGRAM_NODES];
     for cell in 0..area {
         let mut stack_depth = 0_usize;
-        for node in &parsed {
+        for node in parsed.iter() {
             match *node {
                 ParsedNode::Constant(value) => {
                     stack[stack_depth] = value;
@@ -523,6 +645,25 @@ pub fn fill_height_map_tree_points(
     y_coordinates: &[f32],
     output: &mut [f64],
 ) -> Result<(), HeightMapTreeError> {
+    HEIGHT_MAP_TREE_SCRATCH.with(|scratch| {
+        let mut scratch = scratch.borrow_mut();
+        fill_height_map_tree_points_with_scratch(
+            nodes,
+            x_coordinates,
+            y_coordinates,
+            output,
+            &mut scratch,
+        )
+    })
+}
+
+fn fill_height_map_tree_points_with_scratch(
+    nodes: &[HeightMapNode],
+    x_coordinates: &[f32],
+    y_coordinates: &[f32],
+    output: &mut [f64],
+    scratch: &mut HeightMapTreeScratch,
+) -> Result<(), HeightMapTreeError> {
     if nodes.is_empty() {
         return Err(HeightMapTreeError::InvalidProgram);
     }
@@ -537,9 +678,12 @@ pub fn fill_height_map_tree_points(
         });
     }
 
+    scratch.parsed.clear();
+
     let mut depth = 0_usize;
-    let mut noise_maps = Vec::new();
-    let mut parsed = Vec::with_capacity(nodes.len());
+    let mut noise_map_count = 0_usize;
+    let noise_maps = &mut scratch.noise_maps;
+    let parsed = &mut scratch.parsed;
     for &node in nodes {
         match node {
             HeightMapNode::Constant(value) => {
@@ -552,13 +696,16 @@ pub fn fill_height_map_tree_points(
                 octaves,
                 effective_seed,
             } => {
-                noise_maps.push(NoiseMapEvaluator::Legacy(NoiseHeightMapBulk::new(
-                    d_height,
-                    scale,
-                    octaves,
-                    effective_seed,
-                )?));
-                parsed.push(ParsedNode::Noise(noise_maps.len() - 1));
+                let noise_index = noise_map_count;
+                let map = NoiseHeightMapBulk::new(d_height, scale, octaves, effective_seed)?;
+                let evaluator = NoiseMapEvaluator::Legacy(map);
+                if noise_index == noise_maps.len() {
+                    noise_maps.push(evaluator);
+                } else {
+                    noise_maps[noise_index] = evaluator;
+                }
+                parsed.push(ParsedNode::Noise(noise_index));
+                noise_map_count += 1;
                 depth += 1;
             }
             HeightMapNode::FastNoiseLite {
@@ -569,18 +716,31 @@ pub fn fill_height_map_tree_points(
                 noise_type,
                 fractal_type,
             } => {
-                let Some(map) = FastNoiseLiteHeightMapBulk::new(
-                    height,
-                    frequency,
-                    octaves,
-                    effective_seed,
-                    noise_type,
-                    fractal_type,
-                ) else {
-                    return Err(HeightMapTreeError::InvalidProgram);
-                };
-                noise_maps.push(NoiseMapEvaluator::FastNoiseLite(map));
-                parsed.push(ParsedNode::Noise(noise_maps.len() - 1));
+                let noise_index = noise_map_count;
+                if noise_index == noise_maps.len() {
+                    let Some(map) = FastNoiseLiteHeightMapBulk::new(
+                        height,
+                        frequency,
+                        octaves,
+                        effective_seed,
+                        noise_type,
+                        fractal_type,
+                    ) else {
+                        return Err(HeightMapTreeError::InvalidProgram);
+                    };
+                    noise_maps.push(NoiseMapEvaluator::FastNoiseLite(map));
+                } else {
+                    noise_maps[noise_index].configure_fast_noise_lite(
+                        height,
+                        frequency,
+                        octaves,
+                        effective_seed,
+                        noise_type,
+                        fractal_type,
+                    )?;
+                }
+                parsed.push(ParsedNode::Noise(noise_index));
+                noise_map_count += 1;
                 depth += 1;
             }
             HeightMapNode::Mandelbrot => {
@@ -666,6 +826,7 @@ pub fn fill_height_map_tree_points(
             }
         }
     }
+    noise_maps.truncate(noise_map_count);
     if depth != 1 {
         return Err(HeightMapTreeError::InvalidProgram);
     }
@@ -683,7 +844,7 @@ pub fn fill_height_map_tree_points(
         let x = x_coordinates[cell];
         let y = y_coordinates[cell];
         let mut stack_depth = 0_usize;
-        for node in &parsed {
+        for node in parsed.iter() {
             match *node {
                 ParsedNode::Constant(value) => {
                     stack[stack_depth] = value;
