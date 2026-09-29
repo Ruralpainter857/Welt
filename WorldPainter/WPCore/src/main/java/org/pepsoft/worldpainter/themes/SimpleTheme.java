@@ -12,6 +12,9 @@ import org.pepsoft.worldpainter.Terrain;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.layers.Frost;
 import org.pepsoft.worldpainter.layers.Layer;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -92,6 +95,15 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
     public final boolean applyDeterministicLayersToFreshTile(Tile tile, int[] quantisedHeights,
                                                              int lowestHeight, int highestHeight,
                                                              byte[] layerScratch) {
+        return applyDeterministicLayersToFreshTile(tile, quantisedHeights, lowestHeight,
+                highestHeight, layerScratch, null);
+    }
+
+    /** Applies deterministic layers, optionally using caller-owned native output scratch. */
+    public final boolean applyDeterministicLayersToFreshTile(Tile tile, int[] quantisedHeights,
+                                                             int lowestHeight, int highestHeight,
+                                                             byte[] layerScratch,
+                                                             byte[] nativeLayerScratch) {
         final int area = TILE_SIZE * TILE_SIZE;
         if ((quantisedHeights == null) || (quantisedHeights.length != area)
                 || (layerScratch == null) || (layerScratch.length != area)) {
@@ -127,6 +139,11 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
             }
         }
 
+        if (applyNativeLayerValuesToFreshTile(tile, quantisedHeights, firstHeight, lastHeight,
+                nativeLayerScratch, true)) {
+            return true;
+        }
+
         if (layerCache != null) {
             for (int layerIndex = 0; layerIndex < layerCache.length; layerIndex++) {
                 final int[] levels = layerLevelCache[layerIndex];
@@ -154,6 +171,15 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
     public final boolean applyDeterministicValueLayersToFreshTile(Tile tile, int[] quantisedHeights,
                                                                   int lowestHeight, int highestHeight,
                                                                   byte[] layerScratch) {
+        return applyDeterministicValueLayersToFreshTile(tile, quantisedHeights, lowestHeight,
+                highestHeight, layerScratch, null);
+    }
+
+    /** Applies deterministic value layers, optionally using caller-owned native output scratch. */
+    public final boolean applyDeterministicValueLayersToFreshTile(Tile tile, int[] quantisedHeights,
+                                                                  int lowestHeight, int highestHeight,
+                                                                  byte[] layerScratch,
+                                                                  byte[] nativeLayerScratch) {
         final int area = TILE_SIZE * TILE_SIZE;
         if ((quantisedHeights == null) || (quantisedHeights.length != area)
                 || (layerScratch == null) || (layerScratch.length != area)) {
@@ -175,6 +201,10 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
                     }
                 }
             }
+            if (applyNativeLayerValuesToFreshTile(tile, quantisedHeights, firstHeight, lastHeight,
+                    nativeLayerScratch, false)) {
+                return true;
+            }
             for (int layerIndex = 0; layerIndex < layerCache.length; layerIndex++) {
                 final int[] levels = layerLevelCache[layerIndex];
                 for (int index = 0; index < area; index++) {
@@ -183,6 +213,42 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
                 }
                 tile.initializeLayerValues(layerCache[layerIndex], layerScratch);
             }
+        }
+        return true;
+    }
+
+    /** Number of cached output planes produced for a complete fresh-tile theme application. */
+    public final int getFreshTileLayerCount() {
+        return ((layerCache != null) ? layerCache.length : 0)
+                + ((bitLayerCache != null) ? bitLayerCache.length : 0);
+    }
+
+    private boolean applyNativeLayerValuesToFreshTile(Tile tile, int[] quantisedHeights,
+                                                       int firstHeight, int lastHeight,
+                                                       byte[] nativeLayerScratch,
+                                                       boolean includeBitLayers) {
+        final int valueLayerCount = (layerCache != null) ? layerCache.length : 0;
+        final int bitLayerCount = includeBitLayers && (bitLayerCache != null)
+                ? bitLayerCache.length : 0;
+        final int layerCount = valueLayerCount + bitLayerCount;
+        final int area = TILE_SIZE * TILE_SIZE;
+        if ((layerCount == 0) || (nativeLayerScratch == null)
+                || (nativeLayerScratch.length < (long) area * layerCount)) {
+            return false;
+        }
+        final int[][] valueTables = (layerLevelCache != null) ? layerLevelCache : EMPTY_LEVEL_TABLES;
+        final int[][] bitTables = (bitLayerCount > 0) ? bitLayerLevelCache : EMPTY_LEVEL_TABLES;
+        if (!NativeSlices.fillSimpleThemeLayerValues(TILE_SIZE, TILE_SIZE,
+                minHeight, maxHeight, firstHeight, lastHeight, quantisedHeights,
+                valueTables, bitTables, nativeLayerScratch)) {
+            return false;
+        }
+        for (int layerIndex = 0; layerIndex < valueLayerCount; layerIndex++) {
+            tile.initializeLayerValues(layerCache[layerIndex], nativeLayerScratch, layerIndex * area);
+        }
+        for (int layerIndex = 0; layerIndex < bitLayerCount; layerIndex++) {
+            tile.initializeLayerValues(bitLayerCache[layerIndex], nativeLayerScratch,
+                    (valueLayerCount + layerIndex) * area);
         }
         return true;
     }
@@ -619,6 +685,7 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
     private Map<Layer, Integer> discreteValues;
 
     private static final Random random = new Random();
+    private static final int[][] EMPTY_LEVEL_TABLES = new int[0][];
     private static final Logger logger = LoggerFactory.getLogger(SimpleTheme.class);
     private static final long serialVersionUID = 1L;
 }

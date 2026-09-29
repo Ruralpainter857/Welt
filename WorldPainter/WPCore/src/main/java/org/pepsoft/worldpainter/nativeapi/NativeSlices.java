@@ -234,6 +234,48 @@ public final class NativeSlices {
         }
     }
 
+    /** Fills layer-major deterministic SimpleTheme values for one quantised tile. */
+    public static boolean fillSimpleThemeLayerValues(final int width, final int height,
+                                                     final int minHeight, final int maxHeight,
+                                                     final int firstHeight, final int lastHeight,
+                                                     final int[] quantisedHeights,
+                                                     final int[][] layerTables,
+                                                     final int[][] bitLayerTables,
+                                                     final byte[] output) {
+        final long area = (long) width * height;
+        final long heightRange = (long) maxHeight - minHeight;
+        if ((layerTables == null) || (bitLayerTables == null)) {
+            return false;
+        }
+        final long totalLayers = (long) layerTables.length + bitLayerTables.length;
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || width <= 0 || height <= 0 || area > 1_048_576L
+                || heightRange <= 0 || heightRange > 1_048_576L
+                || quantisedHeights == null || layerTables == null || bitLayerTables == null
+                || output == null || quantisedHeights.length != area
+                || totalLayers == 0 || totalLayers > 64
+                || area * totalLayers > 1_048_576L
+                || output.length < area * totalLayers) {
+            return false;
+        }
+        for (final int[] levels : layerTables) {
+            if ((levels == null) || (levels.length != heightRange)) {
+                return false;
+            }
+        }
+        for (final int[] levels : bitLayerTables) {
+            if ((levels == null) || (levels.length != heightRange)) {
+                return false;
+            }
+        }
+        try {
+            return nativeFillSimpleThemeLayerValues(width, height, minHeight, maxHeight,
+                    firstHeight, lastHeight, quantisedHeights, layerTables, bitLayerTables, output) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     /** Returns row-major capped Euclidean distances for a packed bit-layer mask. */
     public static float[] edgeDistances(final int width, final int height,
                                         final float maxDistance, final byte[] mask) {
@@ -604,6 +646,14 @@ public final class NativeSlices {
                                                        long seed, int[] heights,
                                                        int[] terrainRangeOrdinals,
                                                        int[] output);
+
+    private static native int nativeFillSimpleThemeLayerValues(int width, int height,
+                                                                int minHeight, int maxHeight,
+                                                                int firstHeight, int lastHeight,
+                                                                int[] quantisedHeights,
+                                                                int[][] layerTables,
+                                                                int[][] bitLayerTables,
+                                                                byte[] output);
 
     private static native int nativeBakeEdgeDistances(int width, int height,
                                                        float maxDistance, byte[] mask,

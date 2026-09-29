@@ -384,10 +384,12 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                     }
                 }
                 tile.initializeTerrainOrdinals(terrainOrdinals);
+                final byte[] nativeLayerValues = (Native.isGenEnabled() && NativeLoader.areSlicesAvailable())
+                        ? buffers.nativeThemeLayerValues(simpleTheme.getFreshTileLayerCount()) : null;
                 if (!simpleTheme.applyDeterministicLayersToFreshTile(tile, intHeights,
-                        lowestThemeHeight, highestThemeHeight, terrainOrdinals)) {
+                        lowestThemeHeight, highestThemeHeight, terrainOrdinals, nativeLayerValues)) {
                     if (simpleTheme.applyDeterministicValueLayersToFreshTile(tile, intHeights,
-                            lowestThemeHeight, highestThemeHeight, terrainOrdinals)) {
+                            lowestThemeHeight, highestThemeHeight, terrainOrdinals, nativeLayerValues)) {
                         for (int x = 0; x < TILE_SIZE; x++) {
                             for (int y = 0; y < TILE_SIZE; y++) {
                                 simpleTheme.applyBitLayersToFreshTile(tile, x, y,
@@ -630,6 +632,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         private float[] displacementYCoordinateValues;
         private int[] nativeTerrainOrdinals;
         private int[] terrainRangeOrdinals;
+        private byte[] nativeThemeLayerValues;
 
         private int[] nativeTerrainOrdinals() {
             if (nativeTerrainOrdinals == null) {
@@ -643,6 +646,17 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 terrainRangeOrdinals = new int[length];
             }
             return terrainRangeOrdinals;
+        }
+
+        private byte[] nativeThemeLayerValues(final int layerCount) {
+            final long requestedLength = (long) TILE_SIZE * TILE_SIZE * layerCount;
+            if ((requestedLength <= 0) || (requestedLength > 128 * 1024)) {
+                return null;
+            }
+            if ((nativeThemeLayerValues == null) || (nativeThemeLayerValues.length < requestedLength)) {
+                nativeThemeLayerValues = new byte[(int) requestedLength];
+            }
+            return nativeThemeLayerValues;
         }
 
         private boolean prepareHeightMapProgram(HeightMap heightMap) {

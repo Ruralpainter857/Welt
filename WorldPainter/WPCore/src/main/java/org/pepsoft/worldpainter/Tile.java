@@ -374,12 +374,17 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
      * notification are still handled through the normal Tile mechanisms.
      */
     public void initializeLayerValues(Layer layer, byte[] values) {
+        initializeLayerValues(layer, values, 0);
+    }
+
+    /** Initializes one layer from a plane within a larger caller-owned scratch buffer. */
+    public void initializeLayerValues(Layer layer, byte[] values, int offset) {
         if (layer == null) {
             throw new NullPointerException("layer");
         }
         final int area = TILE_SIZE * TILE_SIZE;
-        if ((values == null) || (values.length != area)) {
-            throw new IllegalArgumentException("Expected one layer value for every tile cell");
+        if ((values == null) || (offset < 0) || (offset > values.length - area)) {
+            throw new IllegalArgumentException("Expected one layer value for every tile cell at the given offset");
         }
         final DataSize dataSize = layer.getDataSize();
         if ((dataSize != Layer.DataSize.BIT) && (dataSize != Layer.DataSize.BIT_PER_CHUNK)
@@ -388,10 +393,11 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
         final int maxValue = dataSize.maxValue;
         final int defaultValue = layer.getDefaultValue();
-        final int firstValue = values[0] & 0xFF;
+        final int firstValue = values[offset] & 0xFF;
         boolean uniformValues = true;
         boolean hasNonDefaultValue = false;
-        for (byte rawValue : values) {
+        for (int index = 0; index < area; index++) {
+            final byte rawValue = values[offset + index];
             final int value = rawValue & 0xFF;
             if (value > maxValue) {
                 throw new IllegalArgumentException("Illegal value " + value + " for " + dataSize + " layer " + layer);
@@ -418,13 +424,13 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                 final BitSet bitSet = new BitSet(bitCount);
                 if (dataSize == Layer.DataSize.BIT) {
                     for (int index = 0; index < area; index++) {
-                        if (values[index] != 0) {
+                        if (values[offset + index] != 0) {
                             bitSet.set(index);
                         }
                     }
                 } else {
                     for (int index = 0; index < area; index++) {
-                        if (values[index] != 0) {
+                        if (values[offset + index] != 0) {
                             final int x = index & TILE_SIZE_MASK;
                             final int y = index >> TILE_SIZE_BITS;
                             bitSet.set((x / 16) + (y / 16) * (TILE_SIZE / 16));
@@ -453,7 +459,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                         }
                         for (int index = 0; index < area; index++) {
                             final int byteOffset = index / 2;
-                            final int value = values[index] & 0xFF;
+                            final int value = values[offset + index] & 0xFF;
                             if ((index & 1) == 0) {
                                 layerValues[byteOffset] = (byte) ((layerValues[byteOffset] & 0xF0) | value);
                             } else {
@@ -469,7 +475,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                         if (defaultValue != 0) {
                             Arrays.fill(layerValues, (byte) defaultValue);
                         }
-                        System.arraycopy(values, 0, layerValues, 0, area);
+                        System.arraycopy(values, offset, layerValues, 0, area);
                     }
                 }
                 layerData.put(layer, layerValues);

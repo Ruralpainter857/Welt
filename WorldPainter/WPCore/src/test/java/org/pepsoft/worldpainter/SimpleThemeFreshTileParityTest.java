@@ -175,6 +175,66 @@ public final class SimpleThemeFreshTileParityTest {
     }
 
     @Test
+    public void nativeDeterministicSimpleThemeLayersMatchPerCellForEveryStorageSize() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        try {
+            final HeightMap referenceHeightMap = createFrostExerciseHeightMap();
+            final SimpleTheme referenceTheme = createDeterministicLayerTheme(false);
+            referenceHeightMap.setSeed(42L);
+            referenceTheme.setSeed(42L);
+            Native.setGenEnabled(false);
+            final Tile reference = createPerCellFreshTile(referenceHeightMap, referenceTheme, -3, 7,
+                    new float[Constants.TILE_SIZE * Constants.TILE_SIZE],
+                    new int[Constants.TILE_SIZE * Constants.TILE_SIZE],
+                    new byte[Constants.TILE_SIZE * Constants.TILE_SIZE]);
+            final HeightMapTileFactory nativeFactory = new HeightMapTileFactory(42L,
+                    createFrostExerciseHeightMap(), 0, 256, false, createDeterministicLayerTheme(false));
+            Native.setGenEnabled(true);
+            final Tile actual = nativeFactory.createTile(-3, 7);
+            boolean sawFrost = false, sawPopulate = false, sawResources = false, sawBiome = false;
+            for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                    assertEquals("height at " + x + ',' + y,
+                            Float.floatToRawIntBits(reference.getHeight(x, y)),
+                            Float.floatToRawIntBits(actual.getHeight(x, y)));
+                    assertEquals("water at " + x + ',' + y,
+                            reference.getWaterLevel(x, y), actual.getWaterLevel(x, y));
+                    assertEquals("terrain at " + x + ',' + y,
+                            reference.getTerrain(x, y), actual.getTerrain(x, y));
+                    assertEquals("Frost at " + x + ',' + y,
+                            reference.getBitLayerValue(Frost.INSTANCE, x, y),
+                            actual.getBitLayerValue(Frost.INSTANCE, x, y));
+                    assertEquals("Populate at " + x + ',' + y,
+                            reference.getBitLayerValue(Populate.INSTANCE, x, y),
+                            actual.getBitLayerValue(Populate.INSTANCE, x, y));
+                    assertEquals("Resources at " + x + ',' + y,
+                            reference.getLayerValue(Resources.INSTANCE, x, y),
+                            actual.getLayerValue(Resources.INSTANCE, x, y));
+                    assertEquals("Annotations at " + x + ',' + y,
+                            reference.getLayerValue(Annotations.INSTANCE, x, y),
+                            actual.getLayerValue(Annotations.INSTANCE, x, y));
+                    assertEquals("Biome at " + x + ',' + y,
+                            reference.getLayerValue(Biome.INSTANCE, x, y),
+                            actual.getLayerValue(Biome.INSTANCE, x, y));
+                    sawFrost |= actual.getBitLayerValue(Frost.INSTANCE, x, y);
+                    sawPopulate |= actual.getBitLayerValue(Populate.INSTANCE, x, y);
+                    sawResources |= actual.getLayerValue(Resources.INSTANCE, x, y)
+                            != Resources.INSTANCE.getDefaultValue();
+                    sawBiome |= actual.getLayerValue(Biome.INSTANCE, x, y)
+                            != Biome.INSTANCE.getDefaultValue();
+                }
+            }
+            assertTrue("fixture should set a BIT layer", sawFrost);
+            assertTrue("fixture should set a BIT_PER_CHUNK layer", sawPopulate);
+            assertTrue("fixture should set a NIBBLE layer", sawResources);
+            assertTrue("fixture should set a BYTE layer", sawBiome);
+        } finally {
+            restoreGenerationFlag(previousFlag);
+        }
+    }
+
+    @Test
     public void tileBulkLayerInitializationPreservesBlockAndChunkBitSemantics() {
         final int area = Constants.TILE_SIZE * Constants.TILE_SIZE;
         final byte[] frostValues = new byte[area];
@@ -210,6 +270,27 @@ public final class SimpleThemeFreshTileParityTest {
         assertEquals(Resources.INSTANCE.getDefaultValue(), tile.getLayerValue(Resources.INSTANCE, 6, 19));
         assertEquals(3, tile.getLayerValue(Biome.INSTANCE, 7, 19));
         assertEquals(Biome.INSTANCE.getDefaultValue(), tile.getLayerValue(Biome.INSTANCE, 6, 19));
+    }
+
+    @Test
+    public void tileBulkLayerInitializationReadsPlaneAtOffset() {
+        final int area = Constants.TILE_SIZE * Constants.TILE_SIZE;
+        final int cell = 9 | (22 << Constants.TILE_SIZE_BITS);
+        final byte[] planes = new byte[area * 2];
+        planes[cell] = 5;
+        planes[area + cell] = 1;
+        final Tile tile = new Tile(0, 0, 0, 256);
+        tile.inhibitEvents();
+        try {
+            tile.initializeLayerValues(Resources.INSTANCE, planes, 0);
+            tile.initializeLayerValues(Frost.INSTANCE, planes, area);
+        } finally {
+            tile.releaseEvents();
+        }
+        assertEquals(5, tile.getLayerValue(Resources.INSTANCE, 9, 22));
+        assertEquals(Resources.INSTANCE.getDefaultValue(), tile.getLayerValue(Resources.INSTANCE, 8, 22));
+        assertTrue(tile.getBitLayerValue(Frost.INSTANCE, 9, 22));
+        assertTrue(!tile.getBitLayerValue(Frost.INSTANCE, 8, 22));
     }
 
     @Test
@@ -1139,7 +1220,7 @@ public final class SimpleThemeFreshTileParityTest {
                     () -> benchmarkTiles(nativeFactory, tileCount, rounds, true));
             final int median = rounds / 2;
             System.out.printf("Fresh tile with Frost layers: legacy Java %.3f ms/tile, batched Java %.3f, "
-                            + "Rust height + Java layers %.3f; legacy_memory=[%s] batched_java_memory=[%s] "
+                            + "Rust height/layers + Java Tile application %.3f; legacy_memory=[%s] batched_java_memory=[%s] "
                             + "native_memory=[%s]%n",
                     legacyMillis[median], batchedJavaMillis[median], nativeMillis[median],
                     legacyMemory, batchedJavaMemory, nativeMemory);
