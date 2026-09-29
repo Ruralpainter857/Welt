@@ -188,6 +188,10 @@ final class BenchmarkMemorySupport {
             this.allocatedBytes = allocatedBytes;
         }
 
+        long allocatedBytes() {
+            return allocatedBytes;
+        }
+
         @Override
         public String toString() {
             final String allocated = allocatedBytes < 0

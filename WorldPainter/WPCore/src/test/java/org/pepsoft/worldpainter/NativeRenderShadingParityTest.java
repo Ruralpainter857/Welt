@@ -4,6 +4,7 @@ import org.junit.Test;
 import org.pepsoft.util.ColourUtils;
 import org.pepsoft.worldpainter.layers.Biome;
 import org.pepsoft.worldpainter.layers.NotPresent;
+import org.pepsoft.worldpainter.layers.renderers.BiomeRenderer;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.nativeapi.NativeSlices;
@@ -22,6 +23,7 @@ import static org.junit.Assume.assumeTrue;
 /** Bit-exact and opt-in batch benchmark coverage for TileRenderer shading. */
 public final class NativeRenderShadingParityTest {
     private static final int PIXELS = 128 * 128;
+    private static volatile Object tileRendererMemorySink;
 
     @Test
     public void tileRenderHeightSnapshotMatchesScalarGettersForBothStorageLayouts() {
@@ -253,16 +255,56 @@ public final class NativeRenderShadingParityTest {
         final Dimension dimension = TestData.createDimension(
                 new Rectangle(0, 0, Constants.TILE_SIZE, Constants.TILE_SIZE), 64);
         final int rendererCount = 8;
-        final TileRenderer[] renderers = new TileRenderer[rendererCount];
         for (int i = 0; i < 2; i++) {
-            new TileRenderer(dimension, ColourScheme.DEFAULT, null, 0, true, null);
+            tileRendererMemorySink = new Object[] {
+                    new TileRenderer(dimension, ColourScheme.DEFAULT, null, 0, true, null),
+                    new BiomeRenderer(null, ColourScheme.DEFAULT)
+            };
         }
-        final BenchmarkMemorySupport.Snapshot memory = BenchmarkMemorySupport.measure(() -> {
-            for (int i = 0; i < renderers.length; i++) {
-                renderers[i] = new TileRenderer(dimension, ColourScheme.DEFAULT, null, 0, true, null);
-            }
-        });
-        System.out.printf("TileRenderer construction count=%d memory=[%s]%n", rendererCount, memory);
+        tileRendererMemorySink = null;
+        final BenchmarkMemorySupport.Snapshot eagerMemory = measureEagerTileRendererConstruction(
+                dimension, rendererCount);
+        final BenchmarkMemorySupport.Snapshot lazyMemory = measureLazyTileRendererConstruction(
+                dimension, rendererCount);
+        final long savedBytes = eagerMemory.allocatedBytes() - lazyMemory.allocatedBytes();
+        System.out.printf("TileRenderer construction count=%d eager=[%s] lazy=[%s] saved=%.2f MiB, %.2f MiB/renderer%n",
+                rendererCount, eagerMemory, lazyMemory,
+                savedBytes / 1_048_576.0, savedBytes / (1_048_576.0 * rendererCount));
+    }
+
+    private static BenchmarkMemorySupport.Snapshot measureEagerTileRendererConstruction(
+            Dimension dimension, int rendererCount) throws Exception {
+        final Object[] renderers = new Object[rendererCount * 2];
+        final BenchmarkMemorySupport.Snapshot snapshot;
+        try {
+            snapshot = BenchmarkMemorySupport.measure(() -> {
+                for (int i = 0; i < rendererCount; i++) {
+                    renderers[i * 2] = new TileRenderer(dimension, ColourScheme.DEFAULT, null, 0, true, null);
+                    renderers[i * 2 + 1] = new BiomeRenderer(null, ColourScheme.DEFAULT);
+                }
+                tileRendererMemorySink = renderers;
+            });
+        } finally {
+            tileRendererMemorySink = null;
+        }
+        return snapshot;
+    }
+
+    private static BenchmarkMemorySupport.Snapshot measureLazyTileRendererConstruction(
+            Dimension dimension, int rendererCount) throws Exception {
+        final TileRenderer[] renderers = new TileRenderer[rendererCount];
+        final BenchmarkMemorySupport.Snapshot snapshot;
+        try {
+            snapshot = BenchmarkMemorySupport.measure(() -> {
+                for (int i = 0; i < rendererCount; i++) {
+                    renderers[i] = new TileRenderer(dimension, ColourScheme.DEFAULT, null, 0, true, null);
+                }
+                tileRendererMemorySink = renderers;
+            });
+        } finally {
+            tileRendererMemorySink = null;
+        }
+        return snapshot;
     }
 
     private static void shadeJavaInPlace(int[] pixels, long[] amounts) {
