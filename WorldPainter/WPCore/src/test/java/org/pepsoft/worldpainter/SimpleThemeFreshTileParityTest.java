@@ -741,13 +741,17 @@ public final class SimpleThemeFreshTileParityTest {
 
     @Test
     public void rowMajorTerrainBatchPreservesBitLayerRandomSequence() throws Exception {
-        final Map<Filter, Layer> layers = java.util.Collections.singletonMap(
-                new HeightFilter(0, 256, 70, 180, true), FloodWithLava.INSTANCE);
+        final Map<Filter, Layer> layers = new java.util.LinkedHashMap<>();
+        layers.put(new HeightFilter(0, 256, 70, 180, true), FloodWithLava.INSTANCE);
+        layers.put(new HeightFilter(0, 256, 55, 200, false), Resources.INSTANCE);
+        layers.put(new HeightFilter(0, 256, 80, 170, false), Biome.INSTANCE);
         final SortedMap<Integer, Terrain> ranges = new TreeMap<>();
         ranges.put(-1, Terrain.GRASS);
         ranges.put(90, Terrain.STONE_MIX);
         final SimpleTheme legacyTheme = new SimpleTheme(0L, 62, ranges, layers, 0, 256, true, true) { };
         final SimpleTheme batchTheme = new SimpleTheme(0L, 62, ranges, layers, 0, 256, true, true);
+        legacyTheme.setDiscreteValues(java.util.Collections.singletonMap(Biome.INSTANCE, 4));
+        batchTheme.setDiscreteValues(java.util.Collections.singletonMap(Biome.INSTANCE, 4));
         final HeightMapTileFactory legacyFactory = new HeightMapTileFactory(42L,
                 new SumHeightMap(new ConstantHeightMap(75), new NoiseHeightMap(18, 0.8, 3, 0x1234_5678L)),
                 0, 256, false, legacyTheme);
@@ -773,6 +777,12 @@ public final class SimpleThemeFreshTileParityTest {
                     assertEquals("random BIT layer at " + x + ',' + y,
                             legacy.getBitLayerValue(FloodWithLava.INSTANCE, x, y),
                             batch.getBitLayerValue(FloodWithLava.INSTANCE, x, y));
+                    assertEquals("Resources at " + x + ',' + y,
+                            legacy.getLayerValue(Resources.INSTANCE, x, y),
+                            batch.getLayerValue(Resources.INSTANCE, x, y));
+                    assertEquals("Biome at " + x + ',' + y,
+                            legacy.getLayerValue(Biome.INSTANCE, x, y),
+                            batch.getLayerValue(Biome.INSTANCE, x, y));
                 }
             }
         } finally {

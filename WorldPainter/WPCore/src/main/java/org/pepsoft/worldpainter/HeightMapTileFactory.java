@@ -379,10 +379,20 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 tile.initializeTerrainOrdinals(terrainOrdinals);
                 if (!simpleTheme.applyDeterministicLayersToFreshTile(tile, intHeights,
                         lowestThemeHeight, highestThemeHeight, terrainOrdinals)) {
-                    for (int x = 0; x < TILE_SIZE; x++) {
-                        for (int y = 0; y < TILE_SIZE; y++) {
-                            simpleTheme.applyLayersToFreshTile(tile, x, y,
-                                    intHeights[x | (y << TILE_SIZE_BITS)]);
+                    if (simpleTheme.applyDeterministicValueLayersToFreshTile(tile, intHeights,
+                            lowestThemeHeight, highestThemeHeight, terrainOrdinals)) {
+                        for (int x = 0; x < TILE_SIZE; x++) {
+                            for (int y = 0; y < TILE_SIZE; y++) {
+                                simpleTheme.applyBitLayersToFreshTile(tile, x, y,
+                                        intHeights[x | (y << TILE_SIZE_BITS)]);
+                            }
+                        }
+                    } else {
+                        for (int x = 0; x < TILE_SIZE; x++) {
+                            for (int y = 0; y < TILE_SIZE; y++) {
+                                simpleTheme.applyLayersToFreshTile(tile, x, y,
+                                        intHeights[x | (y << TILE_SIZE_BITS)]);
+                            }
                         }
                     }
                 }

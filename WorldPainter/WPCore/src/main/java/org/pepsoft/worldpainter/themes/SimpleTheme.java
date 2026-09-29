@@ -150,6 +150,58 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
         return true;
     }
 
+    /** Initializes deterministic non-bit layers when random bit layers need a per-cell pass. */
+    public final boolean applyDeterministicValueLayersToFreshTile(Tile tile, int[] quantisedHeights,
+                                                                  int lowestHeight, int highestHeight,
+                                                                  byte[] layerScratch) {
+        final int area = TILE_SIZE * TILE_SIZE;
+        if ((quantisedHeights == null) || (quantisedHeights.length != area)
+                || (layerScratch == null) || (layerScratch.length != area)) {
+            throw new IllegalArgumentException("Expected one height and scratch value for every tile cell");
+        }
+        final int firstHeight = clamp(minHeight, lowestHeight, maxHeight - 1);
+        final int lastHeight = clamp(minHeight, highestHeight, maxHeight - 1);
+        if (firstHeight > lastHeight) {
+            throw new IllegalArgumentException("Tile height range does not overlap the theme height range");
+        }
+        if (layerCache != null) {
+            for (int layerIndex = 0; layerIndex < layerCache.length; layerIndex++) {
+                final int maxValue = layerCache[layerIndex].getDataSize().maxValue;
+                final int[] levels = layerLevelCache[layerIndex];
+                for (int height = firstHeight; height <= lastHeight; height++) {
+                    final int level = levels[height - minHeight];
+                    if ((level < 0) || (level > maxValue)) {
+                        return false;
+                    }
+                }
+            }
+            for (int layerIndex = 0; layerIndex < layerCache.length; layerIndex++) {
+                final int[] levels = layerLevelCache[layerIndex];
+                for (int index = 0; index < area; index++) {
+                    final int height = clamp(minHeight, quantisedHeights[index], maxHeight - 1);
+                    layerScratch[index] = (byte) levels[height - minHeight];
+                }
+                tile.initializeLayerValues(layerCache[layerIndex], layerScratch);
+            }
+        }
+        return true;
+    }
+
+    /** Applies cached bit layers in the original per-cell order on a fresh tile. */
+    public final void applyBitLayersToFreshTile(Tile tile, int x, int y, int quantisedHeight) {
+        if (bitLayerCache == null) {
+            return;
+        }
+        final int height = clamp(minHeight, quantisedHeight, maxHeight - 1);
+        for (int layerIndex = 0; layerIndex < bitLayerCache.length; layerIndex++) {
+            final int level = bitLayerLevelCache[layerIndex][height - minHeight];
+            final boolean set = (level > 0) && ((level == 15) || (random.nextInt(15) < level));
+            if (set) {
+                tile.setBitLayerValue(bitLayerCache[layerIndex], x, y, true);
+            }
+        }
+    }
+
     private void apply(Tile tile, int x, int y, boolean freshTile) {
         // height has been observed to be far out of bounds in the wild, so restrict it to min- and maxHeight:
         // TODO: determine why this happens and fix the root cause
