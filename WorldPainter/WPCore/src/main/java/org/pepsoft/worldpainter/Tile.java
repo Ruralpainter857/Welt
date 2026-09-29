@@ -832,6 +832,51 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    /**
+     * Copies a rectangular numeric layer into caller-owned byte storage and
+     * returns whether the tile has stored values for the layer. When no layer
+     * buffer exists, the destination is cleared and callers should use the
+     * layer default value.
+     */
+    public synchronized boolean copyLayerValues(Layer layer, int x, int y,
+                                                int width, int height,
+                                                byte[] destination, int offset) {
+        if ((layer.getDataSize() == Layer.DataSize.BIT)
+                || (layer.getDataSize() == Layer.DataSize.BIT_PER_CHUNK)) {
+            throw new IllegalArgumentException("Can't get bits using this method");
+        }
+        final int area = checkedLayerCopyArea(x, y, width, height, destination.length, offset);
+        ensureReadable(LAYER_DATA);
+        final byte[] layerValues = layerData.get(layer);
+        if (layerValues == null) {
+            Arrays.fill(destination, offset, offset + area, (byte) 0);
+            return false;
+        }
+        switch (layer.getDataSize()) {
+            case NIBBLE -> {
+                for (int dx = 0; dx < width; dx++) {
+                    for (int dy = 0; dy < height; dy++) {
+                        final int byteOffset = (x + dx) | ((y + dy) << TILE_SIZE_BITS);
+                        final byte value = layerValues[byteOffset >> 1];
+                        destination[offset + dx * height + dy] = (byte) (((byteOffset & 1) == 0)
+                                ? value & 0x0f : (value & 0xf0) >> 4);
+                    }
+                }
+            }
+            case BYTE -> {
+                for (int dx = 0; dx < width; dx++) {
+                    for (int dy = 0; dy < height; dy++) {
+                        final int byteOffset = (x + dx) | ((y + dy) << TILE_SIZE_BITS);
+                        destination[offset + dx * height + dy] = layerValues[byteOffset];
+                    }
+                }
+            }
+            case BIT, BIT_PER_CHUNK -> throw new IllegalArgumentException("Can't get bits using this method");
+            default -> throw new InternalError();
+        }
+        return true;
+    }
+
     private static int checkedLayerCopyArea(int x, int y, int width, int height,
                                             int targetLength, int offset) {
         if ((width < 0) || (height < 0) || (x < 0) || (y < 0)

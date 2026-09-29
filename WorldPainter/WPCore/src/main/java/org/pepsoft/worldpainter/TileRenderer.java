@@ -39,6 +39,89 @@ import static org.pepsoft.worldpainter.layers.tunnel.TunnelLayer.Mode.FIXED_HEIG
  * @author pepijn
  */
 public final class TileRenderer {
+    private static final class TileLayerSnapshot {
+        private Layer[] layers = new Layer[0];
+        private byte[] values = new byte[0];
+        private boolean[] hasStoredValues = new boolean[0];
+        private int[] defaultValues = new int[0];
+        private int voidLayerIndex = -1;
+        private int notPresentLayerIndex = -1;
+        private int notPresentBlockLayerIndex = -1;
+        private int floodWithLavaLayerIndex = -1;
+
+        void prepare(Tile tile, Layer[] visibleLayers, boolean includeVoid,
+                     boolean includeNotPresent, boolean includeFloodWithLava) {
+            int count = visibleLayers.length;
+            voidLayerIndex = -1;
+            notPresentLayerIndex = -1;
+            notPresentBlockLayerIndex = -1;
+            floodWithLavaLayerIndex = -1;
+            if (includeVoid) {
+                voidLayerIndex = count++;
+            }
+            if (includeNotPresent) {
+                notPresentLayerIndex = count++;
+                notPresentBlockLayerIndex = count++;
+            }
+            if (includeFloodWithLava) {
+                floodWithLavaLayerIndex = count++;
+            }
+            ensureCapacity(count);
+            System.arraycopy(visibleLayers, 0, layers, 0, visibleLayers.length);
+            int next = visibleLayers.length;
+            if (voidLayerIndex >= 0) {
+                layers[next++] = org.pepsoft.worldpainter.layers.Void.INSTANCE;
+            }
+            if (notPresentLayerIndex >= 0) {
+                layers[next++] = NotPresent.INSTANCE;
+                layers[next++] = NotPresentBlock.INSTANCE;
+            }
+            if (floodWithLavaLayerIndex >= 0) {
+                layers[next] = FloodWithLava.INSTANCE;
+            }
+
+            final int area = TILE_SIZE * TILE_SIZE;
+            for (int layerIndex = 0; layerIndex < count; layerIndex++) {
+                final Layer layer = layers[layerIndex];
+                final int offset = layerIndex * area;
+                defaultValues[layerIndex] = layer.getDefaultValue();
+                switch (layer.getDataSize()) {
+                    case BIT, BIT_PER_CHUNK -> {
+                        tile.copyBitLayerValues(layer, 0, 0, TILE_SIZE, TILE_SIZE,
+                                values, offset);
+                        hasStoredValues[layerIndex] = true;
+                    }
+                    case NIBBLE, BYTE -> hasStoredValues[layerIndex] = tile.copyLayerValues(
+                            layer, 0, 0, TILE_SIZE, TILE_SIZE, values, offset);
+                    default -> throw new UnsupportedOperationException(
+                            "Don't know how to render " + layer.getClass().getSimpleName());
+                }
+            }
+        }
+
+        boolean bitValue(int layerIndex, int x, int y) {
+            return (layerIndex >= 0)
+                    && (values[layerIndex * TILE_SIZE * TILE_SIZE + x * TILE_SIZE + y] != 0);
+        }
+
+        int numericValue(int layerIndex, int x, int y) {
+            final int index = layerIndex * TILE_SIZE * TILE_SIZE + x * TILE_SIZE + y;
+            return hasStoredValues[layerIndex] ? values[index] & 0xff : defaultValues[layerIndex];
+        }
+
+        private void ensureCapacity(int layerCount) {
+            if (layers.length < layerCount) {
+                layers = Arrays.copyOf(layers, layerCount);
+                hasStoredValues = Arrays.copyOf(hasStoredValues, layerCount);
+                defaultValues = Arrays.copyOf(defaultValues, layerCount);
+            }
+            final int requiredValues = layerCount * TILE_SIZE * TILE_SIZE;
+            if (values.length < requiredValues) {
+                values = Arrays.copyOf(values, requiredValues);
+            }
+        }
+    }
+
     public TileRenderer(TileProvider tileProvider, ColourScheme colourScheme, CustomBiomeManager customBiomeManager, int zoom, boolean transparentVoid, ColourRamp colourRamp) {
         this.tileProvider = tileProvider;
         this.customBiomeManager = customBiomeManager;
@@ -193,7 +276,8 @@ public final class TileRenderer {
         }
 
         // Biome defaults to 255 (no overlay); only stored biome data belongs in this per-pixel list.
-        final List<Layer> layerList = new ArrayList<>(tile.getLayers());
+        final List<Layer> tileLayers = tile.getLayers();
+        final List<Layer> layerList = new ArrayList<>(tileLayers);
         layerList.removeAll(hiddenLayers);
         final boolean hideTerrain = hiddenLayers.contains(TERRAIN_AS_LAYER);
         final boolean hideFluids = hiddenLayers.contains(FLUIDS_AS_LAYER);
@@ -211,6 +295,8 @@ public final class TileRenderer {
         for (int i = 0; i < layers.length; i++) {
             renderers[i] = getRenderer(layers[i]);
         }
+        layerValueSnapshot.prepare(tile, layers, _void, notAllBlocksPresent,
+                (!hideFluids) && tileLayers.contains(FloodWithLava.INSTANCE));
 
         final int scale = 1 << -zoom;
         final boolean nativeShading = (zoom == 0) && Native.isRenderEnabled()
@@ -225,7 +311,9 @@ public final class TileRenderer {
                 for (int x = 0; x < TILE_SIZE; x++) {
                     for (int y = 0; y < TILE_SIZE; y++) {
                         final int worldX = (tileX << TILE_SIZE_BITS) | x, worldY = (tileY << TILE_SIZE_BITS) | y;
-                        if (notAllBlocksPresent && (tile.getBitLayerValue(NotPresent.INSTANCE, x, y) || tile.getBitLayerValue(NotPresentBlock.INSTANCE, x, y))) {
+                        if (notAllBlocksPresent && (layerValueSnapshot.bitValue(
+                                layerValueSnapshot.notPresentLayerIndex, x, y)
+                                || layerValueSnapshot.bitValue(layerValueSnapshot.notPresentBlockLayerIndex, x, y))) {
                             final int offset = x | (y << TILE_SIZE_BITS);
                             renderBuffer[offset] = notPresentColour;
                             if (nativeShading) renderShadeAmounts[offset] = packShadeAmounts(256, 256);
@@ -233,13 +321,16 @@ public final class TileRenderer {
                             final int offset = x | (y << TILE_SIZE_BITS);
                             renderBuffer[offset] = 0xff000000;
                             if (nativeShading) renderShadeAmounts[offset] = packShadeAmounts(256, 256);
-                        } else if (_void && tile.getBitLayerValue(org.pepsoft.worldpainter.layers.Void.INSTANCE, x, y)) {
+                        } else if (_void && layerValueSnapshot.bitValue(
+                                layerValueSnapshot.voidLayerIndex, x, y)) {
                             final int offset = x | (y << TILE_SIZE_BITS);
                             renderBuffer[offset] = voidColour;
                             if (nativeShading) renderShadeAmounts[offset] = packShadeAmounts(256, 256);
                             // TODO still render ReadOnly, and layers which might still be exported over Void
                         } else {
-                            int colour = getPixelColour(tile, worldX, worldY, layers, renderers, contourLines, hideTerrain, hideFluids, bottomless, topLayersRelativeToTerrain, seed);
+                            int colour = getPixelColour(tile, worldX, worldY, layers, renderers,
+                                    layerValueSnapshot, contourLines, hideTerrain, hideFluids,
+                                    bottomless, topLayersRelativeToTerrain, seed);
                             final int offset = x + y * TILE_SIZE;
                             if (nativeShading) {
                                 final int terrainAmount = getTerrainBrightenAmount();
@@ -268,14 +359,19 @@ public final class TileRenderer {
                 for (int x = 0; x < TILE_SIZE; x += scale) {
                     for (int y = 0; y < TILE_SIZE; y += scale) {
                         final int worldX = (tileX << TILE_SIZE_BITS) | x, worldY = (tileY << TILE_SIZE_BITS) | y;
-                        if (notAllBlocksPresent && (tile.getBitLayerValue(NotPresent.INSTANCE, x, y) || tile.getBitLayerValue(NotPresentBlock.INSTANCE, x, y))) {
+                        if (notAllBlocksPresent && (layerValueSnapshot.bitValue(
+                                layerValueSnapshot.notPresentLayerIndex, x, y)
+                                || layerValueSnapshot.bitValue(layerValueSnapshot.notPresentBlockLayerIndex, x, y))) {
                             renderBuffer[x / scale + y * tileSize] = notPresentColour;
                         } else if ((! noOpposites) && oppositesOverlap[x | (y << TILE_SIZE_BITS)]) {
                             renderBuffer[x / scale + y * tileSize] = 0xff000000;
-                        } else if (_void && tile.getBitLayerValue(org.pepsoft.worldpainter.layers.Void.INSTANCE, x, y)) {
+                        } else if (_void && layerValueSnapshot.bitValue(
+                                layerValueSnapshot.voidLayerIndex, x, y)) {
                             renderBuffer[x / scale + y * tileSize] = voidColour;
                         } else {
-                            int colour = getPixelColour(tile, worldX, worldY, layers, renderers, contourLines, hideTerrain, hideFluids, bottomless, topLayersRelativeToTerrain, seed);
+                            int colour = getPixelColour(tile, worldX, worldY, layers, renderers,
+                                    layerValueSnapshot, contourLines, hideTerrain, hideFluids,
+                                    bottomless, topLayersRelativeToTerrain, seed);
                             colour = ColourUtils.multiply(colour, getTerrainBrightenAmount());
                             final int offset = x + y * TILE_SIZE;
                             if (intFluidHeightCache[offset] > intHeightCache[offset]) {
@@ -297,7 +393,7 @@ public final class TileRenderer {
     /**
      * Determine the brighten amount. This method assumes that the
      * {@link #deltas} array has been filled by a previous call to
-     * {@link #getPixelColour(Tile, int, int, Layer[], LayerRenderer[], boolean, boolean, boolean, boolean, boolean, long)}.
+     * {@link #getPixelColour}.
      * 
      * @return The amount by which to brighten the pixel for the specified
      * block, out of 256; values below 256 darkening the pixel; values above
@@ -310,7 +406,7 @@ public final class TileRenderer {
     /**
      * Determine the brighten amount for fluid. This method assumes that the
      * {@link #deltas} array has been filled by a previous call to
-     * {@link #getPixelColour(Tile, int, int, Layer[], LayerRenderer[], boolean, boolean, boolean, boolean, boolean, long)}.
+     * {@link #getPixelColour}.
      *
      * @return The amount by which to brighten the pixel for the specified
      * block, out of 256; values below 256 darkening the pixel; values above
@@ -367,7 +463,10 @@ public final class TileRenderer {
         this.lightOrigin = lightOrigin;
     }
 
-    private int getPixelColour(Tile tile, int worldX, int worldY, Layer[] layers, LayerRenderer[] renderers, boolean contourLines, boolean hideTerrain, boolean hideFluids, boolean bottomless, boolean topLayersRelativeToTerrain, long seed) {
+    private int getPixelColour(Tile tile, int worldX, int worldY, Layer[] layers,
+                               LayerRenderer[] renderers, TileLayerSnapshot layerValueSnapshot,
+                               boolean contourLines, boolean hideTerrain, boolean hideFluids,
+                               boolean bottomless, boolean topLayersRelativeToTerrain, long seed) {
         final int x = worldX & TILE_SIZE_MASK, y = worldY & TILE_SIZE_MASK;
         final int offset = x + y * TILE_SIZE;
         final int intHeight = intHeightCache[offset], minHeight = tile.getMinHeight();
@@ -397,7 +496,7 @@ public final class TileRenderer {
         fluidDeltas [1][2] = fluidHeights[1][2] - waterLevel;
         int colour;
         if ((! hideFluids) && (waterLevel > intHeight)) {
-            if (tile.getBitLayerValue(FloodWithLava.INSTANCE, x, y)) {
+            if (layerValueSnapshot.bitValue(layerValueSnapshot.floodWithLavaLayerIndex, x, y)) {
                 colour = lavaColour;
             } else {
                 colour = waterColour;
@@ -431,14 +530,14 @@ public final class TileRenderer {
                     if (hideFluids && (layer instanceof Frost) && (waterLevel > intHeightCache[offset])) {
                         continue;
                     }
-                    boolean bitLayerValue = tile.getBitLayerValue(layer, x, y);
+                    boolean bitLayerValue = layerValueSnapshot.bitValue(i, x, y);
                     if (bitLayerValue) {
                         final BitLayerRenderer renderer = (BitLayerRenderer) renderers[i];
                         colour = renderer.getPixelColour(worldX, worldY, colour, true);
                     }
                     break;
                 case NIBBLE:
-                    int layerValue = tile.getLayerValue(layer, x, y);
+                    int layerValue = layerValueSnapshot.numericValue(i, x, y);
                     if (layerValue > 0) {
                         final NibbleLayerRenderer renderer = (NibbleLayerRenderer) renderers[i];
                         colour = renderer.getPixelColour(worldX, worldY, colour, layerValue);
@@ -446,7 +545,8 @@ public final class TileRenderer {
                     break;
                 case BYTE:
                     final ByteLayerRenderer byteLayerRenderer = (ByteLayerRenderer) renderers[i];
-                    colour = byteLayerRenderer.getPixelColour(worldX, worldY, colour, tile.getLayerValue(layer, x, y));
+                    colour = byteLayerRenderer.getPixelColour(worldX, worldY, colour,
+                            layerValueSnapshot.numericValue(i, x, y));
                     break;
                 default:
                     throw new UnsupportedOperationException("Don't know how to render " + layer.getClass().getSimpleName());
@@ -540,6 +640,7 @@ public final class TileRenderer {
     private final float[] floatHeightCache = new float[TILE_SIZE * TILE_SIZE];
     private final BufferedImage bufferedImage;
     private final int[] renderBuffer;
+    private final TileLayerSnapshot layerValueSnapshot = new TileLayerSnapshot();
     private final int[][] heights = new int[3][3], deltas = new int[3][3], fluidHeights = new int[3][3], fluidDeltas = new int[3][3];
     private final boolean[] oppositesOverlap = new boolean[TILE_SIZE * TILE_SIZE];
     private final int zoom, waterColour, lavaColour, bedrockColour, notPresentColour, voidColour;;

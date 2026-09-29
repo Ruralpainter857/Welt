@@ -3,6 +3,7 @@ package org.pepsoft.worldpainter;
 import org.junit.Test;
 import org.pepsoft.util.ColourUtils;
 import org.pepsoft.worldpainter.layers.Biome;
+import org.pepsoft.worldpainter.layers.Frost;
 import org.pepsoft.worldpainter.layers.NotPresent;
 import org.pepsoft.worldpainter.layers.renderers.BiomeRenderer;
 import org.pepsoft.worldpainter.nativeapi.Native;
@@ -17,6 +18,7 @@ import java.awt.image.DataBufferInt;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeTrue;
 
@@ -29,6 +31,43 @@ public final class NativeRenderShadingParityTest {
     public void tileRenderHeightSnapshotMatchesScalarGettersForBothStorageLayouts() {
         assertRenderHeightSnapshotMatches(new Tile(0, 0, 0, 256));
         assertRenderHeightSnapshotMatches(new Tile(0, 0, -128, 384));
+    }
+
+    @Test
+    public void tileLayerSnapshotsMatchScalarGetters() {
+        final Tile tile = new Tile(0, 0, 0, 256);
+        assertFalse(tile.copyLayerValues(Biome.INSTANCE, 0, 0,
+                Constants.TILE_SIZE, Constants.TILE_SIZE, new byte[PIXELS], 0));
+
+        tile.inhibitEvents();
+        try {
+            for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                    if (((x * 31 + y * 17) & 15) == 0) {
+                        tile.setLayerValue(Biome.INSTANCE, x, y, (x * 7 + y * 11) & 0xff);
+                    }
+                    if (((x * 13 + y * 5) & 31) == 0) {
+                        tile.setBitLayerValue(Frost.INSTANCE, x, y, true);
+                    }
+                }
+            }
+        } finally {
+            tile.releaseEvents();
+        }
+
+        final byte[] biomeValues = new byte[PIXELS];
+        final byte[] frostValues = new byte[PIXELS];
+        assertTrue(tile.copyLayerValues(Biome.INSTANCE, 0, 0,
+                Constants.TILE_SIZE, Constants.TILE_SIZE, biomeValues, 0));
+        tile.copyBitLayerValues(Frost.INSTANCE, 0, 0,
+                Constants.TILE_SIZE, Constants.TILE_SIZE, frostValues, 0);
+        for (int x = 0; x < Constants.TILE_SIZE; x++) {
+            for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                final int index = x * Constants.TILE_SIZE + y;
+                assertEquals(tile.getLayerValue(Biome.INSTANCE, x, y), biomeValues[index] & 0xff);
+                assertEquals(tile.getBitLayerValue(Frost.INSTANCE, x, y), frostValues[index] != 0);
+            }
+        }
     }
 
     @Test
@@ -178,6 +217,15 @@ public final class NativeRenderShadingParityTest {
                     for (int y = 0; y < Constants.TILE_SIZE; y++) {
                         tile.setHeight(x, y, 32 + ((x * 7 + y * 11) % 96));
                         tile.setWaterLevel(x, y, 62 + ((x + y) % 24));
+                        tile.setLayerValue(Biome.INSTANCE, x, y, 1 + ((x * 3 + y * 5) & 7));
+                        if (((x + y) & 7) == 0) {
+                            tile.setBitLayerValue(Frost.INSTANCE, x, y, true);
+                        }
+                        if (x == 4 && y == 8) {
+                            tile.setBitLayerValue(org.pepsoft.worldpainter.layers.Void.INSTANCE, x, y, true);
+                        } else if (x == 12 && y == 5) {
+                            tile.setBitLayerValue(NotPresent.INSTANCE, x, y, true);
+                        }
                     }
                 }
             } finally {
@@ -195,37 +243,39 @@ public final class NativeRenderShadingParityTest {
                 Native.setRenderEnabled(true);
                 nativeRenderer.renderTile(tile, nativeImage, 0, 0);
             }
+            final int renderIterations = Math.max(1,
+                    Integer.getInteger("welt.render.tile.iterations", 3));
             final long[] javaNanos = new long[9];
             final long[] nativeNanos = new long[9];
             for (int sample = 0; sample < javaNanos.length; sample++) {
                 if ((sample & 1) == 0) {
                     Native.setRenderEnabled(false);
                     long start = System.nanoTime();
-                    for (int iteration = 0; iteration < 3; iteration++) {
+                    for (int iteration = 0; iteration < renderIterations; iteration++) {
                         javaRenderer.renderTile(tile, javaImage, 0, 0);
                     }
-                    javaNanos[sample] = (System.nanoTime() - start) / 3;
+                    javaNanos[sample] = (System.nanoTime() - start) / renderIterations;
 
                     Native.setRenderEnabled(true);
                     start = System.nanoTime();
-                    for (int iteration = 0; iteration < 3; iteration++) {
+                    for (int iteration = 0; iteration < renderIterations; iteration++) {
                         nativeRenderer.renderTile(tile, nativeImage, 0, 0);
                     }
-                    nativeNanos[sample] = (System.nanoTime() - start) / 3;
+                    nativeNanos[sample] = (System.nanoTime() - start) / renderIterations;
                 } else {
                     Native.setRenderEnabled(true);
                     long start = System.nanoTime();
-                    for (int iteration = 0; iteration < 3; iteration++) {
+                    for (int iteration = 0; iteration < renderIterations; iteration++) {
                         nativeRenderer.renderTile(tile, nativeImage, 0, 0);
                     }
-                    nativeNanos[sample] = (System.nanoTime() - start) / 3;
+                    nativeNanos[sample] = (System.nanoTime() - start) / renderIterations;
 
                     Native.setRenderEnabled(false);
                     start = System.nanoTime();
-                    for (int iteration = 0; iteration < 3; iteration++) {
+                    for (int iteration = 0; iteration < renderIterations; iteration++) {
                         javaRenderer.renderTile(tile, javaImage, 0, 0);
                     }
-                    javaNanos[sample] = (System.nanoTime() - start) / 3;
+                    javaNanos[sample] = (System.nanoTime() - start) / renderIterations;
                 }
             }
             Arrays.sort(javaNanos);
