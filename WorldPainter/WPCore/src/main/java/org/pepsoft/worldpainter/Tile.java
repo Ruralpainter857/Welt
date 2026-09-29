@@ -46,7 +46,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
             tall = true;
         }
         if (init) {
-            terrain = new byte[TILE_SIZE * TILE_SIZE];
+            terrain = DEFAULT_TERRAIN_BUFFER;
             if (tall) {
                 tallHeightMap = new int[TILE_SIZE * TILE_SIZE];
                 tallWaterLevel = new short[TILE_SIZE * TILE_SIZE];
@@ -1550,7 +1550,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
             transformedTile = new Tile(transformedCoords.x >> TILE_SIZE_BITS, transformedCoords.y >> TILE_SIZE_BITS, minHeight, maxHeight, false);
             transformedTile.heightMap = copyObject(heightMap);
             transformedTile.tallHeightMap = copyObject(tallHeightMap);
-            transformedTile.terrain = terrain.clone();
+            transformedTile.terrain = (terrain == DEFAULT_TERRAIN_BUFFER) ? DEFAULT_TERRAIN_BUFFER : terrain.clone();
             transformedTile.waterLevel = copyObject(waterLevel);
             transformedTile.tallWaterLevel = copyObject(tallWaterLevel);
             transformedTile.layerData = copyObject(layerData);
@@ -1599,7 +1599,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
         if (terrain == null) {
             out.println("Terrain type map for tile " + x + "," + y + " lost");
-            terrain = new byte[TILE_SIZE * TILE_SIZE];
+            terrain = DEFAULT_TERRAIN_BUFFER;
         }
         if (layerData == null) {
             out.println("Non-bit valued layer data for tile " + x + "," + y + " lost");
@@ -1933,6 +1933,20 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     }
 
     private void ensureWriteable(TileBuffer buffer) {
+        if ((buffer == TERRAIN) && (terrain == DEFAULT_TERRAIN_BUFFER)) {
+            if (undoManager == null) {
+                terrain = DEFAULT_TERRAIN_BUFFER.clone();
+            } else {
+                terrain = undoManager.getBufferForEditing(TERRAIN_BUFFER_KEY);
+                if (terrain == DEFAULT_TERRAIN_BUFFER) {
+                    terrain = DEFAULT_TERRAIN_BUFFER.clone();
+                    undoManager.addBuffer(TERRAIN_BUFFER_KEY, terrain, this);
+                }
+                readableBuffers.add(TERRAIN);
+                writeableBuffers.add(TERRAIN);
+            }
+            return;
+        }
         if ((undoManager != null) && (! writeableBuffers.contains(buffer))) {
             switch (buffer) {
                 case HEIGHTMAP:
@@ -2065,7 +2079,16 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     @Serial
     private synchronized void writeObject(ObjectOutputStream out) throws IOException {
         prepareForSaving();
-        out.defaultWriteObject();
+        final byte[] currentTerrain = terrain;
+        if (currentTerrain == DEFAULT_TERRAIN_BUFFER) {
+            // Keep serialized tiles independent for readers that do not implement this buffer sharing.
+            terrain = currentTerrain.clone();
+        }
+        try {
+            out.defaultWriteObject();
+        } finally {
+            terrain = currentTerrain;
+        }
     }
 
     private void init() {
@@ -2085,6 +2108,9 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         if (maxHeight == 0) {
             maxHeight = 128;
             tall = false;
+        }
+        if ((terrain != null) && Arrays.equals(terrain, DEFAULT_TERRAIN_BUFFER)) {
+            terrain = DEFAULT_TERRAIN_BUFFER;
         }
         if ((seeds != null) && seeds.isEmpty()) {
             seeds = null;
@@ -2122,6 +2148,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     private transient BufferKey<HashSet<Seed>>      SEEDS_BUFFER_KEY;
     
     private static final Terrain[] TERRAIN_VALUES = Terrain.values();
+    private static final byte[] DEFAULT_TERRAIN_BUFFER = new byte[TILE_SIZE * TILE_SIZE];
 
     private static final float SQRT_OF_EIGHT = (float) Math.sqrt(8.0);
     
