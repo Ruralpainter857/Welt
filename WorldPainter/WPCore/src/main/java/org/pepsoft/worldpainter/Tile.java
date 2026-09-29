@@ -262,13 +262,13 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
      * normal copy-on-write buffers and coalesces the same deferred change
      * notifications that individual setters would produce.
      */
-    int[] initializeHeightAndWaterLevels(float[] heights, int waterLevel) {
+    public int[] initializeHeightAndWaterLevels(float[] heights, int waterLevel) {
         return initializeHeightAndWaterLevels(heights, waterLevel,
                 new int[TILE_SIZE * TILE_SIZE]);
     }
 
     /** Batch height initialisation with caller-owned scratch for the quantised heights. */
-    int[] initializeHeightAndWaterLevels(float[] heights, int waterLevel, int[] intHeights) {
+    public int[] initializeHeightAndWaterLevels(float[] heights, int waterLevel, int[] intHeights) {
         if (eventInhibitionCounter == 0) {
             throw new IllegalStateException("Bulk tile initialisation requires inhibited events");
         }

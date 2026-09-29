@@ -22,6 +22,7 @@ import org.pepsoft.worldpainter.layers.*;
 import org.pepsoft.worldpainter.layers.exporters.ExporterSettings;
 import org.pepsoft.worldpainter.layers.exporters.FrostExporter;
 import org.pepsoft.worldpainter.layers.exporters.ResourcesExporter;
+import org.pepsoft.worldpainter.themes.SimpleTheme;
 import org.pepsoft.worldpainter.themes.Theme;
 
 import java.awt.*;
@@ -149,6 +150,10 @@ public class HeightMapImporter {
         final double[] bitmapRowSamples = (bitmapSampler != null) ? new double[TILE_SIZE] : null;
         final PerlinNoise noiseGenerator = new PerlinNoise(0);
         noiseGenerator.setSeed(dimension.getSeed());
+        final boolean batchTileInitialisationEnabled =
+                !Boolean.getBoolean("welt.import.disableBatchTileInitialisation");
+        float[] batchTileHeights = null;
+        int[] batchTileIntHeights = null;
         int tileCount = 0;
         for (int tileX = tileX1; tileX <= tileX2; tileX++) {
             for (int tileY = tileY1; tileY <= tileY2; tileY++) {
@@ -179,40 +184,75 @@ public class HeightMapImporter {
                         : bitmapSampler.bitmap.fillSamples(
                                 xOffset - bitmapSampler.offsetX, yOffset - bitmapSampler.offsetY,
                                 TILE_SIZE, TILE_SIZE, tileImageLevels, bitmapRowSamples));
-                for (int x = 0; x < TILE_SIZE; x++) {
-                    for (int y = 0; y < TILE_SIZE; y++) {
-                        final int imageX = xOffset + x;
-                        final int imageY = yOffset + y;
-                        if ((imageX >= x1) && (imageX <= x2) && (imageY >= y1) && (imageY <= y2)) {
-                            final double imageLevel = imageLevelsAvailable
-                                    ? tileImageLevels[x + (y << TILE_SIZE_BITS)]
-                                    : heightMap.getHeight(imageX, imageY);
-                            final float height = calculateHeight(imageLevel);
-                            if (onlyRaise && (! tileIsNew)) {
-                                if (height > tile.getHeight(x, y)) {
+                final boolean tileFullyCovered = (xOffset >= x1)
+                        && (xOffset + TILE_SIZE - 1 <= x2)
+                        && (yOffset >= y1)
+                        && (yOffset + TILE_SIZE - 1 <= y2);
+                final boolean batchTileInitialisation = batchTileInitialisationEnabled
+                        && tileIsNew && tileFullyCovered && (tile.getClass() == Tile.class)
+                        && (!tile.isEventsInhibited()) && (!useVoidBelow)
+                        && ((theme == null) || (theme.getClass() == SimpleTheme.class));
+                if (batchTileInitialisation) {
+                    if (batchTileHeights == null) {
+                        batchTileHeights = new float[TILE_SIZE * TILE_SIZE];
+                        batchTileIntHeights = new int[TILE_SIZE * TILE_SIZE];
+                    }
+                    tile.inhibitEvents();
+                }
+                try {
+                    for (int x = 0; x < TILE_SIZE; x++) {
+                        for (int y = 0; y < TILE_SIZE; y++) {
+                            final int imageX = xOffset + x;
+                            final int imageY = yOffset + y;
+                            if ((imageX >= x1) && (imageX <= x2) && (imageY >= y1) && (imageY <= y2)) {
+                                final int index = x + (y << TILE_SIZE_BITS);
+                                final double imageLevel = imageLevelsAvailable
+                                        ? tileImageLevels[index]
+                                        : heightMap.getHeight(imageX, imageY);
+                                final float height = calculateHeight(imageLevel);
+                                if (batchTileInitialisation) {
+                                    batchTileHeights[index] = height;
+                                } else if (onlyRaise && (!tileIsNew)) {
+                                    if (height > tile.getHeight(x, y)) {
+                                        tile.setHeight(x, y, height);
+                                        if (theme != null) {
+                                            theme.apply(tile, x, y);
+                                        }
+                                    }
+                                } else {
                                     tile.setHeight(x, y, height);
+                                    tile.setWaterLevel(x, y, worldWaterLevel);
+                                    if (useVoidBelow && (imageLevel <= voidBelowLevel)) {
+                                        tile.setBitLayerValue(org.pepsoft.worldpainter.layers.Void.INSTANCE, x, y, true);
+                                    }
                                     if (theme != null) {
                                         theme.apply(tile, x, y);
                                     }
                                 }
-                            } else {
-                                tile.setHeight(x, y, height);
+                            } else if (tileIsNew) {
+                                tile.setHeight(x, y, floor + (noiseGenerator.getPerlinNoise(imageX / MEDIUM_BLOBS, imageY / MEDIUM_BLOBS) + 0.5f) * variation);
+                                tile.setTerrain(x, y, Terrain.BEACHES);
                                 tile.setWaterLevel(x, y, worldWaterLevel);
-                                if (useVoidBelow && (imageLevel <= voidBelowLevel)) {
+                                if (useVoidBelow) {
                                     tile.setBitLayerValue(org.pepsoft.worldpainter.layers.Void.INSTANCE, x, y, true);
                                 }
-                                if (theme != null) {
+                            }
+                        }
+                    }
+                    if (batchTileInitialisation) {
+                        tile.initializeHeightAndWaterLevels(batchTileHeights, worldWaterLevel,
+                                batchTileIntHeights);
+                        if (theme != null) {
+                            for (int x = 0; x < TILE_SIZE; x++) {
+                                for (int y = 0; y < TILE_SIZE; y++) {
                                     theme.apply(tile, x, y);
                                 }
                             }
-                        } else if (tileIsNew) {
-                            tile.setHeight(x, y, floor + (noiseGenerator.getPerlinNoise(imageX / MEDIUM_BLOBS, imageY / MEDIUM_BLOBS) + 0.5f) * variation);
-                            tile.setTerrain(x, y, Terrain.BEACHES);
-                            tile.setWaterLevel(x, y, worldWaterLevel);
-                            if (useVoidBelow) {
-                                tile.setBitLayerValue(org.pepsoft.worldpainter.layers.Void.INSTANCE, x, y, true);
-                            }
                         }
+                    }
+                } finally {
+                    if (batchTileInitialisation) {
+                        tile.releaseEvents();
                     }
                 }
                 if (tileIsNew) {
