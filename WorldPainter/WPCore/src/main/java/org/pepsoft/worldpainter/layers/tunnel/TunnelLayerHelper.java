@@ -21,6 +21,10 @@ import static org.pepsoft.worldpainter.layers.tunnel.TunnelLayer.Mode.FIXED_HEIG
  */
 public class TunnelLayerHelper {
     public TunnelLayerHelper(TunnelLayer layer, Dimension dimension) {
+        this(layer, dimension, false);
+    }
+
+    public TunnelLayerHelper(TunnelLayer layer, Dimension dimension, boolean forRendering) {
         this.layer = layer;
         floorDimension = ((layer.floorMode == CUSTOM_DIMENSION) && (layer.floorDimensionId != null) && (dimension != null))
                 ? dimension.getWorld().getDimension(new Anchor(dimension.getAnchor().dim, (layer.getLayerMode() == CAVE) ? CAVE_FLOOR : FLOATING_FLOOR, dimension.getAnchor().invert, layer.floorDimensionId))
@@ -48,7 +52,9 @@ public class TunnelLayerHelper {
         if (dimension != null) {
             // Cache wall distance to increase performance
             final int maxWallDepth = Math.max(layer.floorWallDepth, layer.roofWallDepth);
-            wallDistanceCache = dimension.getDistancesToEdge(layer, maxWallDepth);
+            wallDistanceCache = forRendering
+                    ? dimension.getDistancesToEdgeForRendering(layer, maxWallDepth)
+                    : dimension.getDistancesToEdge(layer, maxWallDepth);
             if ((layer.getLayerMode() == FLOATING) && (layer.getRoofMode() == FIXED_HEIGHT)) {
                 // For fixed height floor dimension bottom, bake highest edge level within wall distance also
                 edgeHeightCache = dimension.getEdgeHeights(layer, maxWallDepth);

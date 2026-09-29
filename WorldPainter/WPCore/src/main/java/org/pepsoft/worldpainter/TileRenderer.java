@@ -59,7 +59,7 @@ public final class TileRenderer {
                     if (tunnelLayer.getRoofMode() != FIXED_HEIGHT_ABOVE_FLOOR) {
                         relatedTileProvider = detailDimension;
                         renderTunnelRoofIntersection = true;
-                        tunnelLayerHelper = new TunnelLayerHelper(tunnelLayer, detailDimension);
+                        tunnelLayerHelper = new TunnelLayerHelper(tunnelLayer, detailDimension, true);
                     }
                 }
             }

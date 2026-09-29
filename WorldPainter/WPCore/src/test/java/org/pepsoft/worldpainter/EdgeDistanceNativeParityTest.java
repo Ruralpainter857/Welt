@@ -9,6 +9,10 @@ import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
 import java.awt.Rectangle;
+import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferInt;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -73,6 +77,36 @@ public final class EdgeDistanceNativeParityTest {
             }
         } finally {
             restoreFlag(previousFlag);
+        }
+    }
+
+    @Test
+    public void tunnelRenderFlagEnablesDistanceKernelWithoutGeneralRenderKernels() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousRenderFlag = System.getProperty(Native.RENDER_KEY);
+        final String previousTunnelFlag = System.getProperty(NativeSlices.TUNNEL_EDGE_RENDER_KEY);
+        try {
+            Native.setRenderEnabled(false);
+            System.setProperty(NativeSlices.TUNNEL_EDGE_RENDER_KEY, "true");
+            final int width = 15, height = 11;
+            final byte[] mask = new byte[width * height];
+            for (int y = 2; y < 9; y++) {
+                for (int x = 3; x < 12; x++) {
+                    if ((x != 7) || (y != 5)) {
+                        mask[y * width + x] = 1;
+                    }
+                }
+            }
+            final float[] nativeValues = NativeSlices.edgeDistancesForRendering(width, height, 4.5f, mask);
+            assertNotNull(nativeValues);
+            final float[] javaValues = javaEdgeDistances(width, height, 4.5f, mask);
+            for (int i = 0; i < javaValues.length; i++) {
+                assertEquals("index=" + i, Float.floatToRawIntBits(javaValues[i]),
+                        Float.floatToRawIntBits(nativeValues[i]));
+            }
+        } finally {
+            restoreSystemProperty(Native.RENDER_KEY, previousRenderFlag);
+            restoreSystemProperty(NativeSlices.TUNNEL_EDGE_RENDER_KEY, previousTunnelFlag);
         }
     }
 
@@ -188,6 +222,144 @@ public final class EdgeDistanceNativeParityTest {
         }
     }
 
+    @Test
+    public void tunnelFloorMapRenderingMatchesWhenRenderAccelerationIsEnabled() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousRenderFlag = System.getProperty(Native.RENDER_KEY);
+        final String previousTunnelFlag = System.getProperty(NativeSlices.TUNNEL_EDGE_RENDER_KEY);
+        try {
+            final TunnelRenderFixture fixture = createTunnelRenderFixture();
+            final int[] javaPixels = renderTunnelMap(fixture, false);
+            final int[] nativePixels = renderTunnelMap(fixture, true);
+            assertEquals(javaPixels.length, nativePixels.length);
+            org.junit.Assert.assertArrayEquals(javaPixels, nativePixels);
+        } finally {
+            restoreSystemProperty(Native.RENDER_KEY, previousRenderFlag);
+            restoreSystemProperty(NativeSlices.TUNNEL_EDGE_RENDER_KEY, previousTunnelFlag);
+        }
+    }
+
+    @Test
+    public void benchmarkCompleteTunnelMapRenderingWhenRequested() throws Exception {
+        assumeTrue(Boolean.getBoolean("welt.render.tunnels.benchmark"));
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousRenderFlag = System.getProperty(Native.RENDER_KEY);
+        final String previousTunnelFlag = System.getProperty(NativeSlices.TUNNEL_EDGE_RENDER_KEY);
+        try {
+            final TunnelRenderFixture fixture = createTunnelRenderFixture();
+            org.junit.Assert.assertArrayEquals(renderTunnelMap(fixture, false), renderTunnelMap(fixture, true));
+
+            for (int i = 0; i < 4; i++) {
+                renderTunnelMap(fixture, (i & 1) != 0);
+            }
+            final long[] javaNanos = new long[5];
+            final long[] nativeNanos = new long[5];
+            for (int sample = 0; sample < javaNanos.length; sample++) {
+                final boolean javaFirst = (sample & 1) == 0;
+                for (int order = 0; order < 2; order++) {
+                    final boolean nativeMode = (order == 0) ? !javaFirst : javaFirst;
+                    final long start = System.nanoTime();
+                    renderTunnelMap(fixture, nativeMode);
+                    final long elapsed = System.nanoTime() - start;
+                    if (nativeMode) {
+                        nativeNanos[sample] = elapsed;
+                    } else {
+                        javaNanos[sample] = elapsed;
+                    }
+                }
+            }
+            java.util.Arrays.sort(javaNanos);
+            java.util.Arrays.sort(nativeNanos);
+            final BenchmarkMemorySupport.Snapshot javaMemory = BenchmarkMemorySupport.measure(
+                    () -> renderTunnelMap(fixture, false));
+            final BenchmarkMemorySupport.Snapshot nativeMemory = BenchmarkMemorySupport.measure(
+                    () -> renderTunnelMap(fixture, true));
+            System.out.printf("Complete 4x4-tile cave render Java median %.3f ms, Rust/JNI median %.3f ms, ratio %.3fx "
+                            + "java_memory=[%s] native_memory=[%s]%n",
+                    javaNanos[2] / 1_000_000.0, nativeNanos[2] / 1_000_000.0,
+                    (double) javaNanos[2] / nativeNanos[2], javaMemory, nativeMemory);
+        } finally {
+            restoreSystemProperty(Native.RENDER_KEY, previousRenderFlag);
+            restoreSystemProperty(NativeSlices.TUNNEL_EDGE_RENDER_KEY, previousTunnelFlag);
+        }
+    }
+
+    private static TunnelRenderFixture createTunnelRenderFixture() {
+        final TileFactory tileFactory = TestData.createTileFactory(62);
+        final World2 world = new World2(TestData.PLATFORM, TestData.SEED, tileFactory);
+        final Dimension detailDimension = world.getDimension(Dimension.Anchor.NORMAL_DETAIL);
+        final TunnelLayer layer = new TunnelLayer("Render benchmark", TunnelLayer.LayerMode.CAVE,
+                null, TestData.PLATFORM);
+        layer.setFloorDimensionId(7);
+        layer.setFloorMode(TunnelLayer.Mode.FIXED_HEIGHT);
+        layer.setFloorLevel(25);
+        layer.setFloorWallDepth(12);
+        layer.setRoofMode(TunnelLayer.Mode.FIXED_HEIGHT);
+        layer.setRoofLevel(75);
+        layer.setRoofWallDepth(12);
+        detailDimension.setCustomLayers(java.util.Collections.singletonList(layer));
+
+        final Dimension floorDimension = new Dimension(world, "Cave floor", TestData.SEED,
+                tileFactory, new Dimension.Anchor(Constants.DIM_NORMAL, Dimension.Role.CAVE_FLOOR, false, 7));
+        world.addDimension(floorDimension);
+        final List<Tile> floorTiles = new ArrayList<>();
+        for (int tileY = 0; tileY < 4; tileY++) {
+            for (int tileX = 0; tileX < 4; tileX++) {
+                final Tile detailTile = tileFactory.createTile(tileX, tileY);
+                detailDimension.addTile(detailTile);
+                final Tile floorTile = tileFactory.createTile(tileX, tileY);
+                floorDimension.addTile(floorTile);
+                floorTiles.add(floorTile);
+                for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                    final int worldY = (tileY << Constants.TILE_SIZE_BITS) | y;
+                    for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                        final int worldX = (tileX << Constants.TILE_SIZE_BITS) | x;
+                        final boolean insideOuter = (worldX >= 24) && (worldX < 488)
+                                && (worldY >= 24) && (worldY < 488);
+                        final boolean insideHole = (worldX >= 196) && (worldX < 324)
+                                && (worldY >= 176) && (worldY < 352);
+                        if (insideOuter && !insideHole) {
+                            detailTile.setBitLayerValue(layer, x, y, true);
+                        }
+                    }
+                }
+            }
+        }
+        return new TunnelRenderFixture(floorDimension, floorTiles);
+    }
+
+    private static int[] renderTunnelMap(TunnelRenderFixture fixture, boolean nativeEnabled) {
+        Native.setRenderEnabled(false);
+        System.setProperty(NativeSlices.TUNNEL_EDGE_RENDER_KEY, Boolean.toString(nativeEnabled));
+        final int width = 4 * Constants.TILE_SIZE;
+        final BufferedImage image = new BufferedImage(width, width, BufferedImage.TYPE_INT_ARGB);
+        final TileRenderer renderer = new TileRenderer(fixture.floorDimension,
+                ColourScheme.DEFAULT, null, 0, true, null);
+        for (Tile tile : fixture.tiles) {
+            renderer.renderTile(tile, image, tile.getX() * Constants.TILE_SIZE,
+                    tile.getY() * Constants.TILE_SIZE);
+        }
+        return ((DataBufferInt) image.getRaster().getDataBuffer()).getData().clone();
+    }
+
+    private static void restoreSystemProperty(String key, String previousValue) {
+        if (previousValue == null) {
+            System.clearProperty(key);
+        } else {
+            System.setProperty(key, previousValue);
+        }
+    }
+
+    private static final class TunnelRenderFixture {
+        private final Dimension floorDimension;
+        private final List<Tile> tiles;
+
+        private TunnelRenderFixture(Dimension floorDimension, List<Tile> tiles) {
+            this.floorDimension = floorDimension;
+            this.tiles = tiles;
+        }
+    }
+
     private static float[] javaEdgeDistances(int width, int height, float maxDistance, byte[] mask) {
         final int radius = (int) Math.ceil(maxDistance);
         final float[] distances = new float[width * height];
@@ -254,10 +426,6 @@ public final class EdgeDistanceNativeParityTest {
     }
 
     private static void restoreFlag(String previousFlag) {
-        if (previousFlag == null) {
-            System.clearProperty(Native.EXPORT_KEY);
-        } else {
-            System.setProperty(Native.EXPORT_KEY, previousFlag);
-        }
+        restoreSystemProperty(Native.EXPORT_KEY, previousFlag);
     }
 }

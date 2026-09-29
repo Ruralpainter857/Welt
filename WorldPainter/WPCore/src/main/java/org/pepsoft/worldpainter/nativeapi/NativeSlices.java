@@ -14,9 +14,20 @@ import java.nio.ByteBuffer;
 /** Bulk JNI entry points. A null result asks the caller to use its Java path. */
 public final class NativeSlices {
     static final int ABI_VERSION = 1;
+    public static final String TUNNEL_EDGE_RENDER_KEY = "wp.native.render.tunnelEdges";
 
     private NativeSlices() {
         throw new AssertionError("Non instanciable");
+    }
+
+    /**
+     * Returns whether native tunnel edge caches are enabled. This specialised path is enabled by
+     * default when its kernel is available; the dedicated property can disable it without changing
+     * other render kernels.
+     */
+    public static boolean isTunnelEdgeRenderingEnabled() {
+        return Boolean.parseBoolean(System.getProperty(TUNNEL_EDGE_RENDER_KEY,
+                "true")) && NativeLoader.areSlicesAvailable();
     }
 
     /** Validates the shared chunk-buffer ABI in place, without copying its bytes. */
@@ -212,8 +223,20 @@ public final class NativeSlices {
     /** Returns row-major capped Euclidean distances for a packed bit-layer mask. */
     public static float[] edgeDistances(final int width, final int height,
                                         final float maxDistance, final byte[] mask) {
+        return edgeDistances(width, height, maxDistance, mask, Native.isExportEnabled());
+    }
+
+    /** Returns capped edge distances for interactive tunnel rendering when render acceleration is enabled. */
+    public static float[] edgeDistancesForRendering(final int width, final int height,
+                                                    final float maxDistance, final byte[] mask) {
+        return edgeDistances(width, height, maxDistance, mask, isTunnelEdgeRenderingEnabled());
+    }
+
+    private static float[] edgeDistances(final int width, final int height,
+                                         final float maxDistance, final byte[] mask,
+                                         final boolean enabled) {
         final long area = (long) width * height;
-        if (!Native.isExportEnabled() || !NativeLoader.areSlicesAvailable()
+        if (!enabled || !NativeLoader.areSlicesAvailable()
                 || mask == null || width <= 0 || height <= 0
                 || area > 1_048_576L || mask.length != area
                 || !Float.isFinite(maxDistance) || maxDistance < 0.0f || maxDistance > 512.0f) {
@@ -232,8 +255,15 @@ public final class NativeSlices {
     public static float[] edgeHeights(final int width, final int height, final int radius,
                                       final float minHeight, final byte[] sources,
                                       final float[] sourceHeights) {
+        return edgeHeights(width, height, radius, minHeight, sources, sourceHeights,
+                Native.isExportEnabled());
+    }
+
+    private static float[] edgeHeights(final int width, final int height, final int radius,
+                                       final float minHeight, final byte[] sources,
+                                       final float[] sourceHeights, final boolean enabled) {
         final long area = (long) width * height;
-        if (!Native.isExportEnabled() || !NativeLoader.areSlicesAvailable()
+        if (!enabled || !NativeLoader.areSlicesAvailable()
                 || sources == null || sourceHeights == null || width <= 0 || height <= 0
                 || area > 1_048_576L || sources.length != area || sourceHeights.length != area
                 || radius < 0 || radius > 512 || !Float.isFinite(minHeight)) {
