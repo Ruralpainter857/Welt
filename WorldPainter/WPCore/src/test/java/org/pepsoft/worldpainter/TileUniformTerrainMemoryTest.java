@@ -52,6 +52,33 @@ public class TileUniformTerrainMemoryTest {
     }
 
     @Test
+    public void generatedTilesShareUniformWaterLevelsAndDetachForEdits() {
+        final Tile first = new Tile(0, 0, 0, 256);
+        final Tile second = new Tile(1, 0, 0, 256);
+        final UndoManager undoManager = new UndoManager();
+        first.register(undoManager);
+        second.register(undoManager);
+        final float[] heights = new float[Constants.TILE_SIZE * Constants.TILE_SIZE];
+        final int[] integerHeights = new int[heights.length];
+        initializeGeneratedTile(first, heights, integerHeights, 63);
+        initializeGeneratedTile(second, heights, integerHeights, 63);
+
+        assertSame(first.waterLevel, second.waterLevel);
+        assertEquals(63, first.getWaterLevel(20, 30));
+        undoManager.armSavePoint();
+        first.setWaterLevel(20, 30, 70);
+        assertNotSame(first.waterLevel, second.waterLevel);
+        assertEquals(70, first.getWaterLevel(20, 30));
+        assertEquals(63, second.getWaterLevel(20, 30));
+        assertTrue(undoManager.undo());
+        assertEquals(63, first.getWaterLevel(20, 30));
+        assertEquals(63, second.getWaterLevel(20, 30));
+        assertTrue(undoManager.redo());
+        assertEquals(70, first.getWaterLevel(20, 30));
+        assertEquals(63, second.getWaterLevel(20, 30));
+    }
+
+    @Test
     public void tallTilesShareAndDetachTheirDefaultBuffers() {
         final Tile first = new Tile(0, 0, 0, 512);
         final Tile second = new Tile(1, 0, 0, 512);
@@ -78,6 +105,30 @@ public class TileUniformTerrainMemoryTest {
         assertTrue(undoManager.redo());
         assertEquals(73.0f, first.getHeight(3, 5), 0.0f);
         assertEquals(81, first.getWaterLevel(3, 5));
+    }
+
+    @Test
+    public void generatedTallTilesShareZeroWaterLevelsWithUndoSupport() {
+        final Tile first = new Tile(0, 0, 0, 512);
+        final Tile second = new Tile(1, 0, 0, 512);
+        final UndoManager undoManager = new UndoManager();
+        first.register(undoManager);
+        second.register(undoManager);
+        final float[] heights = new float[Constants.TILE_SIZE * Constants.TILE_SIZE];
+        final int[] integerHeights = new int[heights.length];
+        initializeGeneratedTile(first, heights, integerHeights, 0);
+        initializeGeneratedTile(second, heights, integerHeights, 0);
+        assertSame(first.tallWaterLevel, second.tallWaterLevel);
+
+        undoManager.armSavePoint();
+        first.setWaterLevel(11, 13, 37);
+        assertNotSame(first.tallWaterLevel, second.tallWaterLevel);
+        assertEquals(0, second.getWaterLevel(11, 13));
+        assertTrue(undoManager.undo());
+        assertEquals(0, first.getWaterLevel(11, 13));
+        assertTrue(undoManager.redo());
+        assertEquals(37, first.getWaterLevel(11, 13));
+        assertEquals(0, second.getWaterLevel(11, 13));
     }
 
     @Test
@@ -174,6 +225,29 @@ public class TileUniformTerrainMemoryTest {
     }
 
     @Test
+    public void serializationReSharesGeneratedUniformWaterLevelsOnRead() throws Exception {
+        final Tile first = new Tile(0, 0, 0, 256);
+        final Tile second = new Tile(1, 0, 0, 256);
+        final float[] heights = new float[Constants.TILE_SIZE * Constants.TILE_SIZE];
+        final int[] integerHeights = new int[heights.length];
+        initializeGeneratedTile(first, heights, integerHeights, 63);
+        initializeGeneratedTile(second, heights, integerHeights, 63);
+
+        final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (ObjectOutputStream output = new ObjectOutputStream(bytes)) {
+            output.writeObject(new Tile[]{first, second});
+        }
+        final Tile[] loaded;
+        try (ObjectInputStream input = new ObjectInputStream(new ByteArrayInputStream(bytes.toByteArray()))) {
+            loaded = (Tile[]) input.readObject();
+        }
+        assertSame(loaded[0].waterLevel, loaded[1].waterLevel);
+        loaded[0].setWaterLevel(4, 5, 51);
+        assertEquals(51, loaded[0].getWaterLevel(4, 5));
+        assertEquals(63, loaded[1].getWaterLevel(4, 5));
+    }
+
+    @Test
     public void benchmarkSharedTerrainMemoryWhenRequested() throws Exception {
         if (!Boolean.getBoolean("welt.tile.uniform-terrain.benchmark")) {
             return;
@@ -193,5 +267,37 @@ public class TileUniformTerrainMemoryTest {
         System.out.printf("Uniform terrain tiles=%d, shared terrain/height/water payload saved=%d bytes (%.1f MiB), "
                         + "memory=[%s]%n",
                 tileCount, tilePayloadBytesSaved, tilePayloadBytesSaved / (1024.0 * 1024.0), memory);
+    }
+
+    @Test
+    public void benchmarkGeneratedUniformWaterMemoryWhenRequested() throws Exception {
+        if (!Boolean.getBoolean("welt.tile.uniform-terrain.benchmark")) {
+            return;
+        }
+        final int tileCount = Integer.getInteger("welt.tile.uniform-terrain.benchmark.tiles", 4096);
+        final List<Tile> tiles = new ArrayList<>(tileCount);
+        final float[] heights = new float[Constants.TILE_SIZE * Constants.TILE_SIZE];
+        final int[] intHeights = new int[heights.length];
+        final BenchmarkMemorySupport.Snapshot memory = BenchmarkMemorySupport.measure(() -> {
+            for (int i = 0; i < tileCount; i++) {
+                final Tile tile = new Tile(i, 0, 0, 256);
+                initializeGeneratedTile(tile, heights, intHeights, 63);
+                tiles.add(tile);
+            }
+        });
+        assertSame(tiles.get(0).waterLevel, tiles.get(tileCount - 1).waterLevel);
+        final long waterBytesSaved = (long) (tileCount - 1) * Constants.TILE_SIZE * Constants.TILE_SIZE;
+        System.out.printf("Generated uniform-water tiles=%d, shared water payload saved=%d bytes (%.1f MiB), "
+                        + "memory=[%s]%n",
+                tileCount, waterBytesSaved, waterBytesSaved / (1024.0 * 1024.0), memory);
+    }
+
+    private static void initializeGeneratedTile(Tile tile, float[] heights, int[] intHeights, int waterLevel) {
+        tile.inhibitEvents();
+        try {
+            tile.initializeHeightAndWaterLevels(heights, waterLevel, intHeights);
+        } finally {
+            tile.releaseEvents();
+        }
     }
 }
