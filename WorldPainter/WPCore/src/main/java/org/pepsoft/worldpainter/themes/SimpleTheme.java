@@ -205,10 +205,18 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
     /** Returns a copy of the terrain lookup table as stable enum ordinals. */
     public final int[] getTerrainRangeOrdinals() {
         final int[] ordinals = new int[terrainRangesTable.length];
+        copyTerrainRangeOrdinals(ordinals);
+        return ordinals;
+    }
+
+    /** Copies the current terrain lookup table into a reusable caller-owned buffer. */
+    public final void copyTerrainRangeOrdinals(final int[] ordinals) {
+        if ((ordinals == null) || (ordinals.length != terrainRangesTable.length)) {
+            throw new IllegalArgumentException("Expected one ordinal for every theme height");
+        }
         for (int i = 0; i < terrainRangesTable.length; i++) {
             ordinals[i] = terrainRangesTable[i].ordinal();
         }
-        return ordinals;
     }
 
     @Override

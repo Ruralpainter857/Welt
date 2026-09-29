@@ -175,13 +175,37 @@ public final class NativeSlices {
             return null;
         }
         final int[] output = new int[(int) area];
+        return fillSimpleThemeTerrainOrdinals(originX, originY, width, height,
+                minHeight, maxHeight, waterHeight, randomise, beaches, beachOrdinal,
+                seed, heights, terrainRangeOrdinals, output) ? output : null;
+    }
+
+    /** Fills a caller-owned ordinal buffer for one already-quantised tile. */
+    public static boolean fillSimpleThemeTerrainOrdinals(final int originX, final int originY,
+                                                         final int width, final int height,
+                                                         final int minHeight, final int maxHeight,
+                                                         final int waterHeight, final boolean randomise,
+                                                         final boolean beaches, final int beachOrdinal,
+                                                         final long seed, final int[] heights,
+                                                         final int[] terrainRangeOrdinals,
+                                                         final int[] output) {
+        final long area = (long) width * height;
+        final long rangeLength = (long) maxHeight - minHeight;
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || heights == null || terrainRangeOrdinals == null || output == null
+                || width <= 0 || height <= 0 || area > 1_048_576L
+                || rangeLength <= 0 || rangeLength > 1_048_576L
+                || heights.length != area || terrainRangeOrdinals.length != rangeLength
+                || output.length != area) {
+            return false;
+        }
         try {
             return nativeFillThemeTerrains(originX, originY, width, height,
                     minHeight, maxHeight, waterHeight, randomise ? 1 : 0,
                     beaches ? 1 : 0, beachOrdinal, seed, heights,
-                    terrainRangeOrdinals, output) == 0 ? output : null;
+                    terrainRangeOrdinals, output) == 0;
         } catch (final UnsatisfiedLinkError e) {
-            return null;
+            return false;
         }
     }
 

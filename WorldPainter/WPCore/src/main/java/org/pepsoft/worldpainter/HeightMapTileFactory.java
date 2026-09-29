@@ -25,6 +25,7 @@ import org.pepsoft.worldpainter.heightMaps.BicubicHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import org.pepsoft.worldpainter.themes.SimpleTheme;
 import org.pepsoft.worldpainter.themes.Theme;
@@ -346,14 +347,33 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 final byte[] terrainOrdinals = buffers.terrainOrdinals;
                 int lowestThemeHeight = Integer.MAX_VALUE;
                 int highestThemeHeight = Integer.MIN_VALUE;
-                for (int x = 0; x < TILE_SIZE; x++) {
-                    for (int y = 0; y < TILE_SIZE; y++) {
-                        final int index = x | (y << TILE_SIZE_BITS);
-                        final int quantisedHeight = intHeights[index];
-                        lowestThemeHeight = Math.min(lowestThemeHeight, quantisedHeight);
-                        highestThemeHeight = Math.max(highestThemeHeight, quantisedHeight);
-                        terrainOrdinals[index] = (byte) simpleTheme
-                                .getTerrainForFreshTile(tile, x, y, quantisedHeight).ordinal();
+                for (int quantisedHeight : intHeights) {
+                    lowestThemeHeight = Math.min(lowestThemeHeight, quantisedHeight);
+                    highestThemeHeight = Math.max(highestThemeHeight, quantisedHeight);
+                }
+                boolean nativeTerrainComputed = false;
+                if (Native.isGenEnabled() && NativeLoader.areSlicesAvailable()) {
+                    final int[] nativeTerrainOrdinals = buffers.nativeTerrainOrdinals();
+                    final int[] terrainRangeOrdinals = buffers.terrainRangeOrdinals(maxHeight - minHeight);
+                    simpleTheme.copyTerrainRangeOrdinals(terrainRangeOrdinals);
+                    nativeTerrainComputed = NativeSlices.fillSimpleThemeTerrainOrdinals(
+                            0, 0, TILE_SIZE, TILE_SIZE, minHeight, maxHeight,
+                            simpleTheme.getWaterHeight(), simpleTheme.isRandomise(),
+                            simpleTheme.isBeaches(), Terrain.BEACHES.ordinal(), simpleTheme.getSeed(),
+                            intHeights, terrainRangeOrdinals, nativeTerrainOrdinals);
+                }
+                if (nativeTerrainComputed) {
+                    final int[] nativeTerrainOrdinals = buffers.nativeTerrainOrdinals;
+                    for (int index = 0; index < terrainOrdinals.length; index++) {
+                        terrainOrdinals[index] = (byte) nativeTerrainOrdinals[index];
+                    }
+                } else {
+                    for (int x = 0; x < TILE_SIZE; x++) {
+                        for (int y = 0; y < TILE_SIZE; y++) {
+                            final int index = x | (y << TILE_SIZE_BITS);
+                            terrainOrdinals[index] = (byte) simpleTheme
+                                    .getTerrainForFreshTile(tile, x, y, intHeights[index]).ordinal();
+                        }
                     }
                 }
                 tile.initializeTerrainOrdinals(terrainOrdinals);
@@ -578,6 +598,22 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         private double[] nativeDisplacementDistanceValues;
         private float[] displacementXCoordinateValues;
         private float[] displacementYCoordinateValues;
+        private int[] nativeTerrainOrdinals;
+        private int[] terrainRangeOrdinals;
+
+        private int[] nativeTerrainOrdinals() {
+            if (nativeTerrainOrdinals == null) {
+                nativeTerrainOrdinals = new int[TILE_SIZE * TILE_SIZE];
+            }
+            return nativeTerrainOrdinals;
+        }
+
+        private int[] terrainRangeOrdinals(final int length) {
+            if ((terrainRangeOrdinals == null) || (terrainRangeOrdinals.length != length)) {
+                terrainRangeOrdinals = new int[length];
+            }
+            return terrainRangeOrdinals;
+        }
 
         private boolean prepareHeightMapProgram(HeightMap heightMap) {
             heightMapNodeCount = 0;
