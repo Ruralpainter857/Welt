@@ -516,10 +516,20 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 && ((long) originY - 1 >= -limit) && ((long) originY + TILE_SIZE <= limit);
     }
 
-    /** The measured Rust fast path currently specializes a standalone smooth banded map. */
+    /** The Rust height-map tree evaluator supports the measured smooth map and valid linear bands. */
     private static boolean isNativeBandedHeightMap(HeightMap heightMap) {
-        return (heightMap.getClass() == BandedHeightMap.class)
-                && ((BandedHeightMap) heightMap).isSmooth();
+        if (heightMap.getClass() != BandedHeightMap.class) {
+            return false;
+        }
+        final BandedHeightMap banded = (BandedHeightMap) heightMap;
+        if (banded.isSmooth()) {
+            return true;
+        }
+        final long totalLength = (long) banded.getSegment1Length() + banded.getSegment2Length();
+        return (banded.getSegment1Length() > 0) && (banded.getSegment2Length() > 0)
+                && (totalLength <= Integer.MAX_VALUE)
+                && Double.isFinite(banded.getSegment1EndHeight())
+                && Double.isFinite(banded.getSegment2EndHeight());
     }
 
     /** BitmapHeightMap supplies a bulk reader that preserves clipping and repeat semantics. */

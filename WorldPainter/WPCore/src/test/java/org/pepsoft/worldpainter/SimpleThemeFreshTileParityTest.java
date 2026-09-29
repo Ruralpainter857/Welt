@@ -1029,6 +1029,50 @@ public final class SimpleThemeFreshTileParityTest {
         }
     }
 
+    @Test
+    public void benchmarkLinearBandedHeightMapWhenRequested() throws Exception {
+        assumeTrue(Boolean.getBoolean("welt.banded.linear.benchmark"));
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        try {
+            final HeightMapTileFactory javaFactory = new HeightMapTileFactory(73L,
+                    new BandedHeightMap("linear banded", 9, 116.5, 7, 88.25, false),
+                    0, 256, false, createSimpleTheme(false));
+            final HeightMapTileFactory nativeFactory = new HeightMapTileFactory(73L,
+                    new BandedHeightMap("linear banded", 9, 116.5, 7, 88.25, false),
+                    0, 256, false, createSimpleTheme(false));
+            final int tileCount = 24, rounds = 7;
+            final double[] javaMillis = new double[rounds];
+            final double[] nativeMillis = new double[rounds];
+            for (int warmup = 0; warmup < 3; warmup++) {
+                benchmarkTiles(javaFactory, tileCount, warmup, false);
+                benchmarkTiles(nativeFactory, tileCount, warmup, true);
+            }
+            for (int round = 0; round < rounds; round++) {
+                if ((round & 1) == 0) {
+                    javaMillis[round] = benchmarkTiles(javaFactory, tileCount, round, false);
+                    nativeMillis[round] = benchmarkTiles(nativeFactory, tileCount, round, true);
+                } else {
+                    nativeMillis[round] = benchmarkTiles(nativeFactory, tileCount, round, true);
+                    javaMillis[round] = benchmarkTiles(javaFactory, tileCount, round, false);
+                }
+            }
+            java.util.Arrays.sort(javaMillis);
+            java.util.Arrays.sort(nativeMillis);
+            final BenchmarkMemorySupport.Snapshot javaMemory = BenchmarkMemorySupport.measure(
+                    () -> benchmarkTiles(javaFactory, tileCount, rounds, false));
+            final BenchmarkMemorySupport.Snapshot nativeMemory = BenchmarkMemorySupport.measure(
+                    () -> benchmarkTiles(nativeFactory, tileCount, rounds, true));
+            final int median = rounds / 2;
+            System.out.printf("Linear BandedHeightMap full createTile Java %.3f ms/tile, Rust/JNI %.3f ms/tile, "
+                            + "ratio %.3fx java_memory=[%s] native_memory=[%s]%n",
+                    javaMillis[median], nativeMillis[median], javaMillis[median] / nativeMillis[median],
+                    javaMemory, nativeMemory);
+        } finally {
+            restoreGenerationFlag(previousFlag);
+        }
+    }
+
     private static double benchmarkPerCellFreshTiles(HeightMap heightMap, SimpleTheme theme,
                                                       int tileCount, int round) {
         Native.setGenEnabled(false);
