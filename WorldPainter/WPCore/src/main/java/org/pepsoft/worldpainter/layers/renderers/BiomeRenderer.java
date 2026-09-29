@@ -12,6 +12,7 @@ import org.pepsoft.worldpainter.biomeschemes.CustomBiomeManager;
 import org.pepsoft.worldpainter.biomeschemes.StaticBiomeInfo;
 
 import java.awt.image.BufferedImage;
+import java.lang.ref.SoftReference;
 import java.util.List;
 
 import static java.awt.image.BufferedImage.TYPE_INT_RGB;
@@ -22,11 +23,12 @@ import static java.awt.image.BufferedImage.TYPE_INT_RGB;
  */
 public class BiomeRenderer implements ByteLayerRenderer {
     public BiomeRenderer(CustomBiomeManager customBiomeManager, ColourScheme colourScheme) {
-        patterns = new BufferedImage[255];
-        for (int i = 0; i < 255; i++) {
-            if (BIOME_INFO.isBiomePresent(i)) {
-                patterns[i] = createPattern(i, colourScheme);
-            }
+        if (colourScheme == ColourScheme.DEFAULT) {
+            final BufferedImage[] defaultPatterns = DefaultPatternCache.get();
+            // Custom biome images are renderer-specific, so give them a private reference table.
+            patterns = (customBiomeManager == null) ? defaultPatterns : defaultPatterns.clone();
+        } else {
+            patterns = createPatterns(colourScheme);
         }
         if (customBiomeManager != null) {
             final List<CustomBiome> customBiomes = customBiomeManager.getCustomBiomes();
@@ -56,7 +58,7 @@ public class BiomeRenderer implements ByteLayerRenderer {
         return underlyingColour;
     }
 
-    private BufferedImage createPattern(int biomeId, ColourScheme colourScheme) {
+    private static BufferedImage createPattern(int biomeId, ColourScheme colourScheme) {
         final boolean[][] pattern = BIOME_INFO.getPattern(biomeId);
         final int colour = BIOME_INFO.getColour(biomeId, colourScheme);
         final BufferedImage image = new BufferedImage(16, 16, TYPE_INT_RGB);
@@ -72,7 +74,7 @@ public class BiomeRenderer implements ByteLayerRenderer {
         return image;
     }
 
-    private BufferedImage createPattern(int colour) {
+    private static BufferedImage createPattern(int colour) {
         final BufferedImage image = new BufferedImage(16, 16, TYPE_INT_RGB);
         for (int x = 0; x < 16; x++) {
             for (int y = 0; y < 16; y++) {
@@ -86,4 +88,33 @@ public class BiomeRenderer implements ByteLayerRenderer {
 
     private static final int BLACK = 0;
     private static final BiomeScheme BIOME_INFO = StaticBiomeInfo.INSTANCE;
+
+    private static BufferedImage[] createPatterns(ColourScheme colourScheme) {
+        final BufferedImage[] patterns = new BufferedImage[255];
+        for (int i = 0; i < patterns.length; i++) {
+            if (BIOME_INFO.isBiomePresent(i)) {
+                patterns[i] = createPattern(i, colourScheme);
+            }
+        }
+        return patterns;
+    }
+
+    /** Shares immutable default biome images while allowing them to be reclaimed when unused. */
+    private static final class DefaultPatternCache {
+        private static volatile SoftReference<BufferedImage[]> reference = new SoftReference<>(null);
+
+        private static BufferedImage[] get() {
+            BufferedImage[] cachedPatterns = reference.get();
+            if (cachedPatterns == null) {
+                synchronized (DefaultPatternCache.class) {
+                    cachedPatterns = reference.get();
+                    if (cachedPatterns == null) {
+                        cachedPatterns = createPatterns(ColourScheme.DEFAULT);
+                        reference = new SoftReference<>(cachedPatterns);
+                    }
+                }
+            }
+            return cachedPatterns;
+        }
+    }
 }
