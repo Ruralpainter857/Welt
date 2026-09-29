@@ -247,6 +247,24 @@ public final class NativeRenderShadingParityTest {
         }
     }
 
+    @Test
+    public void benchmarkTileRendererConstructionMemoryWhenRequested() throws Exception {
+        assumeTrue(Boolean.getBoolean("welt.render.tile-construction.benchmark"));
+        final Dimension dimension = TestData.createDimension(
+                new Rectangle(0, 0, Constants.TILE_SIZE, Constants.TILE_SIZE), 64);
+        final int rendererCount = 8;
+        final TileRenderer[] renderers = new TileRenderer[rendererCount];
+        for (int i = 0; i < 2; i++) {
+            new TileRenderer(dimension, ColourScheme.DEFAULT, null, 0, true, null);
+        }
+        final BenchmarkMemorySupport.Snapshot memory = BenchmarkMemorySupport.measure(() -> {
+            for (int i = 0; i < renderers.length; i++) {
+                renderers[i] = new TileRenderer(dimension, ColourScheme.DEFAULT, null, 0, true, null);
+            }
+        });
+        System.out.printf("TileRenderer construction count=%d memory=[%s]%n", rendererCount, memory);
+    }
+
     private static void shadeJavaInPlace(int[] pixels, long[] amounts) {
         for (int i = 0; i < pixels.length; i++) {
             final int terrain = (int) amounts[i];

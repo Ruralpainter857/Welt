@@ -40,8 +40,8 @@ import static org.pepsoft.worldpainter.layers.tunnel.TunnelLayer.Mode.FIXED_HEIG
  */
 public final class TileRenderer {
     public TileRenderer(TileProvider tileProvider, ColourScheme colourScheme, CustomBiomeManager customBiomeManager, int zoom, boolean transparentVoid, ColourRamp colourRamp) {
-        biomeRenderer = new BiomeRenderer(customBiomeManager, colourScheme);
         this.tileProvider = tileProvider;
+        this.customBiomeManager = customBiomeManager;
         final Dimension dimension = (tileProvider instanceof Dimension) ? (Dimension) tileProvider : null;
         TileProvider relatedTileProvider = null;
         boolean renderCeilingIntersection = false, renderTunnelRoofIntersection = false;
@@ -517,6 +517,9 @@ public final class TileRenderer {
         return rendererCache.computeIfAbsent(layer, k -> {
             final LayerRenderer renderer;
             if (layer instanceof Biome) {
+                if (biomeRenderer == null) {
+                    biomeRenderer = new BiomeRenderer(customBiomeManager, colourScheme);
+                }
                 renderer = biomeRenderer;
             } else {
                 renderer = layer.getRenderer();
@@ -545,7 +548,8 @@ public final class TileRenderer {
     private final boolean renderCeilingIntersection, renderTunnelRoofIntersection;
     private final TunnelLayerHelper tunnelLayerHelper;
     private final ColourRamp colourRamp;
-    private final BiomeRenderer biomeRenderer;
+    private BiomeRenderer biomeRenderer;
+    private final CustomBiomeManager customBiomeManager;
     private final ColourScheme colourScheme;
     private final Map<Layer, LayerRenderer> rendererCache = new HashMap<>();
     private boolean contourLines = true, hideAllLayers;
