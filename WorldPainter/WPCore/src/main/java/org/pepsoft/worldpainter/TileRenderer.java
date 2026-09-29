@@ -144,14 +144,7 @@ public final class TileRenderer {
 //        synchronized (tile) {
 
         final int tileX = tile.getX(), tileY = tile.getY();
-        for (int x = 0; x < TILE_SIZE; x++) {
-            for (int y = 0; y < TILE_SIZE; y++) {
-                final float height = tile.getHeight(x, y);
-                floatHeightCache[x | (y << TILE_SIZE_BITS)] = height;
-                intHeightCache[x | (y << TILE_SIZE_BITS)] = Math.round(height);
-                intFluidHeightCache[x | (y << TILE_SIZE_BITS)] = tile.getWaterLevel(x, y);
-            }
-        }
+        tile.copyRenderHeightDataTo(floatHeightCache, intHeightCache, intFluidHeightCache);
 
         // Determine which coordinates, if any, have heights which would intersect with the opposite tile, if any
         final boolean bottomless, topLayersRelativeToTerrain;

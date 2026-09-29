@@ -23,6 +23,12 @@ public final class NativeRenderShadingParityTest {
     private static final int PIXELS = 128 * 128;
 
     @Test
+    public void tileRenderHeightSnapshotMatchesScalarGettersForBothStorageLayouts() {
+        assertRenderHeightSnapshotMatches(new Tile(0, 0, 0, 256));
+        assertRenderHeightSnapshotMatches(new Tile(0, 0, -128, 384));
+    }
+
+    @Test
     public void nativeTileShadingMatchesJavaForAllBrightnessBands() {
         assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
         final String previousFlag = System.getProperty(Native.RENDER_KEY);
@@ -237,6 +243,35 @@ public final class NativeRenderShadingParityTest {
         new TileRenderer(dimension, ColourScheme.DEFAULT, null, 0, true, null)
                 .renderTile(tile, image, 0, 0);
         return ((DataBufferInt) image.getRaster().getDataBuffer()).getData().clone();
+    }
+
+    private static void assertRenderHeightSnapshotMatches(Tile tile) {
+        final int minHeight = tile.getMinHeight();
+        final int heightRange = tile.getMaxHeight() - minHeight;
+        tile.inhibitEvents();
+        try {
+            for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                    tile.setHeight(x, y, minHeight + ((x * 13 + y * 7) % heightRange) + 0.25f);
+                    tile.setWaterLevel(x, y, minHeight + ((x * 5 + y * 11) % heightRange));
+                }
+            }
+        } finally {
+            tile.releaseEvents();
+        }
+        final float[] heights = new float[PIXELS];
+        final int[] intHeights = new int[PIXELS];
+        final int[] waterLevels = new int[PIXELS];
+        tile.copyRenderHeightDataTo(heights, intHeights, waterLevels);
+        for (int x = 0; x < Constants.TILE_SIZE; x++) {
+            for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                final int index = x | (y << Constants.TILE_SIZE_BITS);
+                final float height = tile.getHeight(x, y);
+                assertEquals(Float.floatToRawIntBits(height), Float.floatToRawIntBits(heights[index]));
+                assertEquals(tile.getIntHeight(x, y), intHeights[index]);
+                assertEquals(tile.getWaterLevel(x, y), waterLevels[index]);
+            }
+        }
     }
 
     private static void restoreFlag(String previousFlag) {

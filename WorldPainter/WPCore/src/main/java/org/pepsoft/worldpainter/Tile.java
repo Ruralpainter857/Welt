@@ -199,6 +199,39 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    /**
+     * Copies the height data needed by the tile renderer under one read lock.
+     * This avoids taking the tile monitor and resolving copy-on-write buffers
+     * twice for every pixel while reusing the renderer's existing arrays.
+     */
+    synchronized void copyRenderHeightDataTo(float[] heights, int[] intHeights, int[] waterLevels) {
+        final int area = TILE_SIZE * TILE_SIZE;
+        if ((heights == null) || (heights.length != area)
+                || (intHeights == null) || (intHeights.length != area)
+                || (waterLevels == null) || (waterLevels.length != area)) {
+            throw new IllegalArgumentException("Expected one render height and water value for every tile cell");
+        }
+        if (tall) {
+            ensureReadable(TALL_HEIGHTMAP);
+            ensureReadable(TALL_WATERLEVEL);
+            for (int index = 0; index < area; index++) {
+                final float height = tallHeightMap[index] / 256f + minHeight;
+                heights[index] = height;
+                intHeights[index] = Math.round(height);
+                waterLevels[index] = (tallWaterLevel[index] & 0xFFFF) + minHeight;
+            }
+        } else {
+            ensureReadable(HEIGHTMAP);
+            ensureReadable(WATERLEVEL);
+            for (int index = 0; index < area; index++) {
+                final float height = (heightMap[index] & 0xFFFF) / 256f + minHeight;
+                heights[index] = height;
+                intHeights[index] = Math.round(height);
+                waterLevels[index] = (waterLevel[index] & 0xFF) + minHeight;
+            }
+        }
+    }
+
     public float getLowestHeight() {
         return getLowestRawHeight() / 256f + minHeight;
     }
