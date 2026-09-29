@@ -77,9 +77,14 @@ public final class HeightMapImporterBitmapParityTest {
         }
         Arrays.sort(bulkMillis);
         Arrays.sort(perCellMillis);
-        System.out.printf("Heightmap import benchmark: 512x512, bulk_ms=%.3f per_cell_ms=%.3f speedup=%.3fx%n",
+        final BenchmarkMemorySupport.Snapshot bulkMemory = BenchmarkMemorySupport.measure(
+                () -> importMap(bitmap));
+        final BenchmarkMemorySupport.Snapshot perCellMemory = BenchmarkMemorySupport.measure(
+                () -> importMap(perCellReference));
+        System.out.printf("Heightmap import benchmark: 512x512, bulk_ms=%.3f per_cell_ms=%.3f speedup=%.3fx "
+                        + "bulk_memory=[%s] per_cell_memory=[%s]%n",
                 bulkMillis[rounds / 2], perCellMillis[rounds / 2],
-                perCellMillis[rounds / 2] / bulkMillis[rounds / 2]);
+                perCellMillis[rounds / 2] / bulkMillis[rounds / 2], bulkMemory, perCellMemory);
     }
 
     private static double timeImport(HeightMap map) throws Exception {

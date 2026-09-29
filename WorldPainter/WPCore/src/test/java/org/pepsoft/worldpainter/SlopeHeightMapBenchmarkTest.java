@@ -50,10 +50,15 @@ public final class SlopeHeightMapBenchmarkTest {
             Arrays.sort(javaSamples);
             Arrays.sort(nativeSamples);
             final int median = rounds / 2;
+            final BenchmarkMemorySupport.Snapshot javaMemory = BenchmarkMemorySupport.measure(
+                    () -> sample(factory, tiles, rounds, false));
+            final BenchmarkMemorySupport.Snapshot nativeMemory = BenchmarkMemorySupport.measure(
+                    () -> sample(factory, tiles, rounds, true));
             final String result = String.format(
-                    "tiles=%d rounds=%d java_ms_per_tile=%.4f native_ms_per_tile=%.4f speedup=%.3f sink=%d%n",
+                    "tiles=%d rounds=%d java_ms_per_tile=%.4f native_ms_per_tile=%.4f speedup=%.3f "
+                            + "java_memory=[%s] native_memory=[%s] sink=%d%n",
                     tiles, rounds, javaSamples[median], nativeSamples[median],
-                    javaSamples[median] / nativeSamples[median], sink);
+                    javaSamples[median] / nativeSamples[median], javaMemory, nativeMemory, sink);
             final Path output = Path.of(System.getProperty("welt.slope.benchmark.output",
                     "target/slope-heightmap-benchmark.txt"));
             Files.createDirectories(output.toAbsolutePath().getParent());
@@ -83,7 +88,7 @@ public final class SlopeHeightMapBenchmarkTest {
         return (System.nanoTime() - start) / 1_000_000.0 / tileCount;
     }
 
-    private static void benchmarkSlopeKernel() {
+    private static void benchmarkSlopeKernel() throws Exception {
         final int inputWidth = 130, inputHeight = 130;
         final double[] base = new double[inputWidth * inputHeight];
         final double[] output = new double[128 * 128];
@@ -114,10 +119,14 @@ public final class SlopeHeightMapBenchmarkTest {
         Arrays.sort(javaSamples);
         Arrays.sort(nativeSamples);
         final int median = javaSamples.length / 2;
+        final BenchmarkMemorySupport.Snapshot javaMemory = BenchmarkMemorySupport.measure(
+                () -> sampleSlopeKernel(slope, base, output, inputWidth, inputHeight, iterations, false));
+        final BenchmarkMemorySupport.Snapshot nativeMemory = BenchmarkMemorySupport.measure(
+                () -> sampleSlopeKernel(slope, base, output, inputWidth, inputHeight, iterations, true));
         System.out.printf("Slope kernel benchmark: iterations=%d java_ms_per_tile=%.4f "
-                        + "native_ms_per_tile=%.4f speedup=%.3f%n",
+                        + "native_ms_per_tile=%.4f speedup=%.3f java_memory=[%s] native_memory=[%s]%n",
                 iterations, javaSamples[median], nativeSamples[median],
-                javaSamples[median] / nativeSamples[median]);
+                javaSamples[median] / nativeSamples[median], javaMemory, nativeMemory);
     }
 
     private static double sampleSlopeKernel(SlopeHeightMap slope, double[] base, double[] output,

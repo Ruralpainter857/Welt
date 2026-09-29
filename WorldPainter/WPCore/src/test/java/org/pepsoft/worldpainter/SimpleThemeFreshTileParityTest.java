@@ -660,7 +660,7 @@ public final class SimpleThemeFreshTileParityTest {
     }
 
     @Test
-    public void benchmarkNativeScaledAndRotatedHeightMapWhenRequested() {
+    public void benchmarkNativeScaledAndRotatedHeightMapWhenRequested() throws Exception {
         assumeTrue(Boolean.getBoolean("welt.transforming.benchmark"));
         assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
         final String previousFlag = System.getProperty(Native.GEN_KEY);
@@ -694,9 +694,14 @@ public final class SimpleThemeFreshTileParityTest {
             }
             java.util.Arrays.sort(javaMillis);
             java.util.Arrays.sort(nativeMillis);
-            System.out.printf("Transformed heightmap Java %.3f ms/tile, Rust/JNI %.3f ms/tile, ratio %.3fx%n",
+            final BenchmarkMemorySupport.Snapshot javaMemory = BenchmarkMemorySupport.measure(
+                    () -> benchmarkTiles(javaFactory, tileCount, rounds, false));
+            final BenchmarkMemorySupport.Snapshot nativeMemory = BenchmarkMemorySupport.measure(
+                    () -> benchmarkTiles(nativeFactory, tileCount, rounds, true));
+            System.out.printf("Transformed heightmap Java %.3f ms/tile, Rust/JNI %.3f ms/tile, ratio %.3fx "
+                            + "java_memory=[%s] native_memory=[%s]%n",
                     javaMillis[rounds / 2], nativeMillis[rounds / 2],
-                    javaMillis[rounds / 2] / nativeMillis[rounds / 2]);
+                    javaMillis[rounds / 2] / nativeMillis[rounds / 2], javaMemory, nativeMemory);
         } finally {
             restoreGenerationFlag(previousFlag);
         }

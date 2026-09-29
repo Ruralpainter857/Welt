@@ -94,7 +94,7 @@ public final class NativeRenderShadingParityTest {
     }
 
     @Test
-    public void benchmarkNativeTileShadingWhenRequested() {
+    public void benchmarkNativeTileShadingWhenRequested() throws Exception {
         assumeTrue(Boolean.getBoolean("welt.render.shade.benchmark"));
         assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
         final String previousFlag = System.getProperty(Native.RENDER_KEY);
@@ -136,16 +136,21 @@ public final class NativeRenderShadingParityTest {
             }
             Arrays.sort(javaNanos);
             Arrays.sort(nativeNanos);
-            System.out.printf("Tile shading Java median %.3f ms, Rust/JNI median %.3f ms, ratio %.3fx%n",
+            final BenchmarkMemorySupport.Snapshot javaMemory = BenchmarkMemorySupport.measure(
+                    () -> shadeJavaInPlace(javaPixels, amounts));
+            final BenchmarkMemorySupport.Snapshot nativeMemory = BenchmarkMemorySupport.measure(
+                    () -> NativeSlices.shadeColours(nativePixels, amounts));
+            System.out.printf("Tile shading Java median %.3f ms, Rust/JNI median %.3f ms, ratio %.3fx "
+                            + "java_memory=[%s] native_memory=[%s]%n",
                     javaNanos[4] / 1_000_000.0, nativeNanos[4] / 1_000_000.0,
-                    (double) javaNanos[4] / nativeNanos[4]);
+                    (double) javaNanos[4] / nativeNanos[4], javaMemory, nativeMemory);
         } finally {
             restoreFlag(previousFlag);
         }
     }
 
     @Test
-    public void benchmarkFullTileRenderingWhenRequested() {
+    public void benchmarkFullTileRenderingWhenRequested() throws Exception {
         assumeTrue(Boolean.getBoolean("welt.render.tile.benchmark"));
         assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
         final String previousFlag = System.getProperty(Native.RENDER_KEY);
@@ -197,9 +202,18 @@ public final class NativeRenderShadingParityTest {
             Arrays.sort(nativeNanos);
             assertArrayEquals(((DataBufferInt) javaImage.getRaster().getDataBuffer()).getData(),
                     ((DataBufferInt) nativeImage.getRaster().getDataBuffer()).getData());
-            System.out.printf("Full TileRenderer Java median %.3f ms, Rust/JNI median %.3f ms, ratio %.3fx%n",
+            final BenchmarkMemorySupport.Snapshot javaMemory = BenchmarkMemorySupport.measure(() -> {
+                Native.setRenderEnabled(false);
+                javaRenderer.renderTile(tile, javaImage, 0, 0);
+            });
+            final BenchmarkMemorySupport.Snapshot nativeMemory = BenchmarkMemorySupport.measure(() -> {
+                Native.setRenderEnabled(true);
+                nativeRenderer.renderTile(tile, nativeImage, 0, 0);
+            });
+            System.out.printf("Full TileRenderer Java median %.3f ms, Rust/JNI median %.3f ms, ratio %.3fx "
+                            + "java_memory=[%s] native_memory=[%s]%n",
                     javaNanos[4] / 1_000_000.0, nativeNanos[4] / 1_000_000.0,
-                    (double) javaNanos[4] / nativeNanos[4]);
+                    (double) javaNanos[4] / nativeNanos[4], javaMemory, nativeMemory);
         } finally {
             restoreFlag(previousFlag);
         }

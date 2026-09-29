@@ -53,10 +53,15 @@ public final class DisplacementHeightMapBenchmarkTest {
             Arrays.sort(javaSamples);
             Arrays.sort(nativeSamples);
             final int median = rounds / 2;
+            final BenchmarkMemorySupport.Snapshot javaMemory = BenchmarkMemorySupport.measure(
+                    () -> sample(factory, tiles, rounds, false));
+            final BenchmarkMemorySupport.Snapshot nativeMemory = BenchmarkMemorySupport.measure(
+                    () -> sample(factory, tiles, rounds, true));
             final String result = String.format(
-                    "tiles=%d rounds=%d java_ms_per_tile=%.4f native_ms_per_tile=%.4f speedup=%.3f sink=%d%n",
+                    "tiles=%d rounds=%d java_ms_per_tile=%.4f native_ms_per_tile=%.4f speedup=%.3f "
+                            + "java_memory=[%s] native_memory=[%s] sink=%d%n",
                     tiles, rounds, javaSamples[median], nativeSamples[median],
-                    javaSamples[median] / nativeSamples[median], sink);
+                    javaSamples[median] / nativeSamples[median], javaMemory, nativeMemory, sink);
             final Path output = Path.of(System.getProperty("welt.displacement.benchmark.output",
                     "target/displacement-heightmap-benchmark.txt"));
             Files.createDirectories(output.toAbsolutePath().getParent());
