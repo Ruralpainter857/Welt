@@ -10,7 +10,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -114,6 +116,86 @@ public class TileUniformTerrainMemoryTest {
         assertTrue(undoManager.redo());
         assertEquals(70, first.getWaterLevel(20, 30));
         assertEquals(63, second.getWaterLevel(20, 30));
+    }
+
+    @Test
+    public void generatedTilesShareUniformHeightsAndDetachForUndoableEdits() {
+        final Tile first = new Tile(0, 0, 0, 256);
+        final Tile second = new Tile(1, 0, 0, 256);
+        final float[] heights = new float[Constants.TILE_SIZE * Constants.TILE_SIZE];
+        Arrays.fill(heights, 64.25f);
+        final int[] integerHeights = new int[heights.length];
+        initializeGeneratedTile(first, heights, integerHeights, 63);
+        initializeGeneratedTile(second, heights, integerHeights, 63);
+
+        assertSame(first.heightMap, second.heightMap);
+        assertEquals(64.25f, first.getHeight(20, 30), 0.0f);
+        assertEquals(64.25f, second.getHeight(20, 30), 0.0f);
+
+        final UndoManager undoManager = new UndoManager();
+        first.register(undoManager);
+        second.register(undoManager);
+        undoManager.armSavePoint();
+        first.setHeight(20, 30, 71.5f);
+
+        assertNotSame(first.heightMap, second.heightMap);
+        assertEquals(71.5f, first.getHeight(20, 30), 0.0f);
+        assertEquals(64.25f, second.getHeight(20, 30), 0.0f);
+        assertTrue(undoManager.undo());
+        assertEquals(64.25f, first.getHeight(20, 30), 0.0f);
+        assertTrue(undoManager.redo());
+        assertEquals(71.5f, first.getHeight(20, 30), 0.0f);
+        assertEquals(64.25f, second.getHeight(20, 30), 0.0f);
+    }
+
+    @Test
+    public void tallGeneratedTilesShareUniformHeightsAndDetachForEdits() {
+        final Tile first = new Tile(0, 0, 0, 512);
+        final Tile second = new Tile(1, 0, 0, 512);
+        final float[] heights = new float[Constants.TILE_SIZE * Constants.TILE_SIZE];
+        Arrays.fill(heights, 64.25f);
+        final int[] integerHeights = new int[heights.length];
+        initializeGeneratedTile(first, heights, integerHeights, 0);
+        initializeGeneratedTile(second, heights, integerHeights, 0);
+
+        assertSame(first.tallHeightMap, second.tallHeightMap);
+        first.setHeight(20, 30, 71.5f);
+        assertNotSame(first.tallHeightMap, second.tallHeightMap);
+        assertEquals(71.5f, first.getHeight(20, 30), 0.0f);
+        assertEquals(64.25f, second.getHeight(20, 30), 0.0f);
+    }
+
+    @Test
+    public void serializedGeneratedUniformHeightsAreSharedAgainOnRead() throws Exception {
+        final Tile first = new Tile(0, 0, 0, 256);
+        final Tile second = new Tile(1, 0, 0, 256);
+        final Tile tallFirst = new Tile(2, 0, 0, 512);
+        final Tile tallSecond = new Tile(3, 0, 0, 512);
+        final float[] heights = new float[Constants.TILE_SIZE * Constants.TILE_SIZE];
+        Arrays.fill(heights, 64.25f);
+        final int[] integerHeights = new int[heights.length];
+        initializeGeneratedTile(first, heights, integerHeights, 63);
+        initializeGeneratedTile(second, heights, integerHeights, 63);
+        initializeGeneratedTile(tallFirst, heights, integerHeights, 0);
+        initializeGeneratedTile(tallSecond, heights, integerHeights, 0);
+
+        final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (ObjectOutputStream output = new ObjectOutputStream(bytes)) {
+            output.writeObject(new Tile[] {first, second, tallFirst, tallSecond});
+        }
+        final Tile[] loaded;
+        try (ObjectInputStream input = new ObjectInputStream(new ByteArrayInputStream(bytes.toByteArray()))) {
+            loaded = (Tile[]) input.readObject();
+        }
+
+        assertSame(loaded[0].heightMap, loaded[1].heightMap);
+        assertSame(loaded[2].tallHeightMap, loaded[3].tallHeightMap);
+        loaded[0].setHeight(4, 5, 37.0f);
+        loaded[2].setHeight(4, 5, 37.0f);
+        assertEquals(37.0f, loaded[0].getHeight(4, 5), 0.0f);
+        assertEquals(64.25f, loaded[1].getHeight(4, 5), 0.0f);
+        assertEquals(37.0f, loaded[2].getHeight(4, 5), 0.0f);
+        assertEquals(64.25f, loaded[3].getHeight(4, 5), 0.0f);
     }
 
     @Test
@@ -330,6 +412,37 @@ public class TileUniformTerrainMemoryTest {
         System.out.printf("Generated uniform-water tiles=%d, shared water payload saved=%d bytes (%.1f MiB), "
                         + "memory=[%s]%n",
                 tileCount, waterBytesSaved, waterBytesSaved / (1024.0 * 1024.0), memory);
+    }
+
+    @Test
+    public void benchmarkGeneratedUniformHeightMemoryWhenRequested() throws Exception {
+        if (!Boolean.getBoolean("welt.tile.uniform-height.benchmark")) {
+            return;
+        }
+        final int tileCount = Integer.getInteger("welt.tile.uniform-height.benchmark.tiles", 4096);
+        final float height = Float.parseFloat(System.getProperty("welt.tile.uniform-height.benchmark.height", "64.25"));
+        final List<Tile> tiles = new ArrayList<>(tileCount);
+        final float[] heights = new float[Constants.TILE_SIZE * Constants.TILE_SIZE];
+        Arrays.fill(heights, height);
+        final int[] intHeights = new int[heights.length];
+        final AtomicLong elapsedNanos = new AtomicLong();
+        final BenchmarkMemorySupport.Snapshot memory = BenchmarkMemorySupport.measure(() -> {
+            final long start = System.nanoTime();
+            for (int i = 0; i < tileCount; i++) {
+                final Tile tile = new Tile(i, 0, 0, 256);
+                initializeGeneratedTile(tile, heights, intHeights, 63);
+                tiles.add(tile);
+            }
+            elapsedNanos.set(System.nanoTime() - start);
+        });
+        final boolean shared = tiles.get(0).heightMap == tiles.get(tileCount - 1).heightMap;
+        final long payloadBytesSaved = shared
+                ? (long) (tileCount - 1) * heights.length * Short.BYTES : 0L;
+        assertEquals(height, tiles.get(0).getHeight(0, 0), 0.0f);
+        System.out.printf("Generated flat-height tiles=%d, height=%.2f, elapsed=%.3f ms, "
+                        + "sharedHeight=%s, estimatedPayloadSaved=%d bytes (%.1f MiB), memory=[%s]%n",
+                tileCount, height, elapsedNanos.get() / 1_000_000.0, shared,
+                payloadBytesSaved, payloadBytesSaved / (1024.0 * 1024.0), memory);
     }
 
     private static void initializeGeneratedTile(Tile tile, float[] heights, int[] intHeights, int waterLevel) {

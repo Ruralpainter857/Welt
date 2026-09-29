@@ -279,29 +279,64 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
         synchronized (this) {
             if (tall) {
-                ensureWriteable(TALL_HEIGHTMAP);
+                final int firstRawHeight = (int) ((heights[0] - minHeight) * 256);
+                boolean uniformHeight = true;
+                for (int i = 1; i < heights.length; i++) {
+                    if ((int) ((heights[i] - minHeight) * 256) != firstRawHeight) {
+                        uniformHeight = false;
+                        break;
+                    }
+                }
+                if (uniformHeight) {
+                    setSharedTallHeightMapBuffer(uniformTallHeightMapBuffer(firstRawHeight));
+                } else {
+                    ensureWriteable(TALL_HEIGHTMAP);
+                }
                 final short rawWaterLevel = (short) (waterLevel - minHeight);
                 if (rawWaterLevel == 0) {
                     setSharedTallWaterLevelBuffer(DEFAULT_TALL_WATERLEVEL_BUFFER);
                 } else {
                     ensureWriteable(TALL_WATERLEVEL);
                 }
-                for (int i = 0; i < heights.length; i++) {
-                    final int rawHeight = (int) ((heights[i] - minHeight) * 256);
-                    tallHeightMap[i] = rawHeight;
+                if (uniformHeight) {
+                    Arrays.fill(intHeights, Math.round(firstRawHeight / 256f + minHeight));
                     if (rawWaterLevel != 0) {
-                        tallWaterLevel[i] = rawWaterLevel;
+                        Arrays.fill(tallWaterLevel, rawWaterLevel);
                     }
-                    intHeights[i] = Math.round(rawHeight / 256f + minHeight);
+                } else {
+                    for (int i = 0; i < heights.length; i++) {
+                        final int rawHeight = (int) ((heights[i] - minHeight) * 256);
+                        tallHeightMap[i] = rawHeight;
+                        if (rawWaterLevel != 0) {
+                            tallWaterLevel[i] = rawWaterLevel;
+                        }
+                        intHeights[i] = Math.round(rawHeight / 256f + minHeight);
+                    }
                 }
             } else {
-                ensureWriteable(HEIGHTMAP);
+                final short firstRawHeight = (short) ((heights[0] - minHeight) * 256);
+                boolean uniformHeight = true;
+                for (int i = 1; i < heights.length; i++) {
+                    if ((short) ((heights[i] - minHeight) * 256) != firstRawHeight) {
+                        uniformHeight = false;
+                        break;
+                    }
+                }
+                if (uniformHeight) {
+                    setSharedHeightMapBuffer(uniformHeightMapBuffer(firstRawHeight));
+                } else {
+                    ensureWriteable(HEIGHTMAP);
+                }
                 final byte rawWaterLevel = (byte) (waterLevel - minHeight);
                 setSharedWaterLevelBuffer(uniformWaterLevelBuffer(rawWaterLevel));
-                for (int i = 0; i < heights.length; i++) {
-                    final short rawHeight = (short) ((heights[i] - minHeight) * 256);
-                    heightMap[i] = rawHeight;
-                    intHeights[i] = Math.round((rawHeight & 0xFFFF) / 256f + minHeight);
+                if (uniformHeight) {
+                    Arrays.fill(intHeights, Math.round((firstRawHeight & 0xFFFF) / 256f + minHeight));
+                } else {
+                    for (int i = 0; i < heights.length; i++) {
+                        final short rawHeight = (short) ((heights[i] - minHeight) * 256);
+                        heightMap[i] = rawHeight;
+                        intHeights[i] = Math.round((rawHeight & 0xFFFF) / 256f + minHeight);
+                    }
                 }
             }
         }
@@ -1571,8 +1606,8 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         } else {
             // The transformation does not affect intra-tile coordinates, so just copy the buffers without transforming them
             transformedTile = new Tile(transformedCoords.x >> TILE_SIZE_BITS, transformedCoords.y >> TILE_SIZE_BITS, minHeight, maxHeight, false);
-            transformedTile.heightMap = (heightMap == DEFAULT_HEIGHTMAP_BUFFER) ? DEFAULT_HEIGHTMAP_BUFFER : copyObject(heightMap);
-            transformedTile.tallHeightMap = (tallHeightMap == DEFAULT_TALL_HEIGHTMAP_BUFFER) ? DEFAULT_TALL_HEIGHTMAP_BUFFER : copyObject(tallHeightMap);
+            transformedTile.heightMap = isSharedUniformHeightMapBuffer(heightMap) ? heightMap : copyObject(heightMap);
+            transformedTile.tallHeightMap = isSharedUniformTallHeightMapBuffer(tallHeightMap) ? tallHeightMap : copyObject(tallHeightMap);
             transformedTile.terrain = (terrain == DEFAULT_TERRAIN_BUFFER) ? DEFAULT_TERRAIN_BUFFER : terrain.clone();
             transformedTile.waterLevel = isSharedUniformWaterLevelBuffer(waterLevel) ? waterLevel : copyObject(waterLevel);
             transformedTile.tallWaterLevel = (tallWaterLevel == DEFAULT_TALL_WATERLEVEL_BUFFER) ? DEFAULT_TALL_WATERLEVEL_BUFFER : copyObject(tallWaterLevel);
@@ -1964,15 +1999,15 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                 switch (buffer) {
                     case HEIGHTMAP:
                         heightMap = undoManager.getBufferForEditing(HEIGHTMAP_BUFFER_KEY);
-                        if (heightMap == DEFAULT_HEIGHTMAP_BUFFER) {
-                            heightMap = DEFAULT_HEIGHTMAP_BUFFER.clone();
+                        if (isSharedUniformHeightMapBuffer(heightMap)) {
+                            heightMap = heightMap.clone();
                             undoManager.addBuffer(HEIGHTMAP_BUFFER_KEY, heightMap, this);
                         }
                         break;
                     case TALL_HEIGHTMAP:
                         tallHeightMap = undoManager.getBufferForEditing(TALL_HEIGHTMAP_BUFFER_KEY);
-                        if (tallHeightMap == DEFAULT_TALL_HEIGHTMAP_BUFFER) {
-                            tallHeightMap = DEFAULT_TALL_HEIGHTMAP_BUFFER.clone();
+                        if (isSharedUniformTallHeightMapBuffer(tallHeightMap)) {
+                            tallHeightMap = tallHeightMap.clone();
                             undoManager.addBuffer(TALL_HEIGHTMAP_BUFFER_KEY, tallHeightMap, this);
                         }
                         break;
@@ -2054,9 +2089,9 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     private boolean isSharedBuffer(TileBuffer buffer) {
         switch (buffer) {
             case HEIGHTMAP:
-                return heightMap == DEFAULT_HEIGHTMAP_BUFFER;
+                return isSharedUniformHeightMapBuffer(heightMap);
             case TALL_HEIGHTMAP:
-                return tallHeightMap == DEFAULT_TALL_HEIGHTMAP_BUFFER;
+                return isSharedUniformTallHeightMapBuffer(tallHeightMap);
             case TERRAIN:
                 return terrain == DEFAULT_TERRAIN_BUFFER;
             case WATERLEVEL:
@@ -2075,10 +2110,10 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     private void copySharedBuffer(TileBuffer buffer) {
         switch (buffer) {
             case HEIGHTMAP:
-                heightMap = DEFAULT_HEIGHTMAP_BUFFER.clone();
+                heightMap = heightMap.clone();
                 break;
             case TALL_HEIGHTMAP:
-                tallHeightMap = DEFAULT_TALL_HEIGHTMAP_BUFFER.clone();
+                tallHeightMap = tallHeightMap.clone();
                 break;
             case TERRAIN:
                 terrain = DEFAULT_TERRAIN_BUFFER.clone();
@@ -2097,6 +2132,30 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                 break;
             default:
                 throw new IllegalArgumentException("Not a shareable tile buffer: " + buffer);
+        }
+    }
+
+    private void setSharedHeightMapBuffer(short[] sharedBuffer) {
+        if (undoManager == null) {
+            heightMap = sharedBuffer;
+        } else {
+            undoManager.getBufferForEditing(HEIGHTMAP_BUFFER_KEY);
+            heightMap = sharedBuffer;
+            undoManager.addBuffer(HEIGHTMAP_BUFFER_KEY, sharedBuffer, this);
+            readableBuffers.add(HEIGHTMAP);
+            writeableBuffers.add(HEIGHTMAP);
+        }
+    }
+
+    private void setSharedTallHeightMapBuffer(int[] sharedBuffer) {
+        if (undoManager == null) {
+            tallHeightMap = sharedBuffer;
+        } else {
+            undoManager.getBufferForEditing(TALL_HEIGHTMAP_BUFFER_KEY);
+            tallHeightMap = sharedBuffer;
+            undoManager.addBuffer(TALL_HEIGHTMAP_BUFFER_KEY, sharedBuffer, this);
+            readableBuffers.add(TALL_HEIGHTMAP);
+            writeableBuffers.add(TALL_HEIGHTMAP);
         }
     }
 
@@ -2121,6 +2180,89 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
             undoManager.addBuffer(TALL_WATERLEVEL_BUFFER_KEY, sharedBuffer, this);
             readableBuffers.add(TALL_WATERLEVEL);
             writeableBuffers.add(TALL_WATERLEVEL);
+        }
+    }
+
+    private static short[] uniformHeightMapBuffer(short value) {
+        synchronized (UNIFORM_HEIGHTMAP_BUFFER_LOCK) {
+            final int key = value & 0xFFFF;
+            if (cachedUniformHeightMapValue != key) {
+                if (value == 0) {
+                    cachedUniformHeightMapBuffer = DEFAULT_HEIGHTMAP_BUFFER;
+                } else {
+                    final short[] buffer = new short[TILE_SIZE * TILE_SIZE];
+                    Arrays.fill(buffer, value);
+                    synchronized (SHARED_HEIGHTMAP_BUFFERS) {
+                        SHARED_HEIGHTMAP_BUFFERS.add(buffer);
+                    }
+                    cachedUniformHeightMapBuffer = buffer;
+                }
+                cachedUniformHeightMapValue = key;
+            }
+            return cachedUniformHeightMapBuffer;
+        }
+    }
+
+    private static int[] uniformTallHeightMapBuffer(int value) {
+        synchronized (UNIFORM_HEIGHTMAP_BUFFER_LOCK) {
+            if (cachedUniformTallHeightMapValue != value) {
+                if (value == 0) {
+                    cachedUniformTallHeightMapBuffer = DEFAULT_TALL_HEIGHTMAP_BUFFER;
+                } else {
+                    final int[] buffer = new int[TILE_SIZE * TILE_SIZE];
+                    Arrays.fill(buffer, value);
+                    synchronized (SHARED_TALL_HEIGHTMAP_BUFFERS) {
+                        SHARED_TALL_HEIGHTMAP_BUFFERS.add(buffer);
+                    }
+                    cachedUniformTallHeightMapBuffer = buffer;
+                }
+                cachedUniformTallHeightMapValue = value;
+            }
+            return cachedUniformTallHeightMapBuffer;
+        }
+    }
+
+    private static short[] internUniformHeightMapBuffer(short[] values) {
+        if (isSharedUniformHeightMapBuffer(values) || (values.length != TILE_SIZE * TILE_SIZE)) {
+            return values;
+        }
+        final short value = values[0];
+        for (int index = 1; index < values.length; index++) {
+            if (values[index] != value) {
+                return values;
+            }
+        }
+        return uniformHeightMapBuffer(value);
+    }
+
+    private static int[] internUniformTallHeightMapBuffer(int[] values) {
+        if (isSharedUniformTallHeightMapBuffer(values) || (values.length != TILE_SIZE * TILE_SIZE)) {
+            return values;
+        }
+        final int value = values[0];
+        for (int index = 1; index < values.length; index++) {
+            if (values[index] != value) {
+                return values;
+            }
+        }
+        return uniformTallHeightMapBuffer(value);
+    }
+
+    private static boolean isSharedUniformHeightMapBuffer(short[] buffer) {
+        if (buffer == null) {
+            return false;
+        }
+        synchronized (SHARED_HEIGHTMAP_BUFFERS) {
+            return SHARED_HEIGHTMAP_BUFFERS.contains(buffer);
+        }
+    }
+
+    private static boolean isSharedUniformTallHeightMapBuffer(int[] buffer) {
+        if (buffer == null) {
+            return false;
+        }
+        synchronized (SHARED_TALL_HEIGHTMAP_BUFFERS) {
+            return SHARED_TALL_HEIGHTMAP_BUFFERS.contains(buffer);
         }
     }
 
@@ -2170,18 +2312,6 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
             return false;
         }
         for (short value: values) {
-            if (value != 0) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static boolean isAllZero(int[] values) {
-        if (values.length != TILE_SIZE * TILE_SIZE) {
-            return false;
-        }
-        for (int value: values) {
             if (value != 0) {
                 return false;
             }
@@ -2295,10 +2425,10 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         final byte[] currentWaterLevel = waterLevel;
         final short[] currentTallWaterLevel = tallWaterLevel;
         try {
-            if (currentHeightMap == DEFAULT_HEIGHTMAP_BUFFER) {
+            if (isSharedUniformHeightMapBuffer(currentHeightMap)) {
                 heightMap = currentHeightMap.clone();
             }
-            if (currentTallHeightMap == DEFAULT_TALL_HEIGHTMAP_BUFFER) {
+            if (isSharedUniformTallHeightMapBuffer(currentTallHeightMap)) {
                 tallHeightMap = currentTallHeightMap.clone();
             }
             if (currentTerrain == DEFAULT_TERRAIN_BUFFER) {
@@ -2339,11 +2469,11 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
             maxHeight = 128;
             tall = false;
         }
-        if ((heightMap != null) && (heightMap != DEFAULT_HEIGHTMAP_BUFFER) && isAllZero(heightMap)) {
-            heightMap = DEFAULT_HEIGHTMAP_BUFFER;
+        if (heightMap != null) {
+            heightMap = internUniformHeightMapBuffer(heightMap);
         }
-        if ((tallHeightMap != null) && (tallHeightMap != DEFAULT_TALL_HEIGHTMAP_BUFFER) && isAllZero(tallHeightMap)) {
-            tallHeightMap = DEFAULT_TALL_HEIGHTMAP_BUFFER;
+        if (tallHeightMap != null) {
+            tallHeightMap = internUniformTallHeightMapBuffer(tallHeightMap);
         }
         if ((terrain != null) && (terrain != DEFAULT_TERRAIN_BUFFER) && isAllZero(terrain)) {
             terrain = DEFAULT_TERRAIN_BUFFER;
@@ -2403,11 +2533,23 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     private static final Map<Layer, BitSet> DEFAULT_BIT_LAYER_DATA_BUFFER = Collections.emptyMap();
     private static final byte[] DEFAULT_WATERLEVEL_BUFFER = new byte[TILE_SIZE * TILE_SIZE];
     private static final short[] DEFAULT_TALL_WATERLEVEL_BUFFER = new short[TILE_SIZE * TILE_SIZE];
+    // Height-map sharing retains at most one non-zero buffer per tile height format.
+    private static final Object UNIFORM_HEIGHTMAP_BUFFER_LOCK = new Object();
+    private static final Set<short[]> SHARED_HEIGHTMAP_BUFFERS =
+            Collections.newSetFromMap(new WeakHashMap<>());
+    private static final Set<int[]> SHARED_TALL_HEIGHTMAP_BUFFERS =
+            Collections.newSetFromMap(new WeakHashMap<>());
+    private static short[] cachedUniformHeightMapBuffer = DEFAULT_HEIGHTMAP_BUFFER;
+    private static int cachedUniformHeightMapValue;
+    private static int[] cachedUniformTallHeightMapBuffer = DEFAULT_TALL_HEIGHTMAP_BUFFER;
+    private static int cachedUniformTallHeightMapValue;
     // Normal water levels have only 256 raw values, so this cache has a fixed 4 MiB maximum.
     private static final ConcurrentMap<Integer, byte[]> UNIFORM_WATERLEVEL_BUFFER_CACHE = new ConcurrentHashMap<>();
     private static final Set<byte[]> SHARED_WATERLEVEL_BUFFERS = ConcurrentHashMap.newKeySet();
 
     static {
+        SHARED_HEIGHTMAP_BUFFERS.add(DEFAULT_HEIGHTMAP_BUFFER);
+        SHARED_TALL_HEIGHTMAP_BUFFERS.add(DEFAULT_TALL_HEIGHTMAP_BUFFER);
         UNIFORM_WATERLEVEL_BUFFER_CACHE.put(0, DEFAULT_WATERLEVEL_BUFFER);
         SHARED_WATERLEVEL_BUFFERS.add(DEFAULT_WATERLEVEL_BUFFER);
     }
