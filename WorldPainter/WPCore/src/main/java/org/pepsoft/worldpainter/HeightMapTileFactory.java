@@ -617,7 +617,10 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 heightMapOpcodes[index] = 13;
                 heightMapValues[index] = noise.getHeight();
                 heightMapScales[index] = 1.0 / (Constants.LARGE_BLOBS * noise.getScale());
-                heightMapOctaves[index] = noise.getOctaves();
+                heightMapOctaves[index] = 0x4000_0000
+                        | noise.getOctaves()
+                        | (noise.getNoiseType().ordinal() << 8)
+                        | (noise.getFractalType().ordinal() << 16);
                 heightMapSeeds[index] = noise.getSeed() + noise.getSeedOffset();
                 heightMapFastNoiseCount++;
                 heightMapNodeCount++;

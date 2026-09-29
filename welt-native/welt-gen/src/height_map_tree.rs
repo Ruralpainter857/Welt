@@ -20,6 +20,8 @@ pub enum HeightMapNode {
         frequency: f64,
         octaves: i32,
         effective_seed: i64,
+        noise_type: i32,
+        fractal_type: i32,
     },
     Mandelbrot,
     Banded {
@@ -82,9 +84,7 @@ impl NoiseMapEvaluator {
                 map.fill_bulk(origin_x, origin_y, width, height, output)?;
                 Ok(())
             }
-            Self::FastNoiseLite(map) => {
-                map.fill_bulk(origin_x, origin_y, width, height, output)
-            }
+            Self::FastNoiseLite(map) => map.fill_bulk(origin_x, origin_y, width, height, output),
         }
     }
 }
@@ -95,7 +95,14 @@ struct FastNoiseLiteHeightMapBulk {
 }
 
 impl FastNoiseLiteHeightMapBulk {
-    fn new(height: f64, frequency: f64, octaves: i32, effective_seed: i64) -> Option<Self> {
+    fn new(
+        height: f64,
+        frequency: f64,
+        octaves: i32,
+        effective_seed: i64,
+        noise_type_code: i32,
+        fractal_type_code: i32,
+    ) -> Option<Self> {
         if !height.is_finite()
             || !frequency.is_finite()
             || frequency <= 0.0
@@ -103,9 +110,25 @@ impl FastNoiseLiteHeightMapBulk {
         {
             return None;
         }
+        let noise_type = match noise_type_code {
+            0 => NoiseType::OpenSimplex2,
+            1 => NoiseType::OpenSimplex2S,
+            2 => NoiseType::Cellular,
+            3 => NoiseType::Perlin,
+            4 => NoiseType::ValueCubic,
+            5 => NoiseType::Value,
+            _ => return None,
+        };
+        let fractal_type = match fractal_type_code {
+            0 => FractalType::None,
+            1 => FractalType::FBm,
+            2 => FractalType::Ridged,
+            3 => FractalType::PingPong,
+            _ => return None,
+        };
         let mut noise = FastNoiseLite::with_seed(effective_seed as i32);
-        noise.set_noise_type(Some(NoiseType::OpenSimplex2));
-        noise.set_fractal_type(Some(FractalType::FBm));
+        noise.set_noise_type(Some(noise_type));
+        noise.set_fractal_type(Some(fractal_type));
         noise.set_fractal_octaves(Some(octaves));
         noise.set_fractal_lacunarity(Some(2.0));
         noise.set_fractal_gain(Some(0.5));
@@ -260,12 +283,16 @@ pub fn fill_height_map_tree(
                 frequency,
                 octaves,
                 effective_seed,
+                noise_type,
+                fractal_type,
             } => {
                 let Some(map) = FastNoiseLiteHeightMapBulk::new(
                     height,
                     frequency,
                     octaves,
                     effective_seed,
+                    noise_type,
+                    fractal_type,
                 ) else {
                     return Err(HeightMapTreeError::InvalidProgram);
                 };
@@ -539,12 +566,16 @@ pub fn fill_height_map_tree_points(
                 frequency,
                 octaves,
                 effective_seed,
+                noise_type,
+                fractal_type,
             } => {
                 let Some(map) = FastNoiseLiteHeightMapBulk::new(
                     height,
                     frequency,
                     octaves,
                     effective_seed,
+                    noise_type,
+                    fractal_type,
                 ) else {
                     return Err(HeightMapTreeError::InvalidProgram);
                 };
@@ -1136,6 +1167,8 @@ mod tests {
             frequency: 1.0 / (65.537_f64 * 2.25),
             octaves: 5,
             effective_seed: 0x1234_5678_9abc_def0,
+            noise_type: 0,
+            fractal_type: 1,
         }];
         let (origin_x, origin_y, width, height) = (-31, 47, 19, 11);
         let mut grid = vec![f64::NAN; width * height];
@@ -1151,7 +1184,11 @@ mod tests {
         let mut points = vec![f64::NAN; width * height];
         fill_height_map_tree_points(&nodes, &xs, &ys, &mut points).unwrap();
         for (index, (&grid_value, &point_value)) in grid.iter().zip(&points).enumerate() {
-            assert_eq!(grid_value.to_bits(), point_value.to_bits(), "sample {index}");
+            assert_eq!(
+                grid_value.to_bits(),
+                point_value.to_bits(),
+                "sample {index}"
+            );
         }
     }
 

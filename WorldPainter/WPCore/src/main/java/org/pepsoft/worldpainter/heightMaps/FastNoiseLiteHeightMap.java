@@ -68,6 +68,32 @@ public final class FastNoiseLiteHeightMap extends AbstractHeightMap {
         rebuildNoise();
     }
 
+    public FastNoiseLite.NoiseType getNoiseType() {
+        return noiseType;
+    }
+
+    public void setNoiseType(FastNoiseLite.NoiseType noiseType) {
+        if (noiseType == null) {
+            throw new IllegalArgumentException("Noise type must not be null");
+        }
+        this.noiseType = noiseType;
+        rebuildNoise();
+    }
+
+    public FastNoiseLite.FractalType getFractalType() {
+        return fractalType;
+    }
+
+    public void setFractalType(FastNoiseLite.FractalType fractalType) {
+        if ((fractalType == null)
+                || (fractalType == FastNoiseLite.FractalType.DomainWarpProgressive)
+                || (fractalType == FastNoiseLite.FractalType.DomainWarpIndependent)) {
+            throw new IllegalArgumentException("Unsupported 2D height map fractal type: " + fractalType);
+        }
+        this.fractalType = fractalType;
+        rebuildNoise();
+    }
+
     public long getSeedOffset() {
         return seedOffset;
     }
@@ -94,7 +120,10 @@ public final class FastNoiseLiteHeightMap extends AbstractHeightMap {
     @Override
     public FastNoiseLiteHeightMap clone() {
         FastNoiseLiteHeightMap clone = new FastNoiseLiteHeightMap(name, height, scale, octaves, seedOffset);
+        clone.noiseType = noiseType;
+        clone.fractalType = fractalType;
         clone.setSeed(getSeed());
+        clone.rebuildNoise();
         return clone;
     }
 
@@ -122,8 +151,8 @@ public final class FastNoiseLiteHeightMap extends AbstractHeightMap {
 
     private void rebuildNoise() {
         noise = new FastNoiseLite((int) (seed + seedOffset));
-        noise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-        noise.SetFractalType(FastNoiseLite.FractalType.FBm);
+        noise.SetNoiseType(noiseType);
+        noise.SetFractalType(fractalType);
         noise.SetFractalOctaves(octaves);
         noise.SetFractalLacunarity(2.0f);
         noise.SetFractalGain(0.5f);
@@ -132,6 +161,12 @@ public final class FastNoiseLiteHeightMap extends AbstractHeightMap {
 
     private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
         in.defaultReadObject();
+        if (noiseType == null) {
+            noiseType = FastNoiseLite.NoiseType.OpenSimplex2;
+        }
+        if (fractalType == null) {
+            fractalType = FastNoiseLite.FractalType.FBm;
+        }
         validateSettings();
         rebuildNoise();
     }
@@ -140,6 +175,8 @@ public final class FastNoiseLiteHeightMap extends AbstractHeightMap {
     private double scale;
     private int octaves;
     private final long seedOffset;
+    private FastNoiseLite.NoiseType noiseType = FastNoiseLite.NoiseType.OpenSimplex2;
+    private FastNoiseLite.FractalType fractalType = FastNoiseLite.FractalType.FBm;
     private transient FastNoiseLite noise;
 
     private static final int MAX_OCTAVES = 10;

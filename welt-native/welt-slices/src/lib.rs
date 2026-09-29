@@ -85,6 +85,14 @@ const SET_FLOAT_ARRAY_REGION: usize = 213;
 
 const SLICES_ABI_VERSION: jint = 1;
 
+fn unpack_fast_noise_lite_settings(packed: i32) -> (i32, i32, i32) {
+    if packed & 0x4000_0000 == 0 {
+        (packed, 0, 1)
+    } else {
+        (packed & 0xff, (packed >> 8) & 0xff, (packed >> 16) & 0xff)
+    }
+}
+
 #[derive(Default)]
 struct ResourceNoiseInputs {
     tiny_x: Vec<f64>,
@@ -850,12 +858,18 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                         octaves: raw_octaves[index],
                         effective_seed: raw_seeds[index],
                     },
-                    13 => HeightMapNode::FastNoiseLite {
-                        height: raw_values[index],
-                        frequency: raw_scales[index],
-                        octaves: raw_octaves[index],
-                        effective_seed: raw_seeds[index],
-                    },
+                    13 => {
+                        let (octaves, noise_type, fractal_type) =
+                            unpack_fast_noise_lite_settings(raw_octaves[index]);
+                        HeightMapNode::FastNoiseLite {
+                            height: raw_values[index],
+                            frequency: raw_scales[index],
+                            octaves,
+                            effective_seed: raw_seeds[index],
+                            noise_type,
+                            fractal_type,
+                        }
+                    }
                     8 => HeightMapNode::Mandelbrot,
                     9 | 10 => HeightMapNode::Banded {
                         segment1_length: raw_octaves[index],
@@ -1005,12 +1019,18 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                         octaves: raw_octaves[index],
                         effective_seed: raw_seeds[index],
                     },
-                    13 => HeightMapNode::FastNoiseLite {
-                        height: raw_values[index],
-                        frequency: raw_scales[index],
-                        octaves: raw_octaves[index],
-                        effective_seed: raw_seeds[index],
-                    },
+                    13 => {
+                        let (octaves, noise_type, fractal_type) =
+                            unpack_fast_noise_lite_settings(raw_octaves[index]);
+                        HeightMapNode::FastNoiseLite {
+                            height: raw_values[index],
+                            frequency: raw_scales[index],
+                            octaves,
+                            effective_seed: raw_seeds[index],
+                            noise_type,
+                            fractal_type,
+                        }
+                    }
                     8 => HeightMapNode::Mandelbrot,
                     9 | 10 => HeightMapNode::Banded {
                         segment1_length: raw_octaves[index],

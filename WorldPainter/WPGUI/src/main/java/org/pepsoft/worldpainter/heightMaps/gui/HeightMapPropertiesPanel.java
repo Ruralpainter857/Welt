@@ -8,6 +8,7 @@ package org.pepsoft.worldpainter.heightMaps.gui;
 
 import org.pepsoft.worldpainter.HeightMap;
 import org.pepsoft.worldpainter.heightMaps.*;
+import org.pepsoft.worldpainter.heightMaps.noise.FastNoiseLite;
 
 import javax.swing.*;
 import javax.swing.event.DocumentEvent;
@@ -19,6 +20,7 @@ import java.beans.IntrospectionException;
 import java.beans.Introspector;
 import java.beans.PropertyDescriptor;
 import java.lang.reflect.InvocationTargetException;
+import java.util.function.Consumer;
 
 /**
  *
@@ -51,9 +53,17 @@ public class HeightMapPropertiesPanel extends JPanel {
             addField("Scale:", heightMap, "scale", 0.0, null);
             addField("Octaves:", heightMap, "octaves", 1, 8);
         } else if (heightMap instanceof FastNoiseLiteHeightMap) {
+            FastNoiseLiteHeightMap fastNoise = (FastNoiseLiteHeightMap) heightMap;
             addField("Height:", heightMap, "height", 0.0, null);
             addField("Scale:", heightMap, "scale", 0.0, null);
             addField("Octaves:", heightMap, "octaves", 1, 10);
+            addEnumField("Noise type:", FastNoiseLite.NoiseType.values(), fastNoise.getNoiseType(), fastNoise::setNoiseType, "noiseType");
+            addEnumField("Fractal:", new FastNoiseLite.FractalType[] {
+                    FastNoiseLite.FractalType.None,
+                    FastNoiseLite.FractalType.FBm,
+                    FastNoiseLite.FractalType.Ridged,
+                    FastNoiseLite.FractalType.PingPong
+            }, fastNoise.getFractalType(), fastNoise::setFractalType, "fractalType");
         } else if (heightMap instanceof TransformingHeightMap) {
             addField("X scale:", heightMap, "scaleX", 0, null);
             addField("Y scale:", heightMap, "scaleY", 0, null);
@@ -199,6 +209,27 @@ public class HeightMapPropertiesPanel extends JPanel {
         } catch (IntrospectionException | InvocationTargetException | IllegalAccessException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private <T> void addEnumField(String name, T[] values, T selectedValue, Consumer<T> setter, String propertyName) {
+        GridBagConstraints constraints = new GridBagConstraints();
+        constraints.anchor = GridBagConstraints.NORTHWEST;
+        constraints.insets = new Insets(2, 2, 2, 2);
+        constraints.fill = GridBagConstraints.HORIZONTAL;
+        constraints.anchor = GridBagConstraints.BASELINE_LEADING;
+        add(new JLabel(name), constraints);
+
+        constraints.gridwidth = GridBagConstraints.REMAINDER;
+        constraints.weightx = 1.0;
+        JComboBox<T> field = new JComboBox<>(values);
+        field.setSelectedItem(selectedValue);
+        field.addActionListener(event -> {
+            @SuppressWarnings("unchecked")
+            T value = (T) field.getSelectedItem();
+            setter.accept(value);
+            updateListener(propertyName);
+        });
+        add(field, constraints);
     }
 
     private void updateListener(String propertyName) {
