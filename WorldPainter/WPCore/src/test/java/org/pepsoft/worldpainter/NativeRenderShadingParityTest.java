@@ -5,7 +5,6 @@ import org.pepsoft.util.ColourUtils;
 import org.pepsoft.worldpainter.layers.Biome;
 import org.pepsoft.worldpainter.layers.Frost;
 import org.pepsoft.worldpainter.layers.NotPresent;
-import org.pepsoft.worldpainter.layers.renderers.BiomeRenderer;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.nativeapi.NativeSlices;
@@ -99,6 +98,42 @@ public final class NativeRenderShadingParityTest {
             }
             final int[] actual = original.clone();
             assertTrue("native shading batch should be available", NativeSlices.shadeColours(actual, amounts));
+            assertArrayEquals(expected, actual);
+        } finally {
+            restoreFlag(previousFlag);
+        }
+    }
+
+    @Test
+    public void nativeCompactTileShadingMatchesJavaAt16BitBoundaries() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.RENDER_KEY);
+        Native.setRenderEnabled(true);
+        try {
+            final int[] original = new int[PIXELS];
+            final int[] amounts = new int[PIXELS];
+            final int[] candidates = {0, 1, 64, 128, 192, 255, 256, 257, 512, 4096, 65_534, 65_535};
+            final Random random = new Random(0x57656c745f52314cL);
+            for (int i = 0; i < PIXELS; i++) {
+                original[i] = random.nextInt();
+                final int terrain = candidates[i % candidates.length];
+                final int fluid = candidates[(i * 7 + 3) % candidates.length];
+                amounts[i] = (fluid << 16) | terrain;
+            }
+
+            final int[] expected = original.clone();
+            for (int i = 0; i < expected.length; i++) {
+                final int terrain = amounts[i] & 0xffff;
+                final int fluid = amounts[i] >>> 16;
+                if (terrain != 256 || fluid != 256) {
+                    final int alpha = expected[i] & 0xff00_0000;
+                    expected[i] = ColourUtils.multiply(
+                            ColourUtils.multiply(expected[i], terrain), fluid) | alpha;
+                }
+            }
+            final int[] actual = original.clone();
+            assertTrue("native compact shading batch should be available",
+                    NativeSlices.shadeColoursCompact(actual, amounts));
             assertArrayEquals(expected, actual);
         } finally {
             restoreFlag(previousFlag);
@@ -302,52 +337,46 @@ public final class NativeRenderShadingParityTest {
     @Test
     public void benchmarkTileRendererConstructionMemoryWhenRequested() throws Exception {
         assumeTrue(Boolean.getBoolean("welt.render.tile-construction.benchmark"));
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
         final Dimension dimension = TestData.createDimension(
                 new Rectangle(0, 0, Constants.TILE_SIZE, Constants.TILE_SIZE), 64);
+        final Tile tile = dimension.getTile(0, 0);
+        final BufferedImage image = new BufferedImage(
+                Constants.TILE_SIZE, Constants.TILE_SIZE, BufferedImage.TYPE_INT_ARGB);
         final int rendererCount = 8;
-        for (int i = 0; i < 2; i++) {
-            tileRendererMemorySink = new Object[] {
-                    new TileRenderer(dimension, ColourScheme.DEFAULT, null, 0, true, null),
-                    new BiomeRenderer(null, ColourScheme.DEFAULT)
-            };
-        }
-        tileRendererMemorySink = null;
-        final BenchmarkMemorySupport.Snapshot eagerMemory = measureEagerTileRendererConstruction(
-                dimension, rendererCount);
-        final BenchmarkMemorySupport.Snapshot lazyMemory = measureLazyTileRendererConstruction(
-                dimension, rendererCount);
-        final long savedBytes = eagerMemory.allocatedBytes() - lazyMemory.allocatedBytes();
-        System.out.printf("TileRenderer construction count=%d eager=[%s] lazy=[%s] saved=%.2f MiB, %.2f MiB/renderer%n",
-                rendererCount, eagerMemory, lazyMemory,
-                savedBytes / 1_048_576.0, savedBytes / (1_048_576.0 * rendererCount));
-    }
-
-    private static BenchmarkMemorySupport.Snapshot measureEagerTileRendererConstruction(
-            Dimension dimension, int rendererCount) throws Exception {
-        final Object[] renderers = new Object[rendererCount * 2];
-        final BenchmarkMemorySupport.Snapshot snapshot;
+        final String previousFlag = System.getProperty(Native.RENDER_KEY);
         try {
-            snapshot = BenchmarkMemorySupport.measure(() -> {
-                for (int i = 0; i < rendererCount; i++) {
-                    renderers[i * 2] = new TileRenderer(dimension, ColourScheme.DEFAULT, null, 0, true, null);
-                    renderers[i * 2 + 1] = new BiomeRenderer(null, ColourScheme.DEFAULT);
-                }
-                tileRendererMemorySink = renderers;
-            });
+            for (int i = 0; i < 2; i++) {
+                renderOneTile(dimension, tile, image, false);
+                renderOneTile(dimension, tile, image, true);
+            }
+            final BenchmarkMemorySupport.Snapshot javaMemory = measureTileRendererConstructionAndFirstRender(
+                    dimension, tile, image, rendererCount, false);
+            final BenchmarkMemorySupport.Snapshot nativeMemory = measureTileRendererConstructionAndFirstRender(
+                    dimension, tile, image, rendererCount, true);
+            final long savedBytes = nativeMemory.allocatedBytes() - javaMemory.allocatedBytes();
+            System.out.printf("TileRenderer construction plus first render count=%d java=[%s] native=[%s] "
+                            + "native_extra=%.2f MiB, %.2f MiB/renderer%n",
+                    rendererCount, javaMemory, nativeMemory,
+                    savedBytes / 1_048_576.0, savedBytes / (1_048_576.0 * rendererCount));
         } finally {
-            tileRendererMemorySink = null;
+            restoreFlag(previousFlag);
         }
-        return snapshot;
     }
 
-    private static BenchmarkMemorySupport.Snapshot measureLazyTileRendererConstruction(
-            Dimension dimension, int rendererCount) throws Exception {
+    private static BenchmarkMemorySupport.Snapshot measureTileRendererConstructionAndFirstRender(
+            Dimension dimension, Tile tile, BufferedImage image, int rendererCount,
+            boolean nativeEnabled) throws Exception {
         final TileRenderer[] renderers = new TileRenderer[rendererCount];
         final BenchmarkMemorySupport.Snapshot snapshot;
         try {
             snapshot = BenchmarkMemorySupport.measure(() -> {
+                Native.setRenderEnabled(nativeEnabled);
                 for (int i = 0; i < rendererCount; i++) {
-                    renderers[i] = new TileRenderer(dimension, ColourScheme.DEFAULT, null, 0, true, null);
+                    final TileRenderer renderer = new TileRenderer(
+                            dimension, ColourScheme.DEFAULT, null, 0, true, null);
+                    renderers[i] = renderer;
+                    renderer.renderTile(tile, image, 0, 0);
                 }
                 tileRendererMemorySink = renderers;
             });
@@ -355,6 +384,13 @@ public final class NativeRenderShadingParityTest {
             tileRendererMemorySink = null;
         }
         return snapshot;
+    }
+
+    private static void renderOneTile(Dimension dimension, Tile tile, BufferedImage image,
+                                      boolean nativeEnabled) {
+        Native.setRenderEnabled(nativeEnabled);
+        new TileRenderer(dimension, ColourScheme.DEFAULT, null, 0, true, null)
+                .renderTile(tile, image, 0, 0);
     }
 
     private static void shadeJavaInPlace(int[] pixels, long[] amounts) {

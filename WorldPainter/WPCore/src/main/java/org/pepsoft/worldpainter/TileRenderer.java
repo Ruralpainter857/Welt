@@ -302,7 +302,7 @@ public final class TileRenderer {
         final boolean nativeShading = (zoom == 0) && Native.isRenderEnabled()
                 && NativeLoader.areSlicesAvailable();
         if (nativeShading && (renderShadeAmounts == null)) {
-            renderShadeAmounts = new long[TILE_SIZE * TILE_SIZE];
+            renderShadeAmounts = new int[TILE_SIZE * TILE_SIZE];
         }
         final Graphics2D g2 = (Graphics2D) image.getGraphics();
         try {
@@ -316,16 +316,16 @@ public final class TileRenderer {
                                 || layerValueSnapshot.bitValue(layerValueSnapshot.notPresentBlockLayerIndex, x, y))) {
                             final int offset = x | (y << TILE_SIZE_BITS);
                             renderBuffer[offset] = notPresentColour;
-                            if (nativeShading) renderShadeAmounts[offset] = packShadeAmounts(256, 256);
+                            if (nativeShading) storeShadeAmounts(offset, 256, 256);
                         } else if ((! noOpposites) && oppositesOverlap[x | (y << TILE_SIZE_BITS)] && CEILING_PATTERN[x & 0x7][y & 0x7]) {
                             final int offset = x | (y << TILE_SIZE_BITS);
                             renderBuffer[offset] = 0xff000000;
-                            if (nativeShading) renderShadeAmounts[offset] = packShadeAmounts(256, 256);
+                            if (nativeShading) storeShadeAmounts(offset, 256, 256);
                         } else if (_void && layerValueSnapshot.bitValue(
                                 layerValueSnapshot.voidLayerIndex, x, y)) {
                             final int offset = x | (y << TILE_SIZE_BITS);
                             renderBuffer[offset] = voidColour;
-                            if (nativeShading) renderShadeAmounts[offset] = packShadeAmounts(256, 256);
+                            if (nativeShading) storeShadeAmounts(offset, 256, 256);
                             // TODO still render ReadOnly, and layers which might still be exported over Void
                         } else {
                             int colour = getPixelColour(tile, worldX, worldY, layers, renderers,
@@ -336,7 +336,7 @@ public final class TileRenderer {
                                 final int terrainAmount = getTerrainBrightenAmount();
                                 final int fluidAmount = (intFluidHeightCache[offset] > intHeightCache[offset])
                                         ? getFluidBrightenAmount() : 256;
-                                renderShadeAmounts[offset] = packShadeAmounts(terrainAmount, fluidAmount);
+                                storeShadeAmounts(offset, terrainAmount, fluidAmount);
                                 renderBuffer[offset] = 0xff000000 | colour;
                             } else {
                                 colour = ColourUtils.multiply(colour, getTerrainBrightenAmount());
@@ -349,8 +349,17 @@ public final class TileRenderer {
                     }
                 }
 
-                if (nativeShading && !NativeSlices.shadeColours(renderBuffer, renderShadeAmounts)) {
-                    applyJavaShading();
+                if (nativeShading) {
+                    final boolean shaded = (renderShadeAmountsExact != null)
+                            ? NativeSlices.shadeColours(renderBuffer, renderShadeAmountsExact)
+                            : NativeSlices.shadeColoursCompact(renderBuffer, renderShadeAmounts);
+                    if (!shaded) {
+                        if (renderShadeAmountsExact != null) {
+                            applyJavaShadingExact();
+                        } else {
+                            applyJavaShadingCompact();
+                        }
+                    }
                 }
 
                 g2.drawImage(bufferedImage, dx, dy, null);
@@ -433,9 +442,9 @@ public final class TileRenderer {
         }
     }
 
-    private void applyJavaShading() {
+    private void applyJavaShadingExact() {
         for (int index = 0; index < renderBuffer.length; index++) {
-            final long packed = renderShadeAmounts[index];
+            final long packed = renderShadeAmountsExact[index];
             final int terrainAmount = (int) packed;
             final int fluidAmount = (int) (packed >>> 32);
             if (terrainAmount == 256 && fluidAmount == 256) {
@@ -445,6 +454,44 @@ public final class TileRenderer {
             int colour = ColourUtils.multiply(renderBuffer[index], terrainAmount);
             colour = ColourUtils.multiply(colour, fluidAmount);
             renderBuffer[index] = colour | alpha;
+        }
+    }
+
+    private void applyJavaShadingCompact() {
+        for (int index = 0; index < renderBuffer.length; index++) {
+            final int packed = renderShadeAmounts[index];
+            final int terrainAmount = packed & 0xffff;
+            final int fluidAmount = packed >>> 16;
+            if (terrainAmount == 256 && fluidAmount == 256) {
+                continue;
+            }
+            final int alpha = renderBuffer[index] & 0xff000000;
+            int colour = ColourUtils.multiply(renderBuffer[index], terrainAmount);
+            colour = ColourUtils.multiply(colour, fluidAmount);
+            renderBuffer[index] = colour | alpha;
+        }
+    }
+
+    private void storeShadeAmounts(int index, int terrainAmount, int fluidAmount) {
+        if ((terrainAmount < 0 || terrainAmount > 0xffff
+                || fluidAmount < 0 || fluidAmount > 0xffff)
+                && (renderShadeAmountsExact == null)) {
+            final long[] exactAmounts = new long[renderShadeAmounts.length];
+            final int currentX = index & (TILE_SIZE - 1);
+            final int currentY = index >>> TILE_SIZE_BITS;
+            for (int previous = 0; previous < renderShadeAmounts.length; previous++) {
+                final int previousX = previous & (TILE_SIZE - 1);
+                final int previousY = previous >>> TILE_SIZE_BITS;
+                if ((previousX < currentX) || ((previousX == currentX) && (previousY < currentY))) {
+                    final int packed = renderShadeAmounts[previous];
+                    exactAmounts[previous] = packShadeAmounts(packed & 0xffff, packed >>> 16);
+                }
+            }
+            renderShadeAmountsExact = exactAmounts;
+        }
+        renderShadeAmounts[index] = (fluidAmount << 16) | (terrainAmount & 0xffff);
+        if (renderShadeAmountsExact != null) {
+            renderShadeAmountsExact[index] = packShadeAmounts(terrainAmount, fluidAmount);
         }
     }
 
@@ -636,7 +683,8 @@ public final class TileRenderer {
 
     private final Set<Layer> hiddenLayers = new HashSet<>(Collections.singletonList(FloodWithLava.INSTANCE));
     private final int[] intHeightCache = new int[TILE_SIZE * TILE_SIZE], intFluidHeightCache = new int[TILE_SIZE * TILE_SIZE];
-    private long[] renderShadeAmounts;
+    private int[] renderShadeAmounts;
+    private long[] renderShadeAmountsExact;
     private final float[] floatHeightCache = new float[TILE_SIZE * TILE_SIZE];
     private final BufferedImage bufferedImage;
     private final int[] renderBuffer;

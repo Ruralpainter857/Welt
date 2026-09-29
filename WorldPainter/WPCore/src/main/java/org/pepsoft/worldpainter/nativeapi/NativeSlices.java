@@ -78,6 +78,20 @@ public final class NativeSlices {
         }
     }
 
+    /** Applies two packed 16-bit ColourUtils.multiply amounts to an ARGB tile in place. */
+    public static boolean shadeColoursCompact(final int[] colours, final int[] packedAmounts) {
+        if (!Native.isRenderEnabled() || !NativeLoader.areSlicesAvailable()
+                || colours == null || packedAmounts == null || colours.length == 0
+                || colours.length > 1_048_576 || packedAmounts.length != colours.length) {
+            return false;
+        }
+        try {
+            return nativeShadeColoursCompact(colours, packedAmounts) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     public static double[] noiseHeights(final int originX, final int originY,
                                         final int width, final int height,
                                         final double dHeight, final double scale,
@@ -580,6 +594,7 @@ public final class NativeSlices {
                                                       double[] baseSamples, double[] output);
 
     private static native int nativeShadeColours(int[] colours, long[] packedAmounts);
+    private static native int nativeShadeColoursCompact(int[] colours, int[] packedAmounts);
 
     private static native int nativeFillThemeTerrains(int originX, int originY,
                                                        int width, int height,
