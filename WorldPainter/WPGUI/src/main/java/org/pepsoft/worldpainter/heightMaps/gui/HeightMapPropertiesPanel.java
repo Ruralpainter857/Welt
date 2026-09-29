@@ -50,6 +50,10 @@ public class HeightMapPropertiesPanel extends JPanel {
             addField("Height:", heightMap, "height", 0f, null);
             addField("Scale:", heightMap, "scale", 0.0, null);
             addField("Octaves:", heightMap, "octaves", 1, 8);
+        } else if (heightMap instanceof FastNoiseLiteHeightMap) {
+            addField("Height:", heightMap, "height", 0.0, null);
+            addField("Scale:", heightMap, "scale", 0.0, null);
+            addField("Octaves:", heightMap, "octaves", 1, 10);
         } else if (heightMap instanceof TransformingHeightMap) {
             addField("X scale:", heightMap, "scaleX", 0, null);
             addField("Y scale:", heightMap, "scaleY", 0, null);

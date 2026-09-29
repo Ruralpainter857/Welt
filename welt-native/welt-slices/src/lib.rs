@@ -850,6 +850,12 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                         octaves: raw_octaves[index],
                         effective_seed: raw_seeds[index],
                     },
+                    13 => HeightMapNode::FastNoiseLite {
+                        height: raw_values[index],
+                        frequency: raw_scales[index],
+                        octaves: raw_octaves[index],
+                        effective_seed: raw_seeds[index],
+                    },
                     8 => HeightMapNode::Mandelbrot,
                     9 | 10 => HeightMapNode::Banded {
                         segment1_length: raw_octaves[index],
@@ -996,6 +1002,12 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                     1 => HeightMapNode::Noise {
                         d_height: raw_values[index],
                         scale: raw_scales[index],
+                        octaves: raw_octaves[index],
+                        effective_seed: raw_seeds[index],
+                    },
+                    13 => HeightMapNode::FastNoiseLite {
+                        height: raw_values[index],
+                        frequency: raw_scales[index],
                         octaves: raw_octaves[index],
                         effective_seed: raw_seeds[index],
                     },

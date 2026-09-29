@@ -1,6 +1,7 @@
 //! Bulk evaluator for pure constant/noise/composite height-map expression trees.
 
 use crate::noise_height_map::{NoiseHeightMapBulk, NoiseHeightMapError};
+use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
 
 pub const MAX_PROGRAM_NODES: usize = 64;
 pub const MAX_NOISE_VALUES: usize = 1_048_576;
@@ -11,6 +12,12 @@ pub enum HeightMapNode {
     Noise {
         d_height: f64,
         scale: f64,
+        octaves: i32,
+        effective_seed: i64,
+    },
+    FastNoiseLite {
+        height: f64,
+        frequency: f64,
         octaves: i32,
         effective_seed: i64,
     },
@@ -47,6 +54,97 @@ pub enum HeightMapTreeError {
     AreaOverflow,
     OutputLength { expected: usize, actual: usize },
     Noise(NoiseHeightMapError),
+}
+
+enum NoiseMapEvaluator {
+    Legacy(NoiseHeightMapBulk),
+    FastNoiseLite(FastNoiseLiteHeightMapBulk),
+}
+
+impl NoiseMapEvaluator {
+    fn get_value(&self, x: f64, y: f64) -> f64 {
+        match self {
+            Self::Legacy(map) => map.get_value(x, y),
+            Self::FastNoiseLite(map) => map.get_value(x as f32, y as f32),
+        }
+    }
+
+    fn fill_bulk(
+        &self,
+        origin_x: i32,
+        origin_y: i32,
+        width: usize,
+        height: usize,
+        output: &mut [f64],
+    ) -> Result<(), HeightMapTreeError> {
+        match self {
+            Self::Legacy(map) => {
+                map.fill_bulk(origin_x, origin_y, width, height, output)?;
+                Ok(())
+            }
+            Self::FastNoiseLite(map) => {
+                map.fill_bulk(origin_x, origin_y, width, height, output)
+            }
+        }
+    }
+}
+
+struct FastNoiseLiteHeightMapBulk {
+    noise: FastNoiseLite,
+    height: f64,
+}
+
+impl FastNoiseLiteHeightMapBulk {
+    fn new(height: f64, frequency: f64, octaves: i32, effective_seed: i64) -> Option<Self> {
+        if !height.is_finite()
+            || !frequency.is_finite()
+            || frequency <= 0.0
+            || !(1..=10).contains(&octaves)
+        {
+            return None;
+        }
+        let mut noise = FastNoiseLite::with_seed(effective_seed as i32);
+        noise.set_noise_type(Some(NoiseType::OpenSimplex2));
+        noise.set_fractal_type(Some(FractalType::FBm));
+        noise.set_fractal_octaves(Some(octaves));
+        noise.set_fractal_lacunarity(Some(2.0));
+        noise.set_fractal_gain(Some(0.5));
+        noise.set_frequency(Some(frequency as f32));
+        Some(Self { noise, height })
+    }
+
+    #[inline]
+    fn get_value(&self, x: f32, y: f32) -> f64 {
+        let normalized = (self.noise.get_noise_2d(x, y) + 1.0_f32) * 0.5_f32;
+        f64::from(normalized) * self.height
+    }
+
+    fn fill_bulk(
+        &self,
+        origin_x: i32,
+        origin_y: i32,
+        width: usize,
+        height: usize,
+        output: &mut [f64],
+    ) -> Result<(), HeightMapTreeError> {
+        let area = width
+            .checked_mul(height)
+            .ok_or(HeightMapTreeError::AreaOverflow)?;
+        if output.len() != area {
+            return Err(HeightMapTreeError::OutputLength {
+                expected: area,
+                actual: output.len(),
+            });
+        }
+        for row in 0..height {
+            let y = origin_y.wrapping_add(row as i32) as f32;
+            for col in 0..width {
+                let x = origin_x.wrapping_add(col as i32) as f32;
+                output[row * width + col] = self.get_value(x, y);
+            }
+        }
+        Ok(())
+    }
 }
 
 impl From<NoiseHeightMapError> for HeightMapTreeError {
@@ -148,12 +246,30 @@ pub fn fill_height_map_tree(
                         NoiseHeightMapError::TooManyOctaves(octaves),
                     ));
                 }
-                noise_maps.push(NoiseHeightMapBulk::new(
+                noise_maps.push(NoiseMapEvaluator::Legacy(NoiseHeightMapBulk::new(
                     d_height,
                     scale,
                     octaves,
                     effective_seed,
-                )?);
+                )?));
+                parsed.push(ParsedNode::Noise(noise_maps.len() - 1));
+                depth += 1;
+            }
+            HeightMapNode::FastNoiseLite {
+                height,
+                frequency,
+                octaves,
+                effective_seed,
+            } => {
+                let Some(map) = FastNoiseLiteHeightMapBulk::new(
+                    height,
+                    frequency,
+                    octaves,
+                    effective_seed,
+                ) else {
+                    return Err(HeightMapTreeError::InvalidProgram);
+                };
+                noise_maps.push(NoiseMapEvaluator::FastNoiseLite(map));
                 parsed.push(ParsedNode::Noise(noise_maps.len() - 1));
                 depth += 1;
             }
@@ -409,12 +525,30 @@ pub fn fill_height_map_tree_points(
                 octaves,
                 effective_seed,
             } => {
-                noise_maps.push(NoiseHeightMapBulk::new(
+                noise_maps.push(NoiseMapEvaluator::Legacy(NoiseHeightMapBulk::new(
                     d_height,
                     scale,
                     octaves,
                     effective_seed,
-                )?);
+                )?));
+                parsed.push(ParsedNode::Noise(noise_maps.len() - 1));
+                depth += 1;
+            }
+            HeightMapNode::FastNoiseLite {
+                height,
+                frequency,
+                octaves,
+                effective_seed,
+            } => {
+                let Some(map) = FastNoiseLiteHeightMapBulk::new(
+                    height,
+                    frequency,
+                    octaves,
+                    effective_seed,
+                ) else {
+                    return Err(HeightMapTreeError::InvalidProgram);
+                };
+                noise_maps.push(NoiseMapEvaluator::FastNoiseLite(map));
                 parsed.push(ParsedNode::Noise(noise_maps.len() - 1));
                 depth += 1;
             }
@@ -993,6 +1127,32 @@ mod tests {
         fill_height_map_tree(&[node], origin_x, origin_y, width, height, &mut actual).unwrap();
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn fast_noise_lite_grid_and_explicit_points_match_bit_for_bit() {
+        let nodes = [HeightMapNode::FastNoiseLite {
+            height: 384.0,
+            frequency: 1.0 / (65.537_f64 * 2.25),
+            octaves: 5,
+            effective_seed: 0x1234_5678_9abc_def0,
+        }];
+        let (origin_x, origin_y, width, height) = (-31, 47, 19, 11);
+        let mut grid = vec![f64::NAN; width * height];
+        fill_height_map_tree(&nodes, origin_x, origin_y, width, height, &mut grid).unwrap();
+        let mut xs = Vec::with_capacity(width * height);
+        let mut ys = Vec::with_capacity(width * height);
+        for row in 0..height {
+            for col in 0..width {
+                xs.push(origin_x.wrapping_add(col as i32) as f32);
+                ys.push(origin_y.wrapping_add(row as i32) as f32);
+            }
+        }
+        let mut points = vec![f64::NAN; width * height];
+        fill_height_map_tree_points(&nodes, &xs, &ys, &mut points).unwrap();
+        for (index, (&grid_value, &point_value)) in grid.iter().zip(&points).enumerate() {
+            assert_eq!(grid_value.to_bits(), point_value.to_bits(), "sample {index}");
+        }
     }
 
     #[test]

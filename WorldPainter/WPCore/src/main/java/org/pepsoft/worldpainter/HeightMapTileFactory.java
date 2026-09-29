@@ -6,6 +6,7 @@
 package org.pepsoft.worldpainter;
 
 import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
+import org.pepsoft.worldpainter.heightMaps.FastNoiseLiteHeightMap;
 import org.pepsoft.worldpainter.heightMaps.ConstantHeightMap;
 import org.pepsoft.worldpainter.heightMaps.CombiningHeightMap;
 import org.pepsoft.worldpainter.heightMaps.DifferenceHeightMap;
@@ -174,7 +175,8 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             if (batchFreshSimpleTheme && Native.isGenEnabled()
                     && buffers.prepareHeightMapProgram(batchHeightMap)
                     && (buffers.heightMapNoiseCount > 0 || buffers.heightMapMandelbrotCount > 0
-                    || buffers.heightMapBandedCount > 0 || buffers.heightMapNinePatchCount > 0)) {
+                    || buffers.heightMapBandedCount > 0 || buffers.heightMapNinePatchCount > 0
+                    || buffers.heightMapFastNoiseCount > 0)) {
                 final double[] output = buffers.nativeHeights();
                 if (NativeSlices.fillHeightMapTree(heightMapOriginX, heightMapOriginY,
                         TILE_SIZE, TILE_SIZE, buffers.heightMapNodeCount,
@@ -193,7 +195,8 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                         && areSlopeCoordinatesExactlyRepresentableAsFloats(worldTileX, worldTileY)
                         && buffers.prepareHeightMapProgram(baseHeightMap)
                         && (buffers.heightMapNoiseCount > 0 || buffers.heightMapMandelbrotCount > 0
-                        || buffers.heightMapBandedCount > 0 || buffers.heightMapNinePatchCount > 0)) {
+                        || buffers.heightMapBandedCount > 0 || buffers.heightMapNinePatchCount > 0
+                        || buffers.heightMapFastNoiseCount > 0)) {
                     final double[] baseSamples = buffers.nativeSlopeBaseHeights();
                     if (NativeSlices.fillHeightMapTree(worldTileX - 1, worldTileY - 1,
                             TILE_SIZE + 2, TILE_SIZE + 2, buffers.heightMapNodeCount,
@@ -215,7 +218,8 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 final HeightMap baseHeightMap = transforming.getBaseHeightMap();
                 if (buffers.prepareHeightMapProgram(baseHeightMap)
                         && (buffers.heightMapNoiseCount > 0 || buffers.heightMapMandelbrotCount > 0
-                        || buffers.heightMapBandedCount > 0 || buffers.heightMapNinePatchCount > 0)) {
+                        || buffers.heightMapBandedCount > 0 || buffers.heightMapNinePatchCount > 0
+                        || buffers.heightMapFastNoiseCount > 0)) {
                     final AffineTransform transform = createTransformingHeightMapTransform(transforming);
                     final Point2D.Float coordinates = new Point2D.Float();
                     final float[] xCoordinates = buffers.displacementXCoordinates();
@@ -398,6 +402,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
     private static boolean isBatchSafeHeightMap(HeightMap heightMap) {
         if ((heightMap.getClass() == ConstantHeightMap.class)
                 || (heightMap.getClass() == NoiseHeightMap.class)
+                || (heightMap.getClass() == FastNoiseLiteHeightMap.class)
                 || (heightMap.getClass() == MandelbrotHeightMap.class)
                 || (heightMap.getClass() == NinePatchHeightMap.class)) {
             return true;
@@ -461,6 +466,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
     private static boolean isSerializableHeightMapTree(HeightMap heightMap) {
         if ((heightMap.getClass() == ConstantHeightMap.class)
                 || (heightMap.getClass() == NoiseHeightMap.class)
+                || (heightMap.getClass() == FastNoiseLiteHeightMap.class)
                 || (heightMap.getClass() == MandelbrotHeightMap.class)
                 || (heightMap.getClass() == BandedHeightMap.class)) {
             return true;
@@ -562,6 +568,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         private final double[] bitmapRowSamples = new double[TILE_SIZE];
         private int heightMapNodeCount;
         private int heightMapNoiseCount;
+        private int heightMapFastNoiseCount;
         private int heightMapMandelbrotCount;
         private int heightMapBandedCount;
         private int heightMapNinePatchCount;
@@ -575,6 +582,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         private boolean prepareHeightMapProgram(HeightMap heightMap) {
             heightMapNodeCount = 0;
             heightMapNoiseCount = 0;
+            heightMapFastNoiseCount = 0;
             heightMapMandelbrotCount = 0;
             heightMapBandedCount = 0;
             heightMapNinePatchCount = 0;
@@ -601,6 +609,17 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 heightMapOctaves[index] = noise.getOctaves();
                 heightMapSeeds[index] = noise.getSeed() + noise.getSeedOffset();
                 heightMapNoiseCount++;
+                heightMapNodeCount++;
+                return true;
+            }
+            if (heightMap.getClass() == FastNoiseLiteHeightMap.class) {
+                final FastNoiseLiteHeightMap noise = (FastNoiseLiteHeightMap) heightMap;
+                heightMapOpcodes[index] = 13;
+                heightMapValues[index] = noise.getHeight();
+                heightMapScales[index] = 1.0 / (Constants.LARGE_BLOBS * noise.getScale());
+                heightMapOctaves[index] = noise.getOctaves();
+                heightMapSeeds[index] = noise.getSeed() + noise.getSeedOffset();
+                heightMapFastNoiseCount++;
                 heightMapNodeCount++;
                 return true;
             }
