@@ -2,10 +2,11 @@ package org.pepsoft.worldpainter;
 
 import org.junit.Test;
 import org.pepsoft.util.ColourUtils;
+import org.pepsoft.worldpainter.layers.Biome;
+import org.pepsoft.worldpainter.layers.NotPresent;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.nativeapi.NativeSlices;
-import org.pepsoft.worldpainter.layers.NotPresent;
 
 import java.util.Arrays;
 import java.util.Random;
@@ -78,6 +79,9 @@ public final class NativeRenderShadingParityTest {
                         final float height = 32 + ((x * 7 + y * 11) % 96);
                         tile.setHeight(x, y, height);
                         tile.setWaterLevel(x, y, 62 + ((x + y) % 24));
+                        if (((x & 31) == 0) && ((y & 31) == 0)) {
+                            tile.setLayerValue(Biome.INSTANCE, x, y, 1 + ((x + y) & 7));
+                        }
                         if (x == 4 && y == 8) {
                             tile.setBitLayerValue(org.pepsoft.worldpainter.layers.Void.INSTANCE, x, y, true);
                         } else if (x == 12 && y == 5) {
@@ -88,6 +92,8 @@ public final class NativeRenderShadingParityTest {
             } finally {
                 tile.releaseEvents();
             }
+            assertTrue("stored Biome data should remain in the render layer list",
+                    tile.getLayers().contains(Biome.INSTANCE));
             final int[] javaPixels = renderTile(dimension, tile, false);
             final int[] nativePixels = renderTile(dimension, tile, true);
             assertArrayEquals(javaPixels, nativePixels);
@@ -190,19 +196,35 @@ public final class NativeRenderShadingParityTest {
             final long[] javaNanos = new long[9];
             final long[] nativeNanos = new long[9];
             for (int sample = 0; sample < javaNanos.length; sample++) {
-                Native.setRenderEnabled(false);
-                long start = System.nanoTime();
-                for (int iteration = 0; iteration < 3; iteration++) {
-                    javaRenderer.renderTile(tile, javaImage, 0, 0);
-                }
-                javaNanos[sample] = (System.nanoTime() - start) / 3;
+                if ((sample & 1) == 0) {
+                    Native.setRenderEnabled(false);
+                    long start = System.nanoTime();
+                    for (int iteration = 0; iteration < 3; iteration++) {
+                        javaRenderer.renderTile(tile, javaImage, 0, 0);
+                    }
+                    javaNanos[sample] = (System.nanoTime() - start) / 3;
 
-                Native.setRenderEnabled(true);
-                start = System.nanoTime();
-                for (int iteration = 0; iteration < 3; iteration++) {
-                    nativeRenderer.renderTile(tile, nativeImage, 0, 0);
+                    Native.setRenderEnabled(true);
+                    start = System.nanoTime();
+                    for (int iteration = 0; iteration < 3; iteration++) {
+                        nativeRenderer.renderTile(tile, nativeImage, 0, 0);
+                    }
+                    nativeNanos[sample] = (System.nanoTime() - start) / 3;
+                } else {
+                    Native.setRenderEnabled(true);
+                    long start = System.nanoTime();
+                    for (int iteration = 0; iteration < 3; iteration++) {
+                        nativeRenderer.renderTile(tile, nativeImage, 0, 0);
+                    }
+                    nativeNanos[sample] = (System.nanoTime() - start) / 3;
+
+                    Native.setRenderEnabled(false);
+                    start = System.nanoTime();
+                    for (int iteration = 0; iteration < 3; iteration++) {
+                        javaRenderer.renderTile(tile, javaImage, 0, 0);
+                    }
+                    javaNanos[sample] = (System.nanoTime() - start) / 3;
                 }
-                nativeNanos[sample] = (System.nanoTime() - start) / 3;
             }
             Arrays.sort(javaNanos);
             Arrays.sort(nativeNanos);

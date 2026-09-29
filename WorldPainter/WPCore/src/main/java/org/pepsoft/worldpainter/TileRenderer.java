@@ -192,10 +192,8 @@ public final class TileRenderer {
             seed = 0L;
         }
 
+        // Biome defaults to 255 (no overlay); only stored biome data belongs in this per-pixel list.
         final List<Layer> layerList = new ArrayList<>(tile.getLayers());
-        if (! layerList.contains(Biome.INSTANCE)) {
-            layerList.add(Biome.INSTANCE);
-        }
         layerList.removeAll(hiddenLayers);
         final boolean hideTerrain = hiddenLayers.contains(TERRAIN_AS_LAYER);
         final boolean hideFluids = hiddenLayers.contains(FLUIDS_AS_LAYER);
