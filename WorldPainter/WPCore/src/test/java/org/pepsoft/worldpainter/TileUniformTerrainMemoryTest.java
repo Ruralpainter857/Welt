@@ -2,6 +2,8 @@ package org.pepsoft.worldpainter;
 
 import org.junit.Test;
 import org.pepsoft.util.undo.UndoManager;
+import org.pepsoft.worldpainter.layers.Biome;
+import org.pepsoft.worldpainter.layers.Frost;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -11,6 +13,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -31,6 +34,41 @@ public class TileUniformTerrainMemoryTest {
         assertNotSame(first.terrain, second.terrain);
         assertEquals(otherTerrain, first.getTerrain(17, 29));
         assertEquals(Terrain.GRASS, second.getTerrain(17, 29));
+    }
+
+    @Test
+    public void emptyLayerMapsAreSharedUntilARealEditAndSupportUndo() {
+        final Tile first = new Tile(0, 0, 0, 256);
+        final Tile second = new Tile(1, 0, 0, 256);
+        assertSame(first.layerData, second.layerData);
+        assertSame(first.bitLayerData, second.bitLayerData);
+
+        first.setBitLayerValue(Frost.INSTANCE, 3, 5, false);
+        first.setLayerValue(Biome.INSTANCE, 3, 5, Biome.INSTANCE.getDefaultValue());
+        first.clearLayerData(3, 5, null);
+        assertSame("writing defaults should keep the shared bit map", first.bitLayerData, second.bitLayerData);
+        assertSame("writing defaults should keep the shared value map", first.layerData, second.layerData);
+
+        final UndoManager undoManager = new UndoManager();
+        first.register(undoManager);
+        second.register(undoManager);
+        undoManager.armSavePoint();
+        first.setBitLayerValue(Frost.INSTANCE, 3, 5, true);
+        first.setLayerValue(Biome.INSTANCE, 3, 5, 1);
+
+        assertNotSame(first.bitLayerData, second.bitLayerData);
+        assertNotSame(first.layerData, second.layerData);
+        assertTrue(first.getBitLayerValue(Frost.INSTANCE, 3, 5));
+        assertFalse(second.getBitLayerValue(Frost.INSTANCE, 3, 5));
+        assertEquals(1, first.getLayerValue(Biome.INSTANCE, 3, 5));
+        assertEquals(Biome.INSTANCE.getDefaultValue(), second.getLayerValue(Biome.INSTANCE, 3, 5));
+
+        assertTrue(undoManager.undo());
+        assertFalse(first.getBitLayerValue(Frost.INSTANCE, 3, 5));
+        assertEquals(Biome.INSTANCE.getDefaultValue(), first.getLayerValue(Biome.INSTANCE, 3, 5));
+        assertTrue(undoManager.redo());
+        assertTrue(first.getBitLayerValue(Frost.INSTANCE, 3, 5));
+        assertEquals(1, first.getLayerValue(Biome.INSTANCE, 3, 5));
     }
 
     @Test
@@ -194,6 +232,8 @@ public class TileUniformTerrainMemoryTest {
         assertSame(loaded[0].terrain, loaded[1].terrain);
         assertSame(loaded[0].heightMap, loaded[1].heightMap);
         assertSame(loaded[0].waterLevel, loaded[1].waterLevel);
+        assertSame(loaded[0].layerData, loaded[1].layerData);
+        assertSame(loaded[0].bitLayerData, loaded[1].bitLayerData);
         loaded[0].setTerrain(4, 5, Terrain.values()[1]);
         loaded[0].setHeight(4, 5, 37.0f);
         loaded[0].setWaterLevel(4, 5, 51);

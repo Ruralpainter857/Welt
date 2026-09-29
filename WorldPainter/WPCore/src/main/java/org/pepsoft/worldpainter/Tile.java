@@ -56,8 +56,8 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                 waterLevel = DEFAULT_WATERLEVEL_BUFFER;
             }
             terrain = DEFAULT_TERRAIN_BUFFER;
-            layerData = new HashMap<>();
-            bitLayerData = new HashMap<>();
+            layerData = DEFAULT_LAYER_DATA_BUFFER;
+            bitLayerData = DEFAULT_BIT_LAYER_DATA_BUFFER;
             init();
         }
     }
@@ -1039,8 +1039,13 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
             throw new IllegalArgumentException("Layer is not bit sized");
         }
         synchronized (this) {
-            ensureWriteable(BIT_LAYER_DATA);
+            ensureReadable(BIT_LAYER_DATA);
             BitSet bitSet = bitLayerData.get(layer);
+            if ((bitSet == null) && !value) {
+                return;
+            }
+            ensureWriteable(BIT_LAYER_DATA);
+            bitSet = bitLayerData.get(layer);
             if (bitSet == null) {
                 if (value) {
                     cachedLayers = null;
@@ -1129,8 +1134,13 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
 
     public void setLayerValue(Layer layer, int x, int y, int value) {
         synchronized (this) {
-            ensureWriteable(LAYER_DATA);
+            ensureReadable(LAYER_DATA);
             byte[] layerValues = layerData.get(layer);
+            if ((layerValues == null) && (value == layer.getDefaultValue())) {
+                return;
+            }
+            ensureWriteable(LAYER_DATA);
+            layerValues = layerData.get(layer);
             if (layerValues == null) {
                 if (value == layer.getDefaultValue()) {
                     // There is no data buffer and we're setting the value to the
@@ -1232,49 +1242,55 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     public void clearLayerData(int x, int y, Set<Layer> excludedLayers) {
         final Set<Layer> changedLayers = new HashSet<>();
         synchronized (this) {
-            ensureWriteable(BIT_LAYER_DATA);
-            for (Map.Entry<Layer, BitSet> entry: bitLayerData.entrySet()) {
-                Layer layer = entry.getKey();
-                if ((excludedLayers != null) && excludedLayers.contains(layer)) {
-                    continue;
+            ensureReadable(BIT_LAYER_DATA);
+            if (!bitLayerData.isEmpty()) {
+                ensureWriteable(BIT_LAYER_DATA);
+                for (Map.Entry<Layer, BitSet> entry: bitLayerData.entrySet()) {
+                    Layer layer = entry.getKey();
+                    if ((excludedLayers != null) && excludedLayers.contains(layer)) {
+                        continue;
+                    }
+                    int bitOffset;
+                    if (layer.getDataSize() == Layer.DataSize.BIT) {
+                        bitOffset = x | (y << TILE_SIZE_BITS);
+                    } else {
+                        bitOffset = (x / 16) + (y / 16) * (TILE_SIZE / 16);
+                    }
+                    entry.getValue().set(bitOffset, layer.getDefaultValue() != 0);
+                    changedLayers.add(layer);
                 }
-                int bitOffset;
-                if (layer.getDataSize() == Layer.DataSize.BIT) {
-                    bitOffset = x | (y << TILE_SIZE_BITS);
-                } else {
-                    bitOffset = (x / 16) + (y / 16) * (TILE_SIZE / 16);
-                }
-                entry.getValue().set(bitOffset, layer.getDefaultValue() != 0);
-                changedLayers.add(layer);
             }
-            ensureWriteable(LAYER_DATA);
-            for (Map.Entry<Layer, byte[]> entry: layerData.entrySet()) {
-                Layer layer = entry.getKey();
-                if ((excludedLayers != null) && excludedLayers.contains(layer)) {
-                    continue;
+            ensureReadable(LAYER_DATA);
+            if (!layerData.isEmpty()) {
+                ensureWriteable(LAYER_DATA);
+                for (Map.Entry<Layer, byte[]> entry: layerData.entrySet()) {
+                    Layer layer = entry.getKey();
+                    if ((excludedLayers != null) && excludedLayers.contains(layer)) {
+                        continue;
+                    }
+                    byte[] layerValues = entry.getValue();
+                    switch (layer.getDataSize()) {
+                        case NIBBLE:
+                            int byteOffset = x | (y << TILE_SIZE_BITS);
+                            byte _byte = layerValues[byteOffset / 2];
+                            if (byteOffset % 2 == 0) {
+                                _byte &= 0xF0;
+                                _byte |= layer.getDefaultValue();
+                            } else {
+                                _byte &= 0x0F;
+                                _byte |= (layer.getDefaultValue() << 4);
+                            }
+                            layerValues[byteOffset / 2] = _byte;
+                            break;
+                        case BYTE:
+                            byteOffset = x | (y << TILE_SIZE_BITS);
+                            layerValues[byteOffset] = (byte) layer.getDefaultValue();
+                            break;
+                        default:
+                            throw new InternalError();
+                    }
+                    changedLayers.add(layer);
                 }
-                byte[] layerValues = entry.getValue();
-                switch (layer.getDataSize()) {
-                    case NIBBLE:
-                        int byteOffset = x | (y << TILE_SIZE_BITS);
-                        byte _byte = layerValues[byteOffset / 2];
-                        if (byteOffset % 2 == 0) {
-                            _byte &= 0xF0;
-                            _byte |= layer.getDefaultValue();
-                        } else {
-                            _byte &= 0x0F;
-                            _byte |= (layer.getDefaultValue() << 4);
-                        }
-                        layerValues[byteOffset / 2] = _byte;
-                        break;
-                    case BYTE:
-                        byteOffset = x | (y << TILE_SIZE_BITS);
-                        layerValues[byteOffset] = (byte) layer.getDefaultValue();
-                        break;
-                    default:
-                        throw new InternalError();
-                }
-                changedLayers.add(layer);
             }
         }
         if (! changedLayers.isEmpty()) {
@@ -1560,8 +1576,8 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
             transformedTile.terrain = (terrain == DEFAULT_TERRAIN_BUFFER) ? DEFAULT_TERRAIN_BUFFER : terrain.clone();
             transformedTile.waterLevel = isSharedUniformWaterLevelBuffer(waterLevel) ? waterLevel : copyObject(waterLevel);
             transformedTile.tallWaterLevel = (tallWaterLevel == DEFAULT_TALL_WATERLEVEL_BUFFER) ? DEFAULT_TALL_WATERLEVEL_BUFFER : copyObject(tallWaterLevel);
-            transformedTile.layerData = copyObject(layerData);
-            transformedTile.bitLayerData = copyObject(bitLayerData);
+            transformedTile.layerData = layerData.isEmpty() ? DEFAULT_LAYER_DATA_BUFFER : copyObject(layerData);
+            transformedTile.bitLayerData = bitLayerData.isEmpty() ? DEFAULT_BIT_LAYER_DATA_BUFFER : copyObject(bitLayerData);
             transformedTile.init();
         }
         if (seeds != null) {
@@ -1610,11 +1626,11 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
         if (layerData == null) {
             out.println("Non-bit valued layer data for tile " + x + "," + y + " lost");
-            layerData = new HashMap<>();
+            layerData = DEFAULT_LAYER_DATA_BUFFER;
         }
         if (bitLayerData == null) {
             out.println("Bit valued layer data for tile " + x + "," + y + " lost");
-            bitLayerData = new HashMap<>();
+            bitLayerData = DEFAULT_BIT_LAYER_DATA_BUFFER;
         }
         init();
         return true;
@@ -1795,8 +1811,9 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     }
 
     synchronized void convertBiomeData() {
-        byte[] biomeData = layerData.remove(Biome.INSTANCE);
+        byte[] biomeData = layerData.get(Biome.INSTANCE);
         if (biomeData != null) {
+            layerData.remove(Biome.INSTANCE);
             byte[] newBiomeData = new byte[biomeData.length * 2];
             for (int i = 0; i < biomeData.length; i++) {
                 newBiomeData[i * 2] = (byte) (biomeData[i] & 0x0f);
@@ -1980,8 +1997,22 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                             undoManager.addBuffer(TALL_WATERLEVEL_BUFFER_KEY, tallWaterLevel, this);
                         }
                         break;
+                    case LAYER_DATA:
+                        layerData = undoManager.getBufferForEditing(LAYER_DATA_BUFFER_KEY);
+                        if (layerData == DEFAULT_LAYER_DATA_BUFFER) {
+                            layerData = new HashMap<>();
+                            undoManager.addBuffer(LAYER_DATA_BUFFER_KEY, layerData, this);
+                        }
+                        break;
+                    case BIT_LAYER_DATA:
+                        bitLayerData = undoManager.getBufferForEditing(BIT_LAYER_DATA_BUFFER_KEY);
+                        if (bitLayerData == DEFAULT_BIT_LAYER_DATA_BUFFER) {
+                            bitLayerData = new HashMap<>();
+                            undoManager.addBuffer(BIT_LAYER_DATA_BUFFER_KEY, bitLayerData, this);
+                        }
+                        break;
                     default:
-                        throw new IllegalArgumentException("Not a fixed-size tile buffer: " + buffer);
+                        throw new IllegalArgumentException("Not a shareable tile buffer: " + buffer);
                 }
                 readableBuffers.add(buffer);
                 writeableBuffers.add(buffer);
@@ -2032,6 +2063,10 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                 return isSharedUniformWaterLevelBuffer(waterLevel);
             case TALL_WATERLEVEL:
                 return tallWaterLevel == DEFAULT_TALL_WATERLEVEL_BUFFER;
+            case LAYER_DATA:
+                return layerData == DEFAULT_LAYER_DATA_BUFFER;
+            case BIT_LAYER_DATA:
+                return bitLayerData == DEFAULT_BIT_LAYER_DATA_BUFFER;
             default:
                 return false;
         }
@@ -2054,8 +2089,14 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
             case TALL_WATERLEVEL:
                 tallWaterLevel = DEFAULT_TALL_WATERLEVEL_BUFFER.clone();
                 break;
+            case LAYER_DATA:
+                layerData = new HashMap<>();
+                break;
+            case BIT_LAYER_DATA:
+                bitLayerData = new HashMap<>();
+                break;
             default:
-                throw new IllegalArgumentException("Not a fixed-size tile buffer: " + buffer);
+                throw new IllegalArgumentException("Not a shareable tile buffer: " + buffer);
         }
     }
 
@@ -2313,6 +2354,12 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         if ((tallWaterLevel != null) && (tallWaterLevel != DEFAULT_TALL_WATERLEVEL_BUFFER) && isAllZero(tallWaterLevel)) {
             tallWaterLevel = DEFAULT_TALL_WATERLEVEL_BUFFER;
         }
+        if ((layerData == null) || layerData.isEmpty()) {
+            layerData = DEFAULT_LAYER_DATA_BUFFER;
+        }
+        if ((bitLayerData == null) || bitLayerData.isEmpty()) {
+            bitLayerData = DEFAULT_BIT_LAYER_DATA_BUFFER;
+        }
         if ((seeds != null) && seeds.isEmpty()) {
             seeds = null;
         }
@@ -2352,6 +2399,8 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     private static final short[] DEFAULT_HEIGHTMAP_BUFFER = new short[TILE_SIZE * TILE_SIZE];
     private static final int[] DEFAULT_TALL_HEIGHTMAP_BUFFER = new int[TILE_SIZE * TILE_SIZE];
     private static final byte[] DEFAULT_TERRAIN_BUFFER = new byte[TILE_SIZE * TILE_SIZE];
+    private static final Map<Layer, byte[]> DEFAULT_LAYER_DATA_BUFFER = Collections.emptyMap();
+    private static final Map<Layer, BitSet> DEFAULT_BIT_LAYER_DATA_BUFFER = Collections.emptyMap();
     private static final byte[] DEFAULT_WATERLEVEL_BUFFER = new byte[TILE_SIZE * TILE_SIZE];
     private static final short[] DEFAULT_TALL_WATERLEVEL_BUFFER = new short[TILE_SIZE * TILE_SIZE];
     // Normal water levels have only 256 raw values, so this cache has a fixed 4 MiB maximum.
