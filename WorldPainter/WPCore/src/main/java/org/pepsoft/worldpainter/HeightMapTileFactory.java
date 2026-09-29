@@ -340,15 +340,28 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                         heights, myWaterHeight, buffers.intHeights);
                 final SimpleTheme simpleTheme = (SimpleTheme) theme;
                 final byte[] terrainOrdinals = buffers.terrainOrdinals;
+                int lowestThemeHeight = Integer.MAX_VALUE;
+                int highestThemeHeight = Integer.MIN_VALUE;
                 for (int x = 0; x < TILE_SIZE; x++) {
                     for (int y = 0; y < TILE_SIZE; y++) {
                         final int index = x | (y << TILE_SIZE_BITS);
+                        final int quantisedHeight = intHeights[index];
+                        lowestThemeHeight = Math.min(lowestThemeHeight, quantisedHeight);
+                        highestThemeHeight = Math.max(highestThemeHeight, quantisedHeight);
                         terrainOrdinals[index] = (byte) simpleTheme
-                                .getTerrainForFreshTile(tile, x, y, intHeights[index]).ordinal();
-                        simpleTheme.applyLayersToFreshTile(tile, x, y, intHeights[index]);
+                                .getTerrainForFreshTile(tile, x, y, quantisedHeight).ordinal();
                     }
                 }
                 tile.initializeTerrainOrdinals(terrainOrdinals);
+                if (!simpleTheme.applyDeterministicLayersToFreshTile(tile, intHeights,
+                        lowestThemeHeight, highestThemeHeight, terrainOrdinals)) {
+                    for (int x = 0; x < TILE_SIZE; x++) {
+                        for (int y = 0; y < TILE_SIZE; y++) {
+                            simpleTheme.applyLayersToFreshTile(tile, x, y,
+                                    intHeights[x | (y << TILE_SIZE_BITS)]);
+                        }
+                    }
+                }
                 return tile;
             }
             for (int x = 0; x < TILE_SIZE; x++) {

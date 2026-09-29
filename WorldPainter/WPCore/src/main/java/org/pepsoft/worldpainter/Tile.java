@@ -326,6 +326,105 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     }
 
     /**
+     * Initializes one layer from caller-owned values on a fresh tile. The tile
+     * must have events inhibited; its copy-on-write buffers and deferred layer
+     * notification are still handled through the normal Tile mechanisms.
+     */
+    public void initializeLayerValues(Layer layer, byte[] values) {
+        if (layer == null) {
+            throw new NullPointerException("layer");
+        }
+        final int area = TILE_SIZE * TILE_SIZE;
+        if ((values == null) || (values.length != area)) {
+            throw new IllegalArgumentException("Expected one layer value for every tile cell");
+        }
+        final DataSize dataSize = layer.getDataSize();
+        if ((dataSize != Layer.DataSize.BIT) && (dataSize != Layer.DataSize.BIT_PER_CHUNK)
+                && (dataSize != Layer.DataSize.NIBBLE) && (dataSize != Layer.DataSize.BYTE)) {
+            throw new IllegalArgumentException("Unsupported layer data size " + dataSize);
+        }
+        final int maxValue = dataSize.maxValue;
+        final int defaultValue = layer.getDefaultValue();
+        boolean hasNonDefaultValue = false;
+        for (byte rawValue : values) {
+            final int value = rawValue & 0xFF;
+            if (value > maxValue) {
+                throw new IllegalArgumentException("Illegal value " + value + " for " + dataSize + " layer " + layer);
+            }
+            hasNonDefaultValue |= ((dataSize == Layer.DataSize.BIT) || (dataSize == Layer.DataSize.BIT_PER_CHUNK))
+                    ? value != 0 : value != defaultValue;
+        }
+
+        synchronized (this) {
+            if (eventInhibitionCounter == 0) {
+                throw new IllegalStateException("Bulk layer initialisation requires inhibited events");
+            }
+            if ((dataSize == Layer.DataSize.BIT) || (dataSize == Layer.DataSize.BIT_PER_CHUNK)) {
+                ensureReadable(BIT_LAYER_DATA);
+                if (bitLayerData.containsKey(layer)) {
+                    throw new IllegalStateException("Layer is already initialized on this tile: " + layer);
+                }
+                if (!hasNonDefaultValue) {
+                    return;
+                }
+                ensureWriteable(BIT_LAYER_DATA);
+                final int bitCount = (dataSize == Layer.DataSize.BIT) ? area : area / 256;
+                final BitSet bitSet = new BitSet(bitCount);
+                if (dataSize == Layer.DataSize.BIT) {
+                    for (int index = 0; index < area; index++) {
+                        if (values[index] != 0) {
+                            bitSet.set(index);
+                        }
+                    }
+                } else {
+                    for (int index = 0; index < area; index++) {
+                        if (values[index] != 0) {
+                            final int x = index & TILE_SIZE_MASK;
+                            final int y = index >> TILE_SIZE_BITS;
+                            bitSet.set((x / 16) + (y / 16) * (TILE_SIZE / 16));
+                        }
+                    }
+                }
+                bitLayerData.put(layer, bitSet);
+            } else {
+                ensureReadable(LAYER_DATA);
+                if (layerData.containsKey(layer)) {
+                    throw new IllegalStateException("Layer is already initialized on this tile: " + layer);
+                }
+                if (!hasNonDefaultValue) {
+                    return;
+                }
+                ensureWriteable(LAYER_DATA);
+                final byte[] layerValues;
+                if (dataSize == Layer.DataSize.NIBBLE) {
+                    layerValues = new byte[area / 2];
+                    if (defaultValue != 0) {
+                        Arrays.fill(layerValues, (byte) (defaultValue << 4 | defaultValue));
+                    }
+                    for (int index = 0; index < area; index++) {
+                        final int byteOffset = index / 2;
+                        final int value = values[index] & 0xFF;
+                        if ((index & 1) == 0) {
+                            layerValues[byteOffset] = (byte) ((layerValues[byteOffset] & 0xF0) | value);
+                        } else {
+                            layerValues[byteOffset] = (byte) ((layerValues[byteOffset] & 0x0F) | (value << 4));
+                        }
+                    }
+                } else {
+                    layerValues = new byte[area];
+                    if (defaultValue != 0) {
+                        Arrays.fill(layerValues, (byte) defaultValue);
+                    }
+                    System.arraycopy(values, 0, layerValues, 0, area);
+                }
+                layerData.put(layer, layerValues);
+            }
+            cachedLayers = null;
+        }
+        layerDataChanged(layer);
+    }
+
+    /**
      * Get the raw height value. This is the height times 256 (for added precision) and zero-based rather than adjusted
      * for {@code minHeight}.
      */

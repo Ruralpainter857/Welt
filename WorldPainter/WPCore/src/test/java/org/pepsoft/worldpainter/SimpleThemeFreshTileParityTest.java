@@ -17,9 +17,13 @@ import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.ShelvingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SlopeHeightMap;
+import org.pepsoft.worldpainter.layers.Annotations;
+import org.pepsoft.worldpainter.layers.Biome;
 import org.pepsoft.worldpainter.layers.Frost;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.layers.Layer;
+import org.pepsoft.worldpainter.layers.Populate;
+import org.pepsoft.worldpainter.layers.Resources;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.themes.Filter;
@@ -113,6 +117,143 @@ public final class SimpleThemeFreshTileParityTest {
             } else {
                 System.setProperty(Native.GEN_KEY, previousFlag);
             }
+        }
+    }
+
+    @Test
+    public void deterministicSimpleThemeLayersBatchMatchesPerCellForEveryStorageSize() {
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        try {
+            Native.setGenEnabled(false);
+            final HeightMap referenceHeightMap = createFrostExerciseHeightMap();
+            final SimpleTheme referenceTheme = createDeterministicLayerTheme(false);
+            referenceHeightMap.setSeed(42L);
+            referenceTheme.setSeed(42L);
+            final HeightMapTileFactory batchFactory = new HeightMapTileFactory(42L,
+                    createFrostExerciseHeightMap(), 0, 256, false, createDeterministicLayerTheme(false));
+            final Tile reference = createPerCellFreshTile(referenceHeightMap, referenceTheme, -3, 7,
+                    new float[Constants.TILE_SIZE * Constants.TILE_SIZE],
+                    new int[Constants.TILE_SIZE * Constants.TILE_SIZE],
+                    new byte[Constants.TILE_SIZE * Constants.TILE_SIZE]);
+            final Tile batch = batchFactory.createTile(-3, 7);
+            boolean sawFrost = false, sawPopulate = false, sawResources = false, sawBiome = false;
+            for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                    assertEquals("height at " + x + ',' + y,
+                            Float.floatToRawIntBits(reference.getHeight(x, y)),
+                            Float.floatToRawIntBits(batch.getHeight(x, y)));
+                    assertEquals("terrain at " + x + ',' + y,
+                            reference.getTerrain(x, y), batch.getTerrain(x, y));
+                    assertEquals("Frost at " + x + ',' + y,
+                            reference.getBitLayerValue(Frost.INSTANCE, x, y),
+                            batch.getBitLayerValue(Frost.INSTANCE, x, y));
+                    assertEquals("Populate at " + x + ',' + y,
+                            reference.getBitLayerValue(Populate.INSTANCE, x, y),
+                            batch.getBitLayerValue(Populate.INSTANCE, x, y));
+                    assertEquals("Resources at " + x + ',' + y,
+                            reference.getLayerValue(Resources.INSTANCE, x, y),
+                            batch.getLayerValue(Resources.INSTANCE, x, y));
+                    assertEquals("Annotations at " + x + ',' + y,
+                            reference.getLayerValue(Annotations.INSTANCE, x, y),
+                            batch.getLayerValue(Annotations.INSTANCE, x, y));
+                    assertEquals("Biome at " + x + ',' + y,
+                            reference.getLayerValue(Biome.INSTANCE, x, y),
+                            batch.getLayerValue(Biome.INSTANCE, x, y));
+                    sawFrost |= batch.getBitLayerValue(Frost.INSTANCE, x, y);
+                    sawPopulate |= batch.getBitLayerValue(Populate.INSTANCE, x, y);
+                    sawResources |= batch.getLayerValue(Resources.INSTANCE, x, y) != Resources.INSTANCE.getDefaultValue();
+                    sawBiome |= batch.getLayerValue(Biome.INSTANCE, x, y) != Biome.INSTANCE.getDefaultValue();
+                }
+            }
+            assertTrue("fixture should set a BIT layer", sawFrost);
+            assertTrue("fixture should set a BIT_PER_CHUNK layer", sawPopulate);
+            assertTrue("fixture should set a NIBBLE layer", sawResources);
+            assertTrue("fixture should set a BYTE layer", sawBiome);
+        } finally {
+            restoreGenerationFlag(previousFlag);
+        }
+    }
+
+    @Test
+    public void tileBulkLayerInitializationPreservesBlockAndChunkBitSemantics() {
+        final int area = Constants.TILE_SIZE * Constants.TILE_SIZE;
+        final byte[] frostValues = new byte[area];
+        final byte[] populateValues = new byte[area];
+        final byte[] resourceValues = new byte[area];
+        final byte[] biomeValues = new byte[area];
+        java.util.Arrays.fill(resourceValues, (byte) Resources.INSTANCE.getDefaultValue());
+        java.util.Arrays.fill(biomeValues, (byte) Biome.INSTANCE.getDefaultValue());
+        final int setCell = 7 | (19 << Constants.TILE_SIZE_BITS);
+        frostValues[setCell] = 1;
+        populateValues[setCell] = 1;
+        resourceValues[setCell] = 4;
+        biomeValues[setCell] = 3;
+        final Tile tile = new Tile(0, 0, 0, 256);
+        tile.inhibitEvents();
+        try {
+            tile.initializeLayerValues(Frost.INSTANCE, frostValues);
+            tile.initializeLayerValues(Populate.INSTANCE, populateValues);
+            tile.initializeLayerValues(Resources.INSTANCE, resourceValues);
+            tile.initializeLayerValues(Biome.INSTANCE, biomeValues);
+        } finally {
+            tile.releaseEvents();
+        }
+        assertTrue(tile.getBitLayerValue(Frost.INSTANCE, 7, 19));
+        assertTrue(tile.getBitLayerValue(Populate.INSTANCE, 7, 19));
+        assertTrue("BIT_PER_CHUNK expands to the rest of the 16x16 chunk",
+                tile.getBitLayerValue(Populate.INSTANCE, 1, 17));
+        assertTrue("another cell in the same 16x16 chunk is also set",
+                tile.getBitLayerValue(Populate.INSTANCE, 15, 31));
+        assertTrue("a different chunk remains clear", !tile.getBitLayerValue(Populate.INSTANCE, 16, 16));
+        assertTrue("BIT remains per-cell", !tile.getBitLayerValue(Frost.INSTANCE, 1, 17));
+        assertEquals(4, tile.getLayerValue(Resources.INSTANCE, 7, 19));
+        assertEquals(Resources.INSTANCE.getDefaultValue(), tile.getLayerValue(Resources.INSTANCE, 6, 19));
+        assertEquals(3, tile.getLayerValue(Biome.INSTANCE, 7, 19));
+        assertEquals(Biome.INSTANCE.getDefaultValue(), tile.getLayerValue(Biome.INSTANCE, 6, 19));
+    }
+
+    @Test
+    public void benchmarkDeterministicThemeLayerBatchWhenRequested() throws Exception {
+        assumeTrue(Boolean.getBoolean("welt.simpletheme.bulk-layers.benchmark"));
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        try {
+            final HeightMap baselineHeightMap = createFrostExerciseHeightMap();
+            final SimpleTheme baselineTheme = createDeterministicLayerTheme(false);
+            baselineHeightMap.setSeed(73L);
+            baselineTheme.setSeed(73L);
+            final HeightMapTileFactory batchFactory = new HeightMapTileFactory(73L,
+                    createFrostExerciseHeightMap(), 0, 256, false, createDeterministicLayerTheme(false));
+            final int tileCount = 24, rounds = 7;
+            final double[] legacyMillis = new double[rounds];
+            final double[] batchMillis = new double[rounds];
+            for (int warmup = 0; warmup < 3; warmup++) {
+                benchmarkPerCellFreshTiles(baselineHeightMap, baselineTheme, tileCount, warmup);
+                benchmarkTiles(batchFactory, tileCount, warmup, false);
+            }
+            for (int round = 0; round < rounds; round++) {
+                if ((round & 1) == 0) {
+                    legacyMillis[round] = benchmarkPerCellFreshTiles(baselineHeightMap, baselineTheme,
+                            tileCount, round);
+                    batchMillis[round] = benchmarkTiles(batchFactory, tileCount, round, false);
+                } else {
+                    batchMillis[round] = benchmarkTiles(batchFactory, tileCount, round, false);
+                    legacyMillis[round] = benchmarkPerCellFreshTiles(baselineHeightMap, baselineTheme,
+                            tileCount, round);
+                }
+            }
+            java.util.Arrays.sort(legacyMillis);
+            java.util.Arrays.sort(batchMillis);
+            final BenchmarkMemorySupport.Snapshot legacyMemory = BenchmarkMemorySupport.measure(
+                    () -> benchmarkPerCellFreshTiles(baselineHeightMap, baselineTheme, tileCount, rounds));
+            final BenchmarkMemorySupport.Snapshot batchMemory = BenchmarkMemorySupport.measure(
+                    () -> benchmarkTiles(batchFactory, tileCount, rounds, false));
+            final int median = rounds / 2;
+            System.out.printf("SimpleTheme deterministic layers Java per-cell %.3f ms/tile, batched %.3f ms/tile, "
+                            + "speedup %.3fx, per-cell_memory=[%s], batched_memory=[%s]%n",
+                    legacyMillis[median], batchMillis[median], legacyMillis[median] / batchMillis[median],
+                    legacyMemory, batchMemory);
+        } finally {
+            restoreGenerationFlag(previousFlag);
         }
     }
 
@@ -888,6 +1029,59 @@ public final class SimpleThemeFreshTileParityTest {
         }
     }
 
+    private static double benchmarkPerCellFreshTiles(HeightMap heightMap, SimpleTheme theme,
+                                                      int tileCount, int round) {
+        Native.setGenEnabled(false);
+        final int area = Constants.TILE_SIZE * Constants.TILE_SIZE;
+        final float[] heights = new float[area];
+        final int[] intHeights = new int[area];
+        final byte[] terrainOrdinals = new byte[area];
+        final long start = System.nanoTime();
+        int sink = 0;
+        for (int tile = 0; tile < tileCount; tile++) {
+            final int tileX = Math.floorMod(tile * 7 + round, 9) - 4;
+            final int tileY = Math.floorMod(tile * 13 + round * 3, 9) - 4;
+            final Tile generated = createPerCellFreshTile(heightMap, theme, tileX, tileY,
+                    heights, intHeights, terrainOrdinals);
+            sink ^= Float.floatToRawIntBits(generated.getHeight(tile & 127, (tile * 17) & 127));
+        }
+        benchmarkSink ^= sink;
+        return (System.nanoTime() - start) / 1_000_000.0 / tileCount;
+    }
+
+    private static Tile createPerCellFreshTile(HeightMap heightMap, SimpleTheme theme,
+                                                int tileX, int tileY, float[] heights,
+                                                int[] intHeights, byte[] terrainOrdinals) {
+        final int tileSize = Constants.TILE_SIZE;
+        final int worldTileX = tileX << Constants.TILE_SIZE_BITS;
+        final int worldTileY = tileY << Constants.TILE_SIZE_BITS;
+        final Tile tile = new Tile(tileX, tileY, 0, 256);
+        tile.inhibitEvents();
+        try {
+            for (int x = 0; x < tileSize; x++) {
+                for (int y = 0; y < tileSize; y++) {
+                    final int index = x | (y << Constants.TILE_SIZE_BITS);
+                    heights[index] = org.pepsoft.util.MathUtils.clamp(0,
+                            (float) heightMap.getHeight(worldTileX + x, worldTileY + y), 255);
+                }
+            }
+            final int[] quantisedHeights = tile.initializeHeightAndWaterLevels(
+                    heights, theme.getWaterHeight(), intHeights);
+            for (int x = 0; x < tileSize; x++) {
+                for (int y = 0; y < tileSize; y++) {
+                    final int index = x | (y << Constants.TILE_SIZE_BITS);
+                    final int height = quantisedHeights[index];
+                    terrainOrdinals[index] = (byte) theme.getTerrainForFreshTile(tile, x, y, height).ordinal();
+                    theme.applyLayersToFreshTile(tile, x, y, height);
+                }
+            }
+            tile.initializeTerrainOrdinals(terrainOrdinals);
+            return tile;
+        } finally {
+            tile.releaseEvents();
+        }
+    }
+
     private static double benchmarkTiles(HeightMapTileFactory factory, int tileCount,
                                          int round, boolean nativeEnabled) {
         Native.setGenEnabled(nativeEnabled);
@@ -1143,6 +1337,23 @@ public final class SimpleThemeFreshTileParityTest {
             return new SimpleTheme(0L, 62, ranges, null, 0, 256, false, true) { };
         }
         return new SimpleTheme(0L, 62, ranges, null, 0, 256, false, true);
+    }
+
+    private static SimpleTheme createDeterministicLayerTheme(boolean legacyPerCellPath) {
+        final SortedMap<Integer, Terrain> ranges = new TreeMap<>();
+        ranges.put(-1, Terrain.GRASS);
+        ranges.put(95, Terrain.STONE_MIX);
+        final Map<Filter, Layer> layers = new java.util.LinkedHashMap<>();
+        layers.put(new HeightFilter(0, 256, 0, 255, false), Frost.INSTANCE);
+        layers.put(new HeightFilter(0, 256, 0, 255, false), Populate.INSTANCE);
+        layers.put(new HeightFilter(0, 256, 0, 255, false), Resources.INSTANCE);
+        layers.put(new HeightFilter(0, 256, 0, 255, false), Annotations.INSTANCE);
+        layers.put(new HeightFilter(0, 256, 0, 255, false), Biome.INSTANCE);
+        final SimpleTheme theme = legacyPerCellPath
+                ? new SimpleTheme(0L, 62, ranges, layers, 0, 256, true, true) { }
+                : new SimpleTheme(0L, 62, ranges, layers, 0, 256, true, true);
+        theme.setDiscreteValues(java.util.Collections.singletonMap(Biome.INSTANCE, 4));
+        return theme;
     }
 
     private static SimpleTheme createNoisySimpleTheme(boolean legacyPerCellPath) {

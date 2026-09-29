@@ -21,6 +21,7 @@ import java.util.*;
 
 import static org.pepsoft.util.MathUtils.clamp;
 import static org.pepsoft.worldpainter.Constants.SMALL_BLOBS;
+import static org.pepsoft.worldpainter.Constants.TILE_SIZE;
 import static org.pepsoft.worldpainter.Constants.TINY_BLOBS;
 
 /**
@@ -81,6 +82,72 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
     public final void applyLayersToFreshTile(Tile tile, int x, int y, int quantisedHeight) {
         final int height = clamp(minHeight, quantisedHeight, maxHeight - 1);
         applyLayers(tile, x, y, height, true);
+    }
+
+    /**
+     * Applies deterministic cached layers to a fresh tile in bulk. Returns
+     * false without changing the tile when a bit layer would consume the
+     * shared random stream, so the caller can preserve the original cell order.
+     */
+    public final boolean applyDeterministicLayersToFreshTile(Tile tile, int[] quantisedHeights,
+                                                             int lowestHeight, int highestHeight,
+                                                             byte[] layerScratch) {
+        final int area = TILE_SIZE * TILE_SIZE;
+        if ((quantisedHeights == null) || (quantisedHeights.length != area)
+                || (layerScratch == null) || (layerScratch.length != area)) {
+            throw new IllegalArgumentException("Expected one height and scratch value for every tile cell");
+        }
+        final int firstHeight = clamp(minHeight, lowestHeight, maxHeight - 1);
+        final int lastHeight = clamp(minHeight, highestHeight, maxHeight - 1);
+        if (firstHeight > lastHeight) {
+            throw new IllegalArgumentException("Tile height range does not overlap the theme height range");
+        }
+
+        if (layerCache != null) {
+            for (int layerIndex = 0; layerIndex < layerCache.length; layerIndex++) {
+                final int maxValue = layerCache[layerIndex].getDataSize().maxValue;
+                final int[] levels = layerLevelCache[layerIndex];
+                for (int height = firstHeight; height <= lastHeight; height++) {
+                    final int level = levels[height - minHeight];
+                    if ((level < 0) || (level > maxValue)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        if (bitLayerCache != null) {
+            for (int layerIndex = 0; layerIndex < bitLayerCache.length; layerIndex++) {
+                final int[] levels = bitLayerLevelCache[layerIndex];
+                for (int height = firstHeight; height <= lastHeight; height++) {
+                    final int level = levels[height - minHeight];
+                    if ((level > 0) && (level != 15)) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        if (layerCache != null) {
+            for (int layerIndex = 0; layerIndex < layerCache.length; layerIndex++) {
+                final int[] levels = layerLevelCache[layerIndex];
+                for (int index = 0; index < area; index++) {
+                    final int height = clamp(minHeight, quantisedHeights[index], maxHeight - 1);
+                    layerScratch[index] = (byte) levels[height - minHeight];
+                }
+                tile.initializeLayerValues(layerCache[layerIndex], layerScratch);
+            }
+        }
+        if (bitLayerCache != null) {
+            for (int layerIndex = 0; layerIndex < bitLayerCache.length; layerIndex++) {
+                final int[] levels = bitLayerLevelCache[layerIndex];
+                for (int index = 0; index < area; index++) {
+                    final int height = clamp(minHeight, quantisedHeights[index], maxHeight - 1);
+                    layerScratch[index] = (byte) ((levels[height - minHeight] == 15) ? 1 : 0);
+                }
+                tile.initializeLayerValues(bitLayerCache[layerIndex], layerScratch);
+            }
+        }
+        return true;
     }
 
     private void apply(Tile tile, int x, int y, boolean freshTile) {
