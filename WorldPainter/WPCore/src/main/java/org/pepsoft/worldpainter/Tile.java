@@ -17,6 +17,7 @@ import org.pepsoft.worldpainter.layers.Layer.DataSize;
 
 import java.awt.*;
 import java.io.*;
+import java.lang.ref.WeakReference;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -387,12 +388,15 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
         final int maxValue = dataSize.maxValue;
         final int defaultValue = layer.getDefaultValue();
+        final int firstValue = values[0] & 0xFF;
+        boolean uniformValues = true;
         boolean hasNonDefaultValue = false;
         for (byte rawValue : values) {
             final int value = rawValue & 0xFF;
             if (value > maxValue) {
                 throw new IllegalArgumentException("Illegal value " + value + " for " + dataSize + " layer " + layer);
             }
+            uniformValues &= value == firstValue;
             hasNonDefaultValue |= ((dataSize == Layer.DataSize.BIT) || (dataSize == Layer.DataSize.BIT_PER_CHUNK))
                     ? value != 0 : value != defaultValue;
         }
@@ -439,25 +443,34 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                 ensureWriteable(LAYER_DATA);
                 final byte[] layerValues;
                 if (dataSize == Layer.DataSize.NIBBLE) {
-                    layerValues = new byte[area / 2];
-                    if (defaultValue != 0) {
-                        Arrays.fill(layerValues, (byte) (defaultValue << 4 | defaultValue));
-                    }
-                    for (int index = 0; index < area; index++) {
-                        final int byteOffset = index / 2;
-                        final int value = values[index] & 0xFF;
-                        if ((index & 1) == 0) {
-                            layerValues[byteOffset] = (byte) ((layerValues[byteOffset] & 0xF0) | value);
-                        } else {
-                            layerValues[byteOffset] = (byte) ((layerValues[byteOffset] & 0x0F) | (value << 4));
+                    if (uniformValues) {
+                        final byte packedValue = (byte) (firstValue << 4 | firstValue);
+                        layerValues = uniformLayerDataBuffer(area / 2, packedValue, null);
+                    } else {
+                        layerValues = new byte[area / 2];
+                        if (defaultValue != 0) {
+                            Arrays.fill(layerValues, (byte) (defaultValue << 4 | defaultValue));
+                        }
+                        for (int index = 0; index < area; index++) {
+                            final int byteOffset = index / 2;
+                            final int value = values[index] & 0xFF;
+                            if ((index & 1) == 0) {
+                                layerValues[byteOffset] = (byte) ((layerValues[byteOffset] & 0xF0) | value);
+                            } else {
+                                layerValues[byteOffset] = (byte) ((layerValues[byteOffset] & 0x0F) | (value << 4));
+                            }
                         }
                     }
                 } else {
-                    layerValues = new byte[area];
-                    if (defaultValue != 0) {
-                        Arrays.fill(layerValues, (byte) defaultValue);
+                    if (uniformValues) {
+                        layerValues = uniformLayerDataBuffer(area, (byte) firstValue, null);
+                    } else {
+                        layerValues = new byte[area];
+                        if (defaultValue != 0) {
+                            Arrays.fill(layerValues, (byte) defaultValue);
+                        }
+                        System.arraycopy(values, 0, layerValues, 0, area);
                     }
-                    System.arraycopy(values, 0, layerValues, 0, area);
                 }
                 layerData.put(layer, layerValues);
             }
@@ -1206,6 +1219,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                 }
                 layerData.put(layer, layerValues);
             }
+            layerValues = detachSharedLayerDataBuffer(layer, layerValues);
             switch (layer.getDataSize()) {
                 case BIT:
                 case BIT_PER_CHUNK:
@@ -1303,7 +1317,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                     if ((excludedLayers != null) && excludedLayers.contains(layer)) {
                         continue;
                     }
-                    byte[] layerValues = entry.getValue();
+                    byte[] layerValues = detachSharedLayerDataBuffer(layer, entry.getValue());
                     switch (layer.getDataSize()) {
                         case NIBBLE:
                             int byteOffset = x | (y << TILE_SIZE_BITS);
@@ -2183,6 +2197,17 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    private byte[] detachSharedLayerDataBuffer(Layer layer, byte[] buffer) {
+        if (isSharedLayerDataBuffer(buffer)) {
+            buffer = buffer.clone();
+            layerData.put(layer, buffer);
+            if (undoManager != null) {
+                undoManager.addBuffer(LAYER_DATA_BUFFER_KEY, layerData, this);
+            }
+        }
+        return buffer;
+    }
+
     private static short[] uniformHeightMapBuffer(short value) {
         synchronized (UNIFORM_HEIGHTMAP_BUFFER_LOCK) {
             final int key = value & 0xFFFF;
@@ -2293,6 +2318,42 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
 
     private static boolean isSharedUniformWaterLevelBuffer(byte[] buffer) {
         return (buffer != null) && SHARED_WATERLEVEL_BUFFERS.contains(buffer);
+    }
+
+    private static byte[] uniformLayerDataBuffer(int length, byte value, byte[] candidate) {
+        final long key = (((long) length) << 8) | (value & 0xFFL);
+        synchronized (UNIFORM_LAYER_DATA_BUFFER_LOCK) {
+            final WeakReference<byte[]> reference = UNIFORM_LAYER_DATA_BUFFER_CACHE.get(key);
+            byte[] buffer = (reference != null) ? reference.get() : null;
+            if (buffer == null) {
+                buffer = (candidate != null) ? candidate : new byte[length];
+                if (candidate == null) {
+                    Arrays.fill(buffer, value);
+                }
+                UNIFORM_LAYER_DATA_BUFFER_CACHE.put(key, new WeakReference<>(buffer));
+                SHARED_LAYER_DATA_BUFFERS.add(buffer);
+            }
+            return buffer;
+        }
+    }
+
+    private static byte[] internUniformLayerDataBuffer(byte[] values) {
+        if ((values == null) || isSharedLayerDataBuffer(values)
+                || ((values.length != TILE_SIZE * TILE_SIZE)
+                && (values.length != TILE_SIZE * TILE_SIZE / 2))) {
+            return values;
+        }
+        final byte value = values[0];
+        for (int index = 1; index < values.length; index++) {
+            if (values[index] != value) {
+                return values;
+            }
+        }
+        return uniformLayerDataBuffer(values.length, value, values);
+    }
+
+    private static boolean isSharedLayerDataBuffer(byte[] buffer) {
+        return (buffer != null) && SHARED_LAYER_DATA_BUFFERS.contains(buffer);
     }
 
     private static boolean isAllZero(byte[] values) {
@@ -2424,6 +2485,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         final byte[] currentTerrain = terrain;
         final byte[] currentWaterLevel = waterLevel;
         final short[] currentTallWaterLevel = tallWaterLevel;
+        final Map<Layer, byte[]> currentLayerData = layerData;
         try {
             if (isSharedUniformHeightMapBuffer(currentHeightMap)) {
                 heightMap = currentHeightMap.clone();
@@ -2441,6 +2503,20 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
             if (currentTallWaterLevel == DEFAULT_TALL_WATERLEVEL_BUFFER) {
                 tallWaterLevel = currentTallWaterLevel.clone();
             }
+            if ((currentLayerData != null) && !currentLayerData.isEmpty()) {
+                Map<Layer, byte[]> serializedLayerData = null;
+                for (Map.Entry<Layer, byte[]> entry : currentLayerData.entrySet()) {
+                    if (isSharedLayerDataBuffer(entry.getValue())) {
+                        if (serializedLayerData == null) {
+                            serializedLayerData = new HashMap<>(currentLayerData);
+                        }
+                        serializedLayerData.put(entry.getKey(), entry.getValue().clone());
+                    }
+                }
+                if (serializedLayerData != null) {
+                    layerData = serializedLayerData;
+                }
+            }
             out.defaultWriteObject();
         } finally {
             heightMap = currentHeightMap;
@@ -2448,6 +2524,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
             terrain = currentTerrain;
             waterLevel = currentWaterLevel;
             tallWaterLevel = currentTallWaterLevel;
+            layerData = currentLayerData;
         }
     }
 
@@ -2486,6 +2563,21 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
         if ((layerData == null) || layerData.isEmpty()) {
             layerData = DEFAULT_LAYER_DATA_BUFFER;
+        } else {
+            Map<Layer, byte[]> sharedLayerData = null;
+            for (Map.Entry<Layer, byte[]> entry : layerData.entrySet()) {
+                final byte[] values = entry.getValue();
+                final byte[] sharedValues = internUniformLayerDataBuffer(values);
+                if (sharedValues != values) {
+                    if (sharedLayerData == null) {
+                        sharedLayerData = new HashMap<>(layerData);
+                    }
+                    sharedLayerData.put(entry.getKey(), sharedValues);
+                }
+            }
+            if (sharedLayerData != null) {
+                layerData = sharedLayerData;
+            }
         }
         if ((bitLayerData == null) || bitLayerData.isEmpty()) {
             bitLayerData = DEFAULT_BIT_LAYER_DATA_BUFFER;
@@ -2546,6 +2638,10 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     // Normal water levels have only 256 raw values, so this cache has a fixed 4 MiB maximum.
     private static final ConcurrentMap<Integer, byte[]> UNIFORM_WATERLEVEL_BUFFER_CACHE = new ConcurrentHashMap<>();
     private static final Set<byte[]> SHARED_WATERLEVEL_BUFFERS = ConcurrentHashMap.newKeySet();
+    private static final Object UNIFORM_LAYER_DATA_BUFFER_LOCK = new Object();
+    private static final ConcurrentMap<Long, WeakReference<byte[]>> UNIFORM_LAYER_DATA_BUFFER_CACHE = new ConcurrentHashMap<>();
+    private static final Set<byte[]> SHARED_LAYER_DATA_BUFFERS =
+            Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
 
     static {
         SHARED_HEIGHTMAP_BUFFERS.add(DEFAULT_HEIGHTMAP_BUFFER);

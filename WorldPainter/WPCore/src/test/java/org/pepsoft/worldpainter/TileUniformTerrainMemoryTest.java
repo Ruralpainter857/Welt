@@ -4,6 +4,8 @@ import org.junit.Test;
 import org.pepsoft.util.undo.UndoManager;
 import org.pepsoft.worldpainter.layers.Biome;
 import org.pepsoft.worldpainter.layers.Frost;
+import org.pepsoft.worldpainter.layers.Jungle;
+import org.pepsoft.worldpainter.layers.Layer;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -146,6 +148,95 @@ public class TileUniformTerrainMemoryTest {
         assertTrue(undoManager.redo());
         assertEquals(71.5f, first.getHeight(20, 30), 0.0f);
         assertEquals(64.25f, second.getHeight(20, 30), 0.0f);
+    }
+
+    @Test
+    public void generatedUniformByteLayerBuffersShareAndDetachForUndo() {
+        final Tile first = new Tile(0, 0, 0, 256);
+        final Tile second = new Tile(1, 0, 0, 256);
+        final byte[] values = new byte[Constants.TILE_SIZE * Constants.TILE_SIZE];
+        Arrays.fill(values, (byte) 7);
+        initializeLayer(first, Biome.INSTANCE, values);
+        initializeLayer(second, Biome.INSTANCE, values);
+
+        assertSame(first.layerData.get(Biome.INSTANCE), second.layerData.get(Biome.INSTANCE));
+        assertEquals(7, first.getLayerValue(Biome.INSTANCE, 0, 0));
+        assertEquals(7, second.getLayerValue(Biome.INSTANCE, 0, 0));
+
+        final UndoManager undoManager = new UndoManager();
+        first.register(undoManager);
+        second.register(undoManager);
+        undoManager.armSavePoint();
+        first.setLayerValue(Biome.INSTANCE, 17, 29, 9);
+
+        assertNotSame(first.layerData.get(Biome.INSTANCE), second.layerData.get(Biome.INSTANCE));
+        assertEquals(9, first.getLayerValue(Biome.INSTANCE, 17, 29));
+        assertEquals(7, second.getLayerValue(Biome.INSTANCE, 17, 29));
+        assertTrue(undoManager.undo());
+        assertEquals(7, first.getLayerValue(Biome.INSTANCE, 17, 29));
+        assertEquals(7, second.getLayerValue(Biome.INSTANCE, 17, 29));
+        assertTrue(undoManager.redo());
+        assertEquals(9, first.getLayerValue(Biome.INSTANCE, 17, 29));
+        assertEquals(7, second.getLayerValue(Biome.INSTANCE, 17, 29));
+    }
+
+    @Test
+    public void generatedUniformNibbleLayerBuffersShareAndDetach() {
+        final Tile first = new Tile(0, 0, 0, 256);
+        final Tile second = new Tile(1, 0, 0, 256);
+        final byte[] values = new byte[Constants.TILE_SIZE * Constants.TILE_SIZE];
+        Arrays.fill(values, (byte) 5);
+        initializeLayer(first, Jungle.INSTANCE, values);
+        initializeLayer(second, Jungle.INSTANCE, values);
+
+        assertSame(first.layerData.get(Jungle.INSTANCE), second.layerData.get(Jungle.INSTANCE));
+        assertEquals(5, first.getLayerValue(Jungle.INSTANCE, 0, 0));
+        first.setLayerValue(Jungle.INSTANCE, 17, 29, 9);
+        assertNotSame(first.layerData.get(Jungle.INSTANCE), second.layerData.get(Jungle.INSTANCE));
+        assertEquals(9, first.getLayerValue(Jungle.INSTANCE, 17, 29));
+        assertEquals(5, second.getLayerValue(Jungle.INSTANCE, 17, 29));
+    }
+
+    @Test
+    public void clearingOneUniformSharedLayerCellDetachesItsTile() {
+        final Tile first = new Tile(0, 0, 0, 256);
+        final Tile second = new Tile(1, 0, 0, 256);
+        final byte[] values = new byte[Constants.TILE_SIZE * Constants.TILE_SIZE];
+        Arrays.fill(values, (byte) 7);
+        initializeLayer(first, Biome.INSTANCE, values);
+        initializeLayer(second, Biome.INSTANCE, values);
+        assertSame(first.layerData.get(Biome.INSTANCE), second.layerData.get(Biome.INSTANCE));
+
+        first.clearLayerData(17, 29, null);
+
+        assertNotSame(first.layerData.get(Biome.INSTANCE), second.layerData.get(Biome.INSTANCE));
+        assertEquals(Biome.INSTANCE.getDefaultValue(), first.getLayerValue(Biome.INSTANCE, 17, 29));
+        assertEquals(7, second.getLayerValue(Biome.INSTANCE, 17, 29));
+    }
+
+    @Test
+    public void uniformLayerArraysRemainIndependentAcrossSerialization() throws Exception {
+        final Tile first = new Tile(0, 0, 0, 256);
+        final Tile second = new Tile(1, 0, 0, 256);
+        final byte[] values = new byte[Constants.TILE_SIZE * Constants.TILE_SIZE];
+        Arrays.fill(values, (byte) 7);
+        initializeLayer(first, Biome.INSTANCE, values);
+        initializeLayer(second, Biome.INSTANCE, values);
+
+        final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (ObjectOutputStream output = new ObjectOutputStream(bytes)) {
+            output.writeObject(new Tile[] {first, second});
+        }
+        assertSame(first.layerData.get(Biome.INSTANCE), second.layerData.get(Biome.INSTANCE));
+
+        final Tile[] loaded;
+        try (ObjectInputStream input = new ObjectInputStream(new ByteArrayInputStream(bytes.toByteArray()))) {
+            loaded = (Tile[]) input.readObject();
+        }
+        assertSame(loaded[0].layerData.get(Biome.INSTANCE), loaded[1].layerData.get(Biome.INSTANCE));
+        loaded[0].setLayerValue(Biome.INSTANCE, 4, 5, 9);
+        assertEquals(9, loaded[0].getLayerValue(Biome.INSTANCE, 4, 5));
+        assertEquals(7, loaded[1].getLayerValue(Biome.INSTANCE, 4, 5));
     }
 
     @Test
@@ -445,10 +536,53 @@ public class TileUniformTerrainMemoryTest {
                 payloadBytesSaved, payloadBytesSaved / (1024.0 * 1024.0), memory);
     }
 
+    @Test
+    public void benchmarkGeneratedUniformLayerMemoryWhenRequested() throws Exception {
+        if (!Boolean.getBoolean("welt.tile.uniform-layer.benchmark")) {
+            return;
+        }
+        final int tileCount = Integer.getInteger("welt.tile.uniform-layer.benchmark.tiles", 4096);
+        final byte[] values = new byte[Constants.TILE_SIZE * Constants.TILE_SIZE];
+        Arrays.fill(values, (byte) 7);
+        final List<Tile> tiles = new ArrayList<>(tileCount);
+        final AtomicLong elapsedNanos = new AtomicLong();
+        final BenchmarkMemorySupport.Snapshot memory = BenchmarkMemorySupport.measure(() -> {
+            final long start = System.nanoTime();
+            for (int i = 0; i < tileCount; i++) {
+                final Tile tile = new Tile(i, 0, 0, 256);
+                tile.inhibitEvents();
+                try {
+                    tile.initializeLayerValues(Biome.INSTANCE, values);
+                } finally {
+                    tile.releaseEvents();
+                }
+                tiles.add(tile);
+            }
+            elapsedNanos.set(System.nanoTime() - start);
+        });
+        assertEquals(7, tiles.get(0).getLayerValue(Biome.INSTANCE, 0, 0));
+        assertEquals(7, tiles.get(tileCount - 1).getLayerValue(Biome.INSTANCE,
+                Constants.TILE_SIZE - 1, Constants.TILE_SIZE - 1));
+        final long payloadBytesSaved = (long) (tileCount - 1) * values.length;
+        System.out.printf("Generated uniform-byte-layer tiles=%d, elapsed=%.3f ms, "
+                        + "estimatedArrayPayloadSaved=%d bytes (%.1f MiB), memory=[%s]%n",
+                tileCount, elapsedNanos.get() / 1_000_000.0,
+                payloadBytesSaved, payloadBytesSaved / (1024.0 * 1024.0), memory);
+    }
+
     private static void initializeGeneratedTile(Tile tile, float[] heights, int[] intHeights, int waterLevel) {
         tile.inhibitEvents();
         try {
             tile.initializeHeightAndWaterLevels(heights, waterLevel, intHeights);
+        } finally {
+            tile.releaseEvents();
+        }
+    }
+
+    private static void initializeLayer(Tile tile, Layer layer, byte[] values) {
+        tile.inhibitEvents();
+        try {
+            tile.initializeLayerValues(layer, values);
         } finally {
             tile.releaseEvents();
         }
