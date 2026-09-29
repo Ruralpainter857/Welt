@@ -116,6 +116,39 @@ public final class SimpleThemeFreshTileParityTest {
     }
 
     @Test
+    public void nativeSingleNoiseTreeMatchesJavaFreshTile() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        try {
+            final HeightMap javaMap = new SumHeightMap(new ConstantHeightMap(42.25),
+                    new NoiseHeightMap(38.0, 0.8, 3, -0x1020_3040L));
+            final HeightMap nativeMap = new SumHeightMap(new ConstantHeightMap(42.25),
+                    new NoiseHeightMap(38.0, 0.8, 3, -0x1020_3040L));
+            final HeightMapTileFactory javaFactory = new HeightMapTileFactory(73L, javaMap,
+                    0, 256, false, createSimpleTheme(true));
+            final HeightMapTileFactory nativeFactory = new HeightMapTileFactory(73L, nativeMap,
+                    0, 256, false, createSimpleTheme(false));
+            Native.setGenEnabled(false);
+            final Tile javaTile = javaFactory.createTile(-3, 7);
+            Native.setGenEnabled(true);
+            final Tile nativeTile = nativeFactory.createTile(-3, 7);
+            for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                    assertEquals("height at " + x + ',' + y,
+                            Float.floatToRawIntBits(javaTile.getHeight(x, y)),
+                            Float.floatToRawIntBits(nativeTile.getHeight(x, y)));
+                    assertEquals("water at " + x + ',' + y,
+                            javaTile.getWaterLevel(x, y), nativeTile.getWaterLevel(x, y));
+                    assertEquals("terrain at " + x + ',' + y,
+                            javaTile.getTerrain(x, y), nativeTile.getTerrain(x, y));
+                }
+            }
+        } finally {
+            restoreGenerationFlag(previousFlag);
+        }
+    }
+
+    @Test
     public void nativeProductAndDifferenceHeightMapsMatchJavaFreshTile() {
         assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
         final String previousFlag = System.getProperty(Native.GEN_KEY);
@@ -699,6 +732,50 @@ public final class SimpleThemeFreshTileParityTest {
             final BenchmarkMemorySupport.Snapshot nativeMemory = BenchmarkMemorySupport.measure(
                     () -> benchmarkTiles(nativeFactory, tileCount, rounds, true));
             System.out.printf("Transformed heightmap Java %.3f ms/tile, Rust/JNI %.3f ms/tile, ratio %.3fx "
+                            + "java_memory=[%s] native_memory=[%s]%n",
+                    javaMillis[rounds / 2], nativeMillis[rounds / 2],
+                    javaMillis[rounds / 2] / nativeMillis[rounds / 2], javaMemory, nativeMemory);
+        } finally {
+            restoreGenerationFlag(previousFlag);
+        }
+    }
+
+    @Test
+    public void benchmarkNativeSingleNoiseTreeWhenRequested() throws Exception {
+        assumeTrue(Boolean.getBoolean("welt.noise.tree.benchmark"));
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousFlag = System.getProperty(Native.GEN_KEY);
+        try {
+            final HeightMap javaMap = new SumHeightMap(new ConstantHeightMap(42.25),
+                    new NoiseHeightMap(38.0, 0.8, 3, -0x1020_3040L));
+            final HeightMap nativeMap = new SumHeightMap(new ConstantHeightMap(42.25),
+                    new NoiseHeightMap(38.0, 0.8, 3, -0x1020_3040L));
+            final HeightMapTileFactory javaFactory = new HeightMapTileFactory(73L, javaMap,
+                    0, 256, false, createSimpleTheme(true));
+            final HeightMapTileFactory nativeFactory = new HeightMapTileFactory(73L, nativeMap,
+                    0, 256, false, createSimpleTheme(false));
+            final int tileCount = 24, rounds = 7;
+            final double[] javaMillis = new double[rounds], nativeMillis = new double[rounds];
+            for (int warmup = 0; warmup < 4; warmup++) {
+                benchmarkTiles(javaFactory, tileCount, warmup, false);
+                benchmarkTiles(nativeFactory, tileCount, warmup, true);
+            }
+            for (int round = 0; round < rounds; round++) {
+                if ((round & 1) == 0) {
+                    javaMillis[round] = benchmarkTiles(javaFactory, tileCount, round, false);
+                    nativeMillis[round] = benchmarkTiles(nativeFactory, tileCount, round, true);
+                } else {
+                    nativeMillis[round] = benchmarkTiles(nativeFactory, tileCount, round, true);
+                    javaMillis[round] = benchmarkTiles(javaFactory, tileCount, round, false);
+                }
+            }
+            java.util.Arrays.sort(javaMillis);
+            java.util.Arrays.sort(nativeMillis);
+            final BenchmarkMemorySupport.Snapshot javaMemory = BenchmarkMemorySupport.measure(
+                    () -> benchmarkTiles(javaFactory, tileCount, rounds, false));
+            final BenchmarkMemorySupport.Snapshot nativeMemory = BenchmarkMemorySupport.measure(
+                    () -> benchmarkTiles(nativeFactory, tileCount, rounds, true));
+            System.out.printf("Single-noise SimpleTheme Java %.3f ms/tile, Rust/JNI %.3f ms/tile, ratio %.3fx "
                             + "java_memory=[%s] native_memory=[%s]%n",
                     javaMillis[rounds / 2], nativeMillis[rounds / 2],
                     javaMillis[rounds / 2] / nativeMillis[rounds / 2], javaMemory, nativeMemory);

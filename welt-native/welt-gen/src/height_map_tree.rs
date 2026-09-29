@@ -252,15 +252,24 @@ pub fn fill_height_map_tree(
         return Err(HeightMapTreeError::TooManyNoiseValues);
     }
 
-    let mut noise_values = vec![0.0_f64; noise_maps.len() * area];
-    for (index, map) in noise_maps.iter().enumerate() {
-        map.fill_bulk(
-            origin_x,
-            origin_y,
-            width,
-            height,
-            &mut noise_values[index * area..(index + 1) * area],
-        )?;
+    // A single noise node is the common case for a generated tile. Use the
+    // caller's result slice as its scratch buffer instead of allocating a
+    // second `area`-sized array for every tile.
+    let single_noise_map = noise_maps.len() == 1;
+    let mut noise_values = Vec::new();
+    if single_noise_map {
+        noise_maps[0].fill_bulk(origin_x, origin_y, width, height, output)?;
+    } else {
+        noise_values.resize(noise_maps.len() * area, 0.0_f64);
+        for (index, map) in noise_maps.iter().enumerate() {
+            map.fill_bulk(
+                origin_x,
+                origin_y,
+                width,
+                height,
+                &mut noise_values[index * area..(index + 1) * area],
+            )?;
+        }
     }
 
     let mut stack = [0.0_f64; MAX_PROGRAM_NODES];
@@ -273,7 +282,11 @@ pub fn fill_height_map_tree(
                     stack_depth += 1;
                 }
                 ParsedNode::Noise(index) => {
-                    stack[stack_depth] = noise_values[index * area + cell];
+                    stack[stack_depth] = if single_noise_map {
+                        output[cell]
+                    } else {
+                        noise_values[index * area + cell]
+                    };
                     stack_depth += 1;
                 }
                 ParsedNode::Mandelbrot => {
@@ -959,6 +972,27 @@ mod tests {
             let java_order = (0.1_f64 + noise[index]) + -12.5_f64;
             assert_eq!(actual[index].to_bits(), java_order.to_bits());
         }
+    }
+
+    #[test]
+    fn single_noise_node_matches_bulk_samples_bit_for_bit() {
+        let node = HeightMapNode::Noise {
+            d_height: 38.0,
+            scale: 0.8,
+            octaves: 3,
+            effective_seed: -0x1020_3040,
+        };
+        let (origin_x, origin_y, width, height) = (-37, 19, 13, 9);
+        let mut expected = vec![0.0; width * height];
+        let mut actual = vec![0.0; width * height];
+        NoiseHeightMapBulk::new(38.0, 0.8, 3, -0x1020_3040)
+            .unwrap()
+            .fill_bulk(origin_x, origin_y, width, height, &mut expected)
+            .unwrap();
+
+        fill_height_map_tree(&[node], origin_x, origin_y, width, height, &mut actual).unwrap();
+
+        assert_eq!(actual, expected);
     }
 
     #[test]
