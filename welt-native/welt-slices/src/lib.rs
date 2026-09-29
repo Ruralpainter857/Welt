@@ -70,6 +70,8 @@ const GET_FLOAT_ARRAY_REGION: usize = 205;
 const GET_DOUBLE_ARRAY_REGION: usize = 206;
 const GET_DOUBLE_ARRAY_ELEMENTS: usize = 190;
 const RELEASE_DOUBLE_ARRAY_ELEMENTS: usize = 198;
+const GET_FLOAT_ARRAY_ELEMENTS: usize = 189;
+const RELEASE_FLOAT_ARRAY_ELEMENTS: usize = 197;
 const JNI_ABORT: jint = 2;
 const GET_BYTE_ARRAY_ELEMENTS: usize = 184;
 const RELEASE_BYTE_ARRAY_ELEMENTS: usize = 192;
@@ -302,6 +304,29 @@ impl Drop for DoubleArrayInput {
                 std::mem::transmute(function(self.env, RELEASE_DOUBLE_ARRAY_ELEMENTS));
             release(self.env, self.array, self.values, JNI_ABORT);
         }
+    }
+}
+
+struct FloatArrayInput {
+    env: *mut JNIEnv,
+    array: jobject,
+    values: *mut f32,
+    length: usize,
+}
+
+impl FloatArrayInput {
+    fn as_slice(&self) -> &[f32] {
+        unsafe { slice::from_raw_parts(self.values, self.length) }
+    }
+}
+
+impl Drop for FloatArrayInput {
+    fn drop(&mut self) {
+        type ReleaseFloatArrayElements =
+            unsafe extern "system" fn(*mut JNIEnv, jobject, *mut f32, jint);
+        let release: ReleaseFloatArrayElements =
+            unsafe { std::mem::transmute(function(self.env, RELEASE_FLOAT_ARRAY_ELEMENTS)) };
+        unsafe { release(self.env, self.array, self.values, JNI_ABORT) };
     }
 }
 
@@ -988,16 +1013,12 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut f64);
             type GetLongArrayRegion =
                 unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i64);
-            type GetFloatArrayRegion =
-                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut f32);
             let get_ints: GetIntArrayRegion =
                 std::mem::transmute(function(env, GET_INT_ARRAY_REGION));
             let get_doubles: GetDoubleArrayRegion =
                 std::mem::transmute(function(env, GET_DOUBLE_ARRAY_REGION));
             let get_longs: GetLongArrayRegion =
                 std::mem::transmute(function(env, GET_LONG_ARRAY_REGION));
-            let get_floats: GetFloatArrayRegion =
-                std::mem::transmute(function(env, GET_FLOAT_ARRAY_REGION));
             let count = node_count as usize;
             let mut raw_opcodes = vec![0_i32; count];
             let mut raw_values = vec![0.0_f64; count];
@@ -1058,10 +1079,31 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 });
             }
 
-            let mut xs = vec![0.0_f32; area as usize];
-            let mut ys = vec![0.0_f32; area as usize];
-            get_floats(env, x_coordinates, 0, area, xs.as_mut_ptr());
-            get_floats(env, y_coordinates, 0, area, ys.as_mut_ptr());
+            type GetFloatArrayElements =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, *mut u8) -> *mut f32;
+            let get_float_elements: GetFloatArrayElements =
+                std::mem::transmute(function(env, GET_FLOAT_ARRAY_ELEMENTS));
+            let x_ptr = get_float_elements(env, x_coordinates, std::ptr::null_mut());
+            if x_ptr.is_null() {
+                return WeltError::Internal as jint;
+            }
+            let x_values = FloatArrayInput {
+                env,
+                array: x_coordinates,
+                values: x_ptr,
+                length: area as usize,
+            };
+            let y_ptr = get_float_elements(env, y_coordinates, std::ptr::null_mut());
+            if y_ptr.is_null() {
+                drop(x_values);
+                return WeltError::Internal as jint;
+            }
+            let y_values = FloatArrayInput {
+                env,
+                array: y_coordinates,
+                values: y_ptr,
+                length: area as usize,
+            };
             type GetDoubleArrayElements =
                 unsafe extern "system" fn(*mut JNIEnv, jobject, *mut u8) -> *mut f64;
             let get_elements: GetDoubleArrayElements =
@@ -1076,9 +1118,15 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 values: output_ptr,
                 length: area as usize,
             };
-            let result =
-                fill_height_map_tree_points(&nodes, &xs, &ys, output_values.as_mut_slice());
+            let result = fill_height_map_tree_points(
+                &nodes,
+                x_values.as_slice(),
+                y_values.as_slice(),
+                output_values.as_mut_slice(),
+            );
             drop(output_values);
+            drop(y_values);
+            drop(x_values);
             if result.is_err() {
                 return WeltError::IllegalArgument as jint;
             }
