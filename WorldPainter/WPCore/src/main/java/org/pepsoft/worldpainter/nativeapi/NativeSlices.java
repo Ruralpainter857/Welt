@@ -368,6 +368,21 @@ public final class NativeSlices {
         }
     }
 
+    /** Calculates the Pencil axis and snapped point into a three-int buffer. */
+    public static boolean snapPencilCoordinates(final int x1, final int y1, final int x2,
+                                                final int y2, final int axisHint,
+                                                final int[] output) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || axisHint < -2 || axisHint > 3 || output == null || output.length != 3) {
+            return false;
+        }
+        try {
+            return nativeSnapPencilCoordinates(x1, y1, x2, y2, axisHint, output) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     /** Smooths a brush area using caller-owned input, strength and output buffers. */
     public static boolean smoothHeightRegion(final int inputWidth, final int inputHeight,
                                              final float[] heights, final float[] strengths,
@@ -1105,6 +1120,9 @@ public final class NativeSlices {
 
     private static native int nativeRasterizeLineCenters(int x1, int y1, int x2, int y2,
                                                           int[] coordinates, int[] count);
+
+    private static native int nativeSnapPencilCoordinates(int x1, int y1, int x2, int y2,
+                                                           int axisHint, int[] output);
 
     private static native int nativeSmoothHeightRegion(int inputWidth, int inputHeight,
                                                         float[] heights, float[] strengths,

@@ -15,6 +15,7 @@ pub mod mountain;
 pub mod nibble_paint;
 pub mod noise;
 pub mod paint_mask;
+pub mod pencil_snap;
 pub mod raise_pyramid;
 pub mod river_paint;
 pub mod rng;

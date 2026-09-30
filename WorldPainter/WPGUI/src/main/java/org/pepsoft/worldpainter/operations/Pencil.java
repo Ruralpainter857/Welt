@@ -22,6 +22,7 @@ import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.WorldPainterView;
 import org.pepsoft.worldpainter.painting.DimensionPainter;
 import org.pepsoft.worldpainter.painting.Paint;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
 import javax.swing.*;
 import java.awt.*;
@@ -57,9 +58,15 @@ public class Pencil extends AbstractPaintOperation {
                         if (isCtrlDown()) {
                             // Ctrl was also pressed: snap the line to 45 degree
                             // angles
-                            int[] snappedCoords = snapCoords(previousX, previousY, centreX, centreY, getAxis(previousX, previousY, centreX, centreY));
-                            centreX = snappedCoords[0];
-                            centreY = snappedCoords[1];
+                            if (tryNativeSnap(previousX, previousY, centreX, centreY, -2)) {
+                                centreX = nativeSnapResult[1];
+                                centreY = nativeSnapResult[2];
+                            } else {
+                                int[] snappedCoords = snapCoords(previousX, previousY, centreX, centreY,
+                                        getAxis(previousX, previousY, centreX, centreY));
+                                centreX = snappedCoords[0];
+                                centreY = snappedCoords[1];
+                            }
                         }
                         painter.drawLine(dimension, previousX, previousY, centreX, centreY, fastMode);
                     }
@@ -77,11 +84,25 @@ public class Pencil extends AbstractPaintOperation {
                     // Ctrl was pressed: snap the line to 45 degree angles
                     // relative to the point where the drag was started
                     if (lockedAxis == null) {
-                        lockedAxis = getAxis(lockedX, lockedY, centreX, centreY);
+                        if (tryNativeSnap(lockedX, lockedY, centreX, centreY, -2)) {
+                            lockedAxis = axisFromNativeResult();
+                            centreX = nativeSnapResult[1];
+                            centreY = nativeSnapResult[2];
+                        } else {
+                            lockedAxis = getAxis(lockedX, lockedY, centreX, centreY);
+                            int[] snappedCoords = snapCoords(lockedX, lockedY, centreX, centreY, lockedAxis);
+                            centreX = snappedCoords[0];
+                            centreY = snappedCoords[1];
+                        }
+                    } else if (tryNativeSnap(lockedX, lockedY, centreX, centreY,
+                            lockedAxis.ordinal())) {
+                        centreX = nativeSnapResult[1];
+                        centreY = nativeSnapResult[2];
+                    } else {
+                        int[] snappedCoords = snapCoords(lockedX, lockedY, centreX, centreY, lockedAxis);
+                        centreX = snappedCoords[0];
+                        centreY = snappedCoords[1];
                     }
-                    int[] snappedCoords = snapCoords(lockedX, lockedY, centreX, centreY, lockedAxis);
-                    centreX = snappedCoords[0];
-                    centreY = snappedCoords[1];
                 }
                 if ((centreX != previousX) || (centreY != previousY)) {
                     if ((Math.abs(centreX - previousX) <= 1) && (Math.abs(centreY - previousY) <= 1)) {
@@ -164,6 +185,15 @@ public class Pencil extends AbstractPaintOperation {
         }
     }
 
+    private boolean tryNativeSnap(int x1, int y1, int x2, int y2, int axisHint) {
+        return NativeSlices.snapPencilCoordinates(x1, y1, x2, y2, axisHint, nativeSnapResult);
+    }
+
+    private Axis axisFromNativeResult() {
+        final int ordinal = nativeSnapResult[0];
+        return (ordinal < 0) ? null : Axis.values()[ordinal];
+    }
+
     /**
      * Returns the closest point on the infinite line through p1 and p2 to
      * p3.
@@ -193,6 +223,7 @@ public class Pencil extends AbstractPaintOperation {
     }
 
     private final DimensionPainter painter = new DimensionPainter();
+    private final int[] nativeSnapResult = new int[3];
     private int previousX = Integer.MIN_VALUE, previousY = Integer.MIN_VALUE, lockedX = Integer.MIN_VALUE, lockedY = Integer.MIN_VALUE;
     private Axis lockedAxis;
     private boolean inhibitDrag, fastMode = true;
