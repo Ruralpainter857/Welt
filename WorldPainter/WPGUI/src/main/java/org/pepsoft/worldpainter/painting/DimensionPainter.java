@@ -12,6 +12,9 @@ import org.pepsoft.worldpainter.brushes.Brush;
 import org.pepsoft.worldpainter.brushes.LineBrush;
 import org.pepsoft.worldpainter.brushes.SymmetricBrush;
 import org.pepsoft.worldpainter.layers.Layer;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
 import java.awt.*;
 import java.awt.font.FontRenderContext;
@@ -143,6 +146,9 @@ public final class DimensionPainter {
             // to apply the brush. The LineBrush is not good at that, and also not faster than slow mode in this case,
             // so fall back to slow mode
             fast = false;
+        }
+        if (!fast && drawNativeLineCenters(dimension, x1, y1, x2, y2, dynamicLevel)) {
+            return;
         }
         if (dx < dy) {
             // Mostly vertical; go from top to bottom
@@ -622,7 +628,39 @@ public final class DimensionPainter {
 
     private Paint paint;
     private int textAngle;
+
+    private boolean drawNativeLineCenters(Dimension dimension, int x1, int y1, int x2, int y2,
+                                          float dynamicLevel) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) {
+            return false;
+        }
+        final long deltaX = Math.abs((long) x2 - x1);
+        final long deltaY = Math.abs((long) y2 - y1);
+        final long pointCount = Math.max(deltaX, deltaY) + 1L;
+        if (pointCount <= 0 || pointCount > 65_536L) {
+            return false;
+        }
+        final int coordinateCount = (int) pointCount * 2;
+        if (nativeLineCoordinates == null || nativeLineCoordinates.length != coordinateCount) {
+            nativeLineCoordinates = new int[coordinateCount];
+        }
+        if (nativeLineCount == null) {
+            nativeLineCount = new int[1];
+        }
+        final int actualCount = NativeSlices.rasterizeLineCenters(x1, y1, x2, y2,
+                nativeLineCoordinates, nativeLineCount);
+        if (actualCount != pointCount) {
+            return false;
+        }
+        for (int i = 0; i < actualCount; i++) {
+            drawPoint(dimension, nativeLineCoordinates[i * 2], nativeLineCoordinates[i * 2 + 1],
+                    dynamicLevel);
+        }
+        return true;
+    }
     private boolean undo;
+    private int[] nativeLineCoordinates;
+    private int[] nativeLineCount;
     private Font font;
 
     public static final int ANGLE_0_DEGREES   = 0;

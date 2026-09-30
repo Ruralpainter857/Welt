@@ -352,6 +352,22 @@ public final class NativeSlices {
         }
     }
 
+    /** Rasterizes the slow line painter's pixel centers into caller-owned buffers. */
+    public static int rasterizeLineCenters(final int x1, final int y1, final int x2, final int y2,
+                                           final int[] coordinates, final int[] count) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || coordinates == null || coordinates.length < 2 || coordinates.length > 131_072
+                || (coordinates.length & 1) != 0 || count == null || count.length != 1) {
+            return -1;
+        }
+        try {
+            return nativeRasterizeLineCenters(x1, y1, x2, y2, coordinates, count) == 0
+                    ? count[0] : -1;
+        } catch (final UnsatisfiedLinkError e) {
+            return -1;
+        }
+    }
+
     /** Smooths a brush area using caller-owned input, strength and output buffers. */
     public static boolean smoothHeightRegion(final int inputWidth, final int inputHeight,
                                              final float[] heights, final float[] strengths,
@@ -1086,6 +1102,9 @@ public final class NativeSlices {
                                                            float[] strengths, byte[] modified);
 
     private static native int nativePaintThresholdMask(float[] strengths, byte[] modified);
+
+    private static native int nativeRasterizeLineCenters(int x1, int y1, int x2, int y2,
+                                                          int[] coordinates, int[] count);
 
     private static native int nativeSmoothHeightRegion(int inputWidth, int inputHeight,
                                                         float[] heights, float[] strengths,

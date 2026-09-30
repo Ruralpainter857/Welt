@@ -9,6 +9,7 @@ use welt_core::error::WeltError;
 use welt_core::flood_fill::linear_flood_fill;
 use welt_core::height_edit::{apply_flatten_brush, apply_height_brush, FlattenMode};
 use welt_core::jni::{jclass, jint, jlong, jni_catch, jobject, JNIEnv};
+use welt_core::line_raster::rasterize_line_centers;
 use welt_core::mountain::raise_mountain;
 use welt_core::nibble_paint::{apply_nibble_layer_brush, NibblePaintMode};
 use welt_core::paint_mask::paint_threshold_mask;
@@ -855,6 +856,65 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 return WeltError::IllegalArgument as jint;
             }
             set_byte(env, modified, 0, length, modified_buffer.as_ptr());
+            WeltError::Ok as jint
+        })
+    }
+}
+
+/// Rasterizes brush centers for DimensionPainter's slow line algorithm.
+///
+/// # Safety
+/// `env`, arrays, and their lengths must be valid references from the JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeRasterizeLineCenters(
+    env: *mut JNIEnv,
+    _class: jclass,
+    x1: jint,
+    y1: jint,
+    x2: jint,
+    y2: jint,
+    coordinates: jobject,
+    count: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if coordinates.is_null() || count.is_null() {
+                return WeltError::IllegalArgument as jint;
+            }
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            type SetIntArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i32);
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            let set_int: SetIntArrayRegion =
+                std::mem::transmute(function(env, SET_INT_ARRAY_REGION));
+            let coordinate_length = get_array_length(env, coordinates);
+            if !(2..=131_072).contains(&coordinate_length)
+                || coordinate_length % 2 != 0
+                || get_array_length(env, count) != 1
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            let mut output = vec![0_i32; coordinate_length as usize];
+            let point_count = match rasterize_line_centers(
+                x1,
+                y1,
+                x2,
+                y2,
+                &mut output,
+            ) {
+                Ok(point_count) => point_count,
+                Err(_) => return WeltError::IllegalArgument as jint,
+            };
+            set_int(
+                env,
+                coordinates,
+                0,
+                (point_count * 2) as jint,
+                output.as_ptr(),
+            );
+            let point_count = point_count as i32;
+            set_int(env, count, 0, 1, &point_count);
             WeltError::Ok as jint
         })
     }
