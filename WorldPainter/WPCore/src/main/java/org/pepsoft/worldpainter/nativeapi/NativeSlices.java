@@ -298,6 +298,29 @@ public final class NativeSlices {
         }
     }
 
+    /** Returns the ordered fill-call indices for a bounded row-major boundary mask. */
+    public static boolean linearFloodFill(final int width, final int height,
+                                          final int seedX, final int seedY,
+                                          final byte[] boundary, final int[] fillIndices,
+                                          final int[] fillCount, final int[] boundsHit) {
+        final long area = (long) width * height;
+        final long fillCapacity = area * 2L;
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || width <= 0 || height <= 0 || area <= 0 || area > 65_536L
+                || seedX < 0 || seedY < 0 || seedX >= width || seedY >= height
+                || boundary == null || fillIndices == null || fillCount == null || boundsHit == null
+                || boundary.length != area || fillIndices.length < fillCapacity
+                || fillCount.length != 1 || boundsHit.length != 1) {
+            return false;
+        }
+        try {
+            return nativeLinearFloodFill(width, height, seedX, seedY, boundary,
+                    fillIndices, fillCount, boundsHit) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     /** Smooths a brush area using caller-owned input, strength and output buffers. */
     public static boolean smoothHeightRegion(final int inputWidth, final int inputHeight,
                                              final float[] heights, final float[] strengths,
@@ -1023,6 +1046,10 @@ public final class NativeSlices {
                                                      float[] strengths, float[] slopeOffsets,
                                                      byte[] heightModified, byte[] flooded,
                                                      byte[] beaches, int[] waterLevelOutput);
+
+    private static native int nativeLinearFloodFill(int width, int height, int seedX, int seedY,
+                                                     byte[] boundary, int[] fillIndices,
+                                                     int[] fillCount, int[] boundsHit);
 
     private static native int nativeSmoothHeightRegion(int inputWidth, int inputHeight,
                                                         float[] heights, float[] strengths,

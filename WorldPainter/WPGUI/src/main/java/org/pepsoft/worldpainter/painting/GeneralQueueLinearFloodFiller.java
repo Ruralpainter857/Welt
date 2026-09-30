@@ -8,6 +8,9 @@ import org.pepsoft.util.ProgressReceiver;
 import org.pepsoft.util.ProgressReceiver.OperationCancelled;
 import org.pepsoft.util.swing.ProgressDialog;
 import org.pepsoft.util.swing.ProgressTask;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
 import java.awt.*;
 import java.util.BitSet;
@@ -24,12 +27,15 @@ public class GeneralQueueLinearFloodFiller {
     //Queue of floodfill ranges
     private Queue<FloodFillRange> ranges;
     private boolean boundsTooLarge, boundsHit;
+    private byte[] nativeBoundary;
+    private int[] nativeFillIndices, nativeFillCount, nativeBoundsHit;
     /**
      * The actual logic for determining what should be filled, and what it should be filled with.
      */
     private final FillMethod fillMethod;
 
     private static final int MAX_INT_SQUARE_SIDE = 46340; // sqrt(Integer.MAX_VALUE)
+    private static final long MAX_NATIVE_FLOOD_CELLS = 65_536L;
 
     public GeneralQueueLinearFloodFiller(FillMethod fillMethod) {
         this.fillMethod = fillMethod;
@@ -58,7 +64,10 @@ public class GeneralQueueLinearFloodFiller {
         // positive)
         x -= offsetX;
         y -= offsetY;
-        
+        if (tryNativeFill(x, y)) {
+            return true;
+        }
+
         //Setup
         prepare();
 
@@ -102,6 +111,44 @@ public class GeneralQueueLinearFloodFiller {
         }
 
         return true;
+    }
+
+    private boolean tryNativeFill(int seedX, int seedY) {
+        final long areaLong = (long) width * height;
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || width <= 0 || height <= 0 || areaLong <= 0 || areaLong > MAX_NATIVE_FLOOD_CELLS
+                || seedX < 0 || seedY < 0 || seedX >= width || seedY >= height) {
+            return false;
+        }
+        final int area = (int) areaLong;
+        ensureNativeBuffers(area);
+        for (int localY = 0, index = 0; localY < height; localY++) {
+            for (int localX = 0; localX < width; localX++, index++) {
+                nativeBoundary[index] = fillMethod.isBoundary(offsetX + localX, offsetY + localY)
+                        ? (byte) 1 : 0;
+            }
+        }
+        if (!NativeSlices.linearFloodFill(width, height, seedX, seedY,
+                nativeBoundary, nativeFillIndices, nativeFillCount, nativeBoundsHit)) {
+            return false;
+        }
+
+        boundsHit |= nativeBoundsHit[0] != 0;
+        for (int index = 0; index < nativeFillCount[0]; index++) {
+            final int linearIndex = nativeFillIndices[index];
+            fillMethod.fill(offsetX + (linearIndex % width),
+                    offsetY + (linearIndex / width));
+        }
+        return true;
+    }
+
+    private void ensureNativeBuffers(int area) {
+        if (nativeBoundary == null || nativeBoundary.length != area) {
+            nativeBoundary = new byte[area];
+            nativeFillIndices = new int[area * 2];
+            nativeFillCount = new int[1];
+            nativeBoundsHit = new int[1];
+        }
     }
 
     /**

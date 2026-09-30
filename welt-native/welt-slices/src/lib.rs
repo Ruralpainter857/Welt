@@ -6,6 +6,7 @@ use std::ffi::c_void;
 use std::slice;
 use welt_core::erosion::erode_raw_height_region;
 use welt_core::error::WeltError;
+use welt_core::flood_fill::linear_flood_fill;
 use welt_core::height_edit::{apply_flatten_brush, apply_height_brush, FlattenMode};
 use welt_core::jni::{jclass, jint, jlong, jni_catch, jobject, JNIEnv};
 use welt_core::mountain::raise_mountain;
@@ -650,6 +651,91 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             set_byte(env, flooded, 0, area as jint, flooded_values.as_ptr());
             set_byte(env, beaches, 0, area as jint, beach_values.as_ptr());
             set_int(env, water_level_output, 0, 1, &water_level);
+            WeltError::Ok as jint
+        })
+    }
+}
+
+/// Computes the ordered fill indices for a bounded row-major boundary mask.
+///
+/// # Safety
+/// `env`, arrays, and their lengths must be valid references from the JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeLinearFloodFill(
+    env: *mut JNIEnv,
+    _class: jclass,
+    width: jint,
+    height: jint,
+    seed_x: jint,
+    seed_y: jint,
+    boundary: jobject,
+    fill_indices: jobject,
+    fill_count: jobject,
+    bounds_hit: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if width <= 0
+                || height <= 0
+                || seed_x < 0
+                || seed_y < 0
+                || boundary.is_null()
+                || fill_indices.is_null()
+                || fill_count.is_null()
+                || bounds_hit.is_null()
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            let area = match (width as usize).checked_mul(height as usize) {
+                Some(area) if area <= 65_536 => area,
+                _ => return WeltError::IllegalArgument as jint,
+            };
+            let output_capacity = match area.checked_mul(2) {
+                Some(capacity) => capacity,
+                None => return WeltError::IllegalArgument as jint,
+            };
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            if get_array_length(env, boundary) != area as jint
+                || get_array_length(env, fill_indices) < output_capacity as jint
+                || get_array_length(env, fill_count) != 1
+                || get_array_length(env, bounds_hit) != 1
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+
+            type GetByteArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i8);
+            type SetIntArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i32);
+            let get_byte: GetByteArrayRegion =
+                std::mem::transmute(function(env, GET_BYTE_ARRAY_REGION));
+            let set_int: SetIntArrayRegion =
+                std::mem::transmute(function(env, SET_INT_ARRAY_REGION));
+            let mut boundary_values = vec![0_i8; area];
+            get_byte(env, boundary, 0, area as jint, boundary_values.as_mut_ptr());
+            let result = match linear_flood_fill(
+                width as usize,
+                height as usize,
+                seed_x as usize,
+                seed_y as usize,
+                &boundary_values,
+            ) {
+                Ok(result) => result,
+                Err(_) => return WeltError::IllegalArgument as jint,
+            };
+            let fill_count_value = result.fill_indices.len() as i32;
+            let bounds_hit_value = i32::from(result.bounds_hit);
+            set_int(
+                env,
+                fill_indices,
+                0,
+                fill_count_value,
+                result.fill_indices.as_ptr(),
+            );
+            set_int(env, fill_count, 0, 1, &fill_count_value);
+            set_int(env, bounds_hit, 0, 1, &bounds_hit_value);
             WeltError::Ok as jint
         })
     }
