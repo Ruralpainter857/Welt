@@ -205,6 +205,28 @@ public final class NativeSlices {
         }
     }
 
+    /** Smooths a brush area using caller-owned input, strength and output buffers. */
+    public static boolean smoothHeightRegion(final int inputWidth, final int inputHeight,
+                                             final float[] heights, final float[] strengths,
+                                             final float[] output, final byte[] modified) {
+        final long inputArea = (long) inputWidth * inputHeight;
+        final long outputArea = (long) (inputWidth - 10) * (inputHeight - 10);
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || inputWidth < 11 || inputHeight < 11
+                || inputArea > 65_536L || outputArea <= 0 || outputArea > 65_536L
+                || heights == null || strengths == null || output == null || modified == null
+                || heights.length != inputArea || strengths.length != outputArea
+                || output.length != outputArea || modified.length != outputArea) {
+            return false;
+        }
+        try {
+            return nativeSmoothHeightRegion(inputWidth, inputHeight, heights,
+                    strengths, output, modified) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     /** Fills two height-map trees in one JNI call into separate caller-owned buffers. */
     public static boolean fillHeightMapTreePair(final int originX, final int originY,
                                                 final int width, final int height,
@@ -842,6 +864,10 @@ public final class NativeSlices {
                                                       float maxHeight, float adjustment,
                                                       float[] heights, float[] strengths,
                                                       byte[] modified);
+
+    private static native int nativeSmoothHeightRegion(int inputWidth, int inputHeight,
+                                                        float[] heights, float[] strengths,
+                                                        float[] output, byte[] modified);
 
     private static native int nativeShadeColours(int[] colours, long[] packedAmounts);
     private static native int nativeShadeColoursCompact(int[] colours, int[] packedAmounts);
