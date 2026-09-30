@@ -227,7 +227,7 @@ public final class TileRenderer {
 //        synchronized (tile) {
 
         final int tileX = tile.getX(), tileY = tile.getY();
-        tile.copyRenderHeightDataTo(floatHeightCache, intHeightCache, intFluidHeightCache);
+        tile.copyRenderDataTo(floatHeightCache, intHeightCache, intFluidHeightCache, terrainOrdinalCache);
 
         // Determine which coordinates, if any, have heights which would intersect with the opposite tile, if any
         final boolean bottomless, topLayersRelativeToTerrain;
@@ -532,7 +532,7 @@ public final class TileRenderer {
                     || (deltas[1][2] < 0))) {
             return BLACK;
         }
-        final int waterLevel = tile.getWaterLevel(x, y);
+        final int waterLevel = intFluidHeightCache[offset];
         fluidHeights[1][0] = getNeighbourFluidHeight(tile, x, y, 0, -1, waterLevel);
         fluidDeltas [1][0] = fluidHeights[1][0] - waterLevel;
         fluidHeights[0][1] = getNeighbourFluidHeight(tile, x, y, -1, 0, waterLevel);
@@ -553,7 +553,7 @@ public final class TileRenderer {
             if ((! bottomless) && (intHeight == minHeight)) {
                 colour = bedrockColour;
             } else {
-                Terrain terrain = tile.getTerrain(x, y);
+                Terrain terrain = TERRAIN_VALUES[terrainOrdinalCache[offset] & 0xff];
                 if (topLayersRelativeToTerrain
                         && terrain.isCustom()) {
                     MixedMaterial mixedMaterial = Terrain.getCustomMaterial(terrain.getCustomTerrainIndex());
@@ -681,8 +681,11 @@ public final class TileRenderer {
         });
     }
 
+    private static final Terrain[] TERRAIN_VALUES = Terrain.values();
+
     private final Set<Layer> hiddenLayers = new HashSet<>(Collections.singletonList(FloodWithLava.INSTANCE));
     private final int[] intHeightCache = new int[TILE_SIZE * TILE_SIZE], intFluidHeightCache = new int[TILE_SIZE * TILE_SIZE];
+    private final byte[] terrainOrdinalCache = new byte[TILE_SIZE * TILE_SIZE];
     private int[] renderShadeAmounts;
     private long[] renderShadeAmountsExact;
     private final float[] floatHeightCache = new float[TILE_SIZE * TILE_SIZE];

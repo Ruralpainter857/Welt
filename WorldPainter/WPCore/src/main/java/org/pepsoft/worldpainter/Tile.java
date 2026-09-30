@@ -202,17 +202,28 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    /** Copies the height and water snapshot for callers that do not need terrain ordinals. */
+    void copyRenderHeightDataTo(float[] heights, int[] intHeights, int[] waterLevels) {
+        copyRenderDataTo(heights, intHeights, waterLevels, null);
+    }
+
     /**
-     * Copies the height data needed by the tile renderer under one read lock.
-     * This avoids taking the tile monitor and resolving copy-on-write buffers
-     * twice for every pixel while reusing the renderer's existing arrays.
+     * Copies the data needed by the tile renderer under one read lock. This
+     * avoids repeated tile monitor acquisition and copy-on-write buffer lookup
+     * for each rendered pixel while reusing the renderer's scratch arrays.
+     * A null terrain array requests only heights and water levels.
      */
-    synchronized void copyRenderHeightDataTo(float[] heights, int[] intHeights, int[] waterLevels) {
+    synchronized void copyRenderDataTo(float[] heights, int[] intHeights,
+                                       int[] waterLevels, byte[] terrainOrdinals) {
         final int area = TILE_SIZE * TILE_SIZE;
         if ((heights == null) || (heights.length != area)
                 || (intHeights == null) || (intHeights.length != area)
-                || (waterLevels == null) || (waterLevels.length != area)) {
-            throw new IllegalArgumentException("Expected one render height and water value for every tile cell");
+                || (waterLevels == null) || (waterLevels.length != area)
+                || ((terrainOrdinals != null) && (terrainOrdinals.length != area))) {
+            throw new IllegalArgumentException("Expected render data for every tile cell");
+        }
+        if (terrainOrdinals != null) {
+            ensureReadable(TERRAIN);
         }
         if (tall) {
             ensureReadable(TALL_HEIGHTMAP);
@@ -232,6 +243,9 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                 intHeights[index] = Math.round(height);
                 waterLevels[index] = (waterLevel[index] & 0xFF) + minHeight;
             }
+        }
+        if (terrainOrdinals != null) {
+            System.arraycopy(terrain, 0, terrainOrdinals, 0, area);
         }
     }
 
