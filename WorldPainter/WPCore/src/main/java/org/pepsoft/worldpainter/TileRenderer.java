@@ -533,14 +533,17 @@ public final class TileRenderer {
             return BLACK;
         }
         final int waterLevel = intFluidHeightCache[offset];
-        fluidHeights[1][0] = getNeighbourFluidHeight(tile, x, y, 0, -1, waterLevel);
-        fluidDeltas [1][0] = fluidHeights[1][0] - waterLevel;
-        fluidHeights[0][1] = getNeighbourFluidHeight(tile, x, y, -1, 0, waterLevel);
-        fluidDeltas [0][1] = fluidHeights[0][1] - waterLevel;
-        fluidHeights[2][1] = getNeighbourFluidHeight(tile, x, y, 1, 0, waterLevel);
-        fluidDeltas [2][1] = fluidHeights[2][1] - waterLevel;
-        fluidHeights[1][2] = getNeighbourFluidHeight(tile, x, y, 0, 1, waterLevel);
-        fluidDeltas [1][2] = fluidHeights[1][2] - waterLevel;
+        // Fluid deltas are consumed only for pixels with fluid above terrain.
+        if (waterLevel > intHeight) {
+            fluidHeights[1][0] = getNeighbourFluidHeight(tile, x, y, 0, -1, waterLevel);
+            fluidDeltas [1][0] = fluidHeights[1][0] - waterLevel;
+            fluidHeights[0][1] = getNeighbourFluidHeight(tile, x, y, -1, 0, waterLevel);
+            fluidDeltas [0][1] = fluidHeights[0][1] - waterLevel;
+            fluidHeights[2][1] = getNeighbourFluidHeight(tile, x, y, 1, 0, waterLevel);
+            fluidDeltas [2][1] = fluidHeights[2][1] - waterLevel;
+            fluidHeights[1][2] = getNeighbourFluidHeight(tile, x, y, 0, 1, waterLevel);
+            fluidDeltas [1][2] = fluidHeights[1][2] - waterLevel;
+        }
         int colour;
         if ((! hideFluids) && (waterLevel > intHeight)) {
             if (layerValueSnapshot.bitValue(layerValueSnapshot.floodWithLavaLayerIndex, x, y)) {
