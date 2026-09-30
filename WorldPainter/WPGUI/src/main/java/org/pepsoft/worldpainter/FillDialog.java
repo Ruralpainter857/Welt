@@ -329,6 +329,12 @@ public class FillDialog extends WPDialogWithPaintSelection implements Listener, 
 
     private void fillWithLayer(ProgressReceiver progressReceiver) throws UnsupportedOperationException, OperationCancelled {
         Layer layer = (Layer) comboBoxSetLayer.getSelectedItem();
+        if (filter == null && (layer.dataSize == Layer.DataSize.NIBBLE || layer.dataSize == Layer.DataSize.BIT
+                || layer.dataSize == Layer.DataSize.BIT_PER_CHUNK)) {
+            int minimum = layer.dataSize == Layer.DataSize.NIBBLE ? Math.round((sliderLayerValue.getValue() + 2) / 6.667f) : 1;
+            dimension.visitTilesForEditing().andDo(tile -> tile.raiseLayerTo(layer, minimum), progressReceiver);
+            return;
+        }
         if (layer.getDataSize() == Layer.DataSize.NIBBLE) {
             int baseLayerValue = Math.round((sliderLayerValue.getValue() + 2) / 6.667f);
             dimension.visitTilesForEditing().forFilter(filter).andDo(tile -> {
@@ -461,6 +467,11 @@ public class FillDialog extends WPDialogWithPaintSelection implements Listener, 
 
     private void invertLayer(ProgressReceiver progressReceiver) throws UnsupportedOperationException, OperationCancelled {
         Layer layer = (Layer) comboBoxInvertLayer.getSelectedItem();
+        if (filter == null && (layer.dataSize == Layer.DataSize.NIBBLE || layer.dataSize == Layer.DataSize.BIT
+                || layer.dataSize == Layer.DataSize.BIT_PER_CHUNK)) {
+            dimension.visitTilesForEditing().andDo(tile -> tile.invertLayer(layer), progressReceiver);
+            return;
+        }
         if (layer.getDataSize() == Layer.DataSize.NIBBLE) {
             dimension.visitTilesForEditing().forFilter(filter).andDo(tile -> {
                 final int worldTileX = tile.getX() << TILE_SIZE_BITS;

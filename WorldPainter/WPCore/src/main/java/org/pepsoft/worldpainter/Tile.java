@@ -2450,6 +2450,54 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    public void invertLayer(Layer layer) { editWholeLayer(layer, true, 0); }
+
+    public void raiseLayerTo(Layer layer, int minimum) { editWholeLayer(layer, false, minimum); }
+
+    private void editWholeLayer(Layer layer, boolean invert, int minimum) {
+        DataSize size = layer.dataSize;
+        if (size != DataSize.BIT && size != DataSize.BIT_PER_CHUNK && size != NIBBLE && size != BYTE)
+            throw new UnsupportedOperationException("Unsupported layer storage: " + size);
+        if (minimum < 0 || minimum > size.maxValue) throw new IllegalArgumentException("Invalid minimum layer value");
+        if (editLayerNative(layer, invert, minimum)) return;
+        int step = size == DataSize.BIT_PER_CHUNK ? 16 : 1;
+        for (int x = 0; x < TILE_SIZE; x += step) for (int y = 0; y < TILE_SIZE; y += step) {
+            if (size == DataSize.BIT || size == DataSize.BIT_PER_CHUNK) {
+                boolean previous = getBitLayerValue(layer, x, y);
+                if (invert || (!previous && minimum != 0)) setBitLayerValue(layer, x, y, invert ? !previous : true);
+            } else {
+                int previous = getLayerValue(layer, x, y);
+                if (invert || previous < minimum) setLayerValue(layer, x, y, invert ? size.maxValue - previous : minimum);
+            }
+        }
+    }
+
+    synchronized boolean editLayerNative(Layer layer, boolean invert, int minimum) {
+        if (getClass() != Tile.class || eventInhibitionCounter == 0
+                || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return false;
+        boolean bit = layer.dataSize == DataSize.BIT || layer.dataSize == DataSize.BIT_PER_CHUNK;
+        if (!bit && layer.dataSize != NIBBLE && layer.dataSize != BYTE) return false;
+        if (!bit && (layer.getDefaultValue() < 0 || layer.getDefaultValue() > layer.dataSize.maxValue)) return false;
+        ensureReadable(bit ? BIT_LAYER_DATA : LAYER_DATA);
+        ByteBuffer buffer = LayerEditAccess.edit(layer, invert, minimum,
+                bit ? null : layerData.get(layer), bit ? bitLayerData.get(layer) : null);
+        if (buffer == null) return false;
+        if (buffer.getInt(36) == 0) return true;
+        ensureWriteable(bit ? BIT_LAYER_DATA : LAYER_DATA);
+        int bytes = buffer.limit() - 40;
+        if (bit) {
+            bitLayerData.put(layer, SelectionTileAccess.applyBits(buffer, 40, bytes, bitLayerData.get(layer)));
+        } else {
+            byte[] values = layerData.get(layer);
+            if (values == null) { values = new byte[bytes]; layerData.put(layer, values); }
+            else { values = detachSharedLayerDataBuffer(layer, values); }
+            buffer.position(40); buffer.get(values);
+        }
+        cachedLayers = null;
+        layerDataChanged(layer);
+        return true;
+    }
+
     private boolean isSharedBuffer(TileBuffer buffer) {
         switch (buffer) {
             case HEIGHTMAP:

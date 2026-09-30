@@ -11,6 +11,7 @@ pub mod height_edit;
 pub mod jni;
 pub mod jni_export;
 pub mod jni_gen;
+pub mod layer_edit;
 pub mod line_raster;
 pub mod mountain;
 pub mod nibble_paint;
