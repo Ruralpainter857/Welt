@@ -12,6 +12,7 @@ use welt_export::frost::{
     apply_frost_column, apply_frost_packed_columns, FrostCell, FrostMode, FrostSettings,
     FrostUpdate,
 };
+use welt_gen::fancy_theme::fill_fancy_theme_tile;
 use welt_gen::height_map_tree::{
     fill_height_map_tree, fill_height_map_tree_points, fill_slope_samples, HeightMapNode,
     MAX_PROGRAM_NODES,
@@ -2046,6 +2047,185 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 WeltError::Ok as jint
             } else {
                 WeltError::IllegalArgument as jint
+            }
+        })
+    }
+}
+
+/// Apply the built-in FancyTheme's terrain and layer rules to one complete tile.
+///
+/// # Safety
+/// `env` and all arrays must be valid references supplied by the current JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFillFancyThemeTile(
+    env: *mut JNIEnv,
+    _class: jclass,
+    width: jint,
+    height: jint,
+    water_height: jint,
+    desert_max_height: jint,
+    terrain_base: jint,
+    terrain_desert: jint,
+    terrain_sandstone: jint,
+    terrain_bare_grass: jint,
+    terrain_beaches: jint,
+    terrain_dirt_and_gravel: jint,
+    terrain_stone_and_gravel: jint,
+    tile_heights: jobject,
+    height_neighborhood: jobject,
+    temperatures: jobject,
+    humidities: jobject,
+    forest_values: jobject,
+    output: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if [
+                tile_heights,
+                height_neighborhood,
+                temperatures,
+                humidities,
+                forest_values,
+                output,
+            ]
+            .iter()
+            .any(|array| array.is_null())
+                || width <= 0
+                || height <= 0
+                || width > 256
+                || height > 256
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            let Some(area) = (width as usize).checked_mul(height as usize) else {
+                return WeltError::IllegalArgument as jint;
+            };
+            let Some(neighborhood_width) = (width as usize).checked_add(10) else {
+                return WeltError::IllegalArgument as jint;
+            };
+            let Some(neighborhood_height) = (height as usize).checked_add(10) else {
+                return WeltError::IllegalArgument as jint;
+            };
+            let Some(neighborhood_area) = neighborhood_width.checked_mul(neighborhood_height)
+            else {
+                return WeltError::IllegalArgument as jint;
+            };
+            let Some(output_length) = area.checked_mul(7) else {
+                return WeltError::IllegalArgument as jint;
+            };
+            if area > 65_536 || neighborhood_area > 80_000 || output_length > 1_000_000 {
+                return WeltError::IllegalArgument as jint;
+            }
+
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            if get_array_length(env, tile_heights) != area as jint
+                || get_array_length(env, height_neighborhood) != neighborhood_area as jint
+                || get_array_length(env, temperatures) != area as jint
+                || get_array_length(env, humidities) != area as jint
+                || get_array_length(env, forest_values) != area as jint
+                || get_array_length(env, output) != output_length as jint
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+
+            type GetFloatArrayElements =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, *mut u8) -> *mut f32;
+            type GetDoubleArrayElements =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, *mut u8) -> *mut f64;
+            type GetByteArrayElements =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, *mut u8) -> *mut i8;
+            let get_floats: GetFloatArrayElements =
+                std::mem::transmute(function(env, GET_FLOAT_ARRAY_ELEMENTS));
+            let get_doubles: GetDoubleArrayElements =
+                std::mem::transmute(function(env, GET_DOUBLE_ARRAY_ELEMENTS));
+            let get_bytes: GetByteArrayElements =
+                std::mem::transmute(function(env, GET_BYTE_ARRAY_ELEMENTS));
+
+            let tile_pointer = get_floats(env, tile_heights, std::ptr::null_mut());
+            if tile_pointer.is_null() {
+                return WeltError::Internal as jint;
+            }
+            let tile_values = FloatArrayInput {
+                env,
+                array: tile_heights,
+                values: tile_pointer,
+                length: area,
+            };
+            let neighborhood_pointer = get_floats(env, height_neighborhood, std::ptr::null_mut());
+            if neighborhood_pointer.is_null() {
+                return WeltError::Internal as jint;
+            }
+            let neighborhood_values = FloatArrayInput {
+                env,
+                array: height_neighborhood,
+                values: neighborhood_pointer,
+                length: neighborhood_area,
+            };
+            let temperature_pointer = get_doubles(env, temperatures, std::ptr::null_mut());
+            if temperature_pointer.is_null() {
+                return WeltError::Internal as jint;
+            }
+            let temperature_values = DoubleArrayInput {
+                env,
+                array: temperatures,
+                values: temperature_pointer,
+                length: area,
+            };
+            let humidity_pointer = get_doubles(env, humidities, std::ptr::null_mut());
+            if humidity_pointer.is_null() {
+                return WeltError::Internal as jint;
+            }
+            let humidity_values = DoubleArrayInput {
+                env,
+                array: humidities,
+                values: humidity_pointer,
+                length: area,
+            };
+            let forest_pointer = get_doubles(env, forest_values, std::ptr::null_mut());
+            if forest_pointer.is_null() {
+                return WeltError::Internal as jint;
+            }
+            let forest_inputs = DoubleArrayInput {
+                env,
+                array: forest_values,
+                values: forest_pointer,
+                length: area,
+            };
+            let output_pointer = get_bytes(env, output, std::ptr::null_mut());
+            if output_pointer.is_null() {
+                return WeltError::Internal as jint;
+            }
+            let mut output_values = ByteArrayOutput {
+                env,
+                array: output,
+                values: output_pointer,
+                length: output_length,
+            };
+            let output_slice =
+                slice::from_raw_parts_mut(output_values.values.cast::<u8>(), output_values.length);
+            match fill_fancy_theme_tile(
+                width as usize,
+                height as usize,
+                water_height,
+                desert_max_height,
+                terrain_base as u8,
+                terrain_desert as u8,
+                terrain_sandstone as u8,
+                terrain_bare_grass as u8,
+                terrain_beaches as u8,
+                terrain_dirt_and_gravel as u8,
+                terrain_stone_and_gravel as u8,
+                tile_values.as_slice(),
+                neighborhood_values.as_slice(),
+                temperature_values.as_slice(),
+                humidity_values.as_slice(),
+                forest_inputs.as_slice(),
+                output_slice,
+            ) {
+                Ok(()) => WeltError::Ok as jint,
+                Err(_) => WeltError::IllegalArgument as jint,
             }
         })
     }

@@ -311,6 +311,51 @@ public final class NativeSlices {
         }
     }
 
+    /** Fills terrain and layer planes for one FancyTheme tile from its height neighborhood. */
+    public static boolean fillFancyThemeTile(final int width, final int height,
+                                             final int waterHeight, final int desertMaxHeight,
+                                             final int terrainBase, final int terrainDesert,
+                                             final int terrainSandstone, final int terrainBareGrass,
+                                             final int terrainBeaches, final int terrainDirtAndGravel,
+                                             final int terrainStoneAndGravel,
+                                             final float[] tileHeights,
+                                             final float[] heightNeighborhood,
+                                             final double[] temperatures,
+                                             final double[] humidities,
+                                             final double[] forestValues,
+                                             final byte[] output) {
+        final long area = (long) width * height;
+        final long neighborhoodArea = (long) (width + 10) * (height + 10);
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || width <= 0 || height <= 0 || width > 256 || height > 256
+                || area > 65_536L || neighborhoodArea > 80_000L
+                || tileHeights == null || tileHeights.length != area
+                || heightNeighborhood == null || heightNeighborhood.length != neighborhoodArea
+                || temperatures == null || temperatures.length != area
+                || humidities == null || humidities.length != area
+                || forestValues == null || forestValues.length != area
+                || output == null || output.length != area * 7L
+                || !isTerrainOrdinal(terrainBase) || !isTerrainOrdinal(terrainDesert)
+                || !isTerrainOrdinal(terrainSandstone) || !isTerrainOrdinal(terrainBareGrass)
+                || !isTerrainOrdinal(terrainBeaches) || !isTerrainOrdinal(terrainDirtAndGravel)
+                || !isTerrainOrdinal(terrainStoneAndGravel)) {
+            return false;
+        }
+        try {
+            return nativeFillFancyThemeTile(width, height, waterHeight, desertMaxHeight,
+                    terrainBase, terrainDesert, terrainSandstone, terrainBareGrass,
+                    terrainBeaches, terrainDirtAndGravel, terrainStoneAndGravel,
+                    tileHeights, heightNeighborhood, temperatures, humidities, forestValues,
+                    output) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
+    private static boolean isTerrainOrdinal(final int ordinal) {
+        return (ordinal >= 0) && (ordinal <= 255);
+    }
+
     /** Fills compact terrain ordinals into a caller-owned byte plane for a fresh tile. */
     public static boolean fillSimpleThemeTerrainOrdinalsCompact(final int originX, final int originY,
                                                                   final int width, final int height,
@@ -760,6 +805,19 @@ public final class NativeSlices {
                                                               long seed, int[] heights,
                                                               int[] terrainRangeOrdinals,
                                                               byte[] output);
+
+    private static native int nativeFillFancyThemeTile(int width, int height,
+                                                        int waterHeight, int desertMaxHeight,
+                                                        int terrainBase, int terrainDesert,
+                                                        int terrainSandstone, int terrainBareGrass,
+                                                        int terrainBeaches, int terrainDirtAndGravel,
+                                                        int terrainStoneAndGravel,
+                                                        float[] tileHeights,
+                                                        float[] heightNeighborhood,
+                                                        double[] temperatures,
+                                                        double[] humidities,
+                                                        double[] forestValues,
+                                                        byte[] output);
 
     private static native int nativeFillSimpleThemeLayerValues(int width, int height,
                                                                 int minHeight, int maxHeight,

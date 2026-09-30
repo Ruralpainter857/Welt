@@ -9,6 +9,9 @@ import org.pepsoft.worldpainter.*;
 import org.pepsoft.worldpainter.heightMaps.*;
 import org.pepsoft.worldpainter.layers.*;
 import org.pepsoft.worldpainter.layers.groundcover.GroundCoverLayer;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import org.pepsoft.worldpainter.themes.Theme;
 
 import java.util.Random;
@@ -79,11 +82,84 @@ public class FancyTheme implements Theme, Cloneable {
                 }
             }
         }
+        if (applyNativeFreshTile(tile, worldTileX, worldTileY, context)) {
+            return;
+        }
         for (int x = 0; x < TILE_SIZE; x++) {
             for (int y = 0; y < TILE_SIZE; y++) {
                 apply(tile, x, y, context);
             }
         }
+    }
+
+    private boolean applyNativeFreshTile(Tile tile, int worldTileX, int worldTileY,
+                                         FancyThemeHeightContext context) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) {
+            return false;
+        }
+        final FancyThemeTileBuffers buffers = context.buffers();
+        final int area = TILE_SIZE * TILE_SIZE;
+        context.copyHeightNeighborhood(buffers.heightNeighborhood);
+        for (int y = 0; y < TILE_SIZE; y++) {
+            for (int x = 0; x < TILE_SIZE; x++) {
+                final int index = x | (y << 7);
+                final int worldX = worldTileX + x;
+                final int worldY = worldTileY + y;
+                final float height = tile.getHeight(x, y);
+                double temperature = temperatureMap.getHeight(worldX, worldY);
+                temperature = temperature - Math.max(height - waterHeight, 0) / 2
+                        + randomNoiseMap.getHeight(worldX, worldY);
+                buffers.temperatures[index] = temperature;
+                buffers.humidities[index] = humidityMap.getHeight(worldX, worldY)
+                        + randomNoiseMap.getHeight(worldX, worldY);
+                buffers.forestValues[index] = forestMap.getHeight(worldX, worldY);
+                buffers.tileHeights[index] = height;
+            }
+        }
+        if (!NativeSlices.fillFancyThemeTile(TILE_SIZE, TILE_SIZE, waterHeight, desertMaxHeight,
+                baseTerrain.ordinal(), Terrain.DESERT.ordinal(), Terrain.SANDSTONE.ordinal(),
+                Terrain.BARE_GRASS.ordinal(), Terrain.BEACHES.ordinal(),
+                terrainDirtAndGravel.ordinal(), terrainStoneAndGravel.ordinal(),
+                buffers.tileHeights, buffers.heightNeighborhood, buffers.temperatures,
+                buffers.humidities, buffers.forestValues, buffers.output)) {
+            return false;
+        }
+
+        final Terrain[] terrains = Terrain.values();
+        for (int index = 0; index < area; index++) {
+            if ((buffers.output[index] & 0xff) >= terrains.length) {
+                return false;
+            }
+        }
+        for (int y = 0; y < TILE_SIZE; y++) {
+            for (int x = 0; x < TILE_SIZE; x++) {
+                final int index = x | (y << 7);
+                tile.setTerrain(x, y, terrains[buffers.output[index] & 0xff]);
+                final int jungle = buffers.output[area + index] & 0xff;
+                if (jungle != 0) {
+                    tile.setLayerValue(Jungle.INSTANCE, x, y, jungle);
+                }
+                final int swamp = buffers.output[area * 2 + index] & 0xff;
+                if (swamp != 0) {
+                    tile.setLayerValue(SwampLand.INSTANCE, x, y, swamp);
+                }
+                final int deciduous = buffers.output[area * 3 + index] & 0xff;
+                if (deciduous != 0) {
+                    tile.setLayerValue(DeciduousForest.INSTANCE, x, y, deciduous);
+                }
+                final int pine = buffers.output[area * 4 + index] & 0xff;
+                if (pine != 0) {
+                    tile.setLayerValue(PineForest.INSTANCE, x, y, pine);
+                }
+                if (buffers.output[area * 5 + index] != 0) {
+                    tile.setBitLayerValue(Frost.INSTANCE, x, y, true);
+                }
+                if (buffers.output[area * 6 + index] != 0) {
+                    tile.setBitLayerValue(snowLayer, x, y, true);
+                }
+            }
+        }
+        return true;
     }
 
     private void apply(Tile tile, int x, int y, FancyThemeHeightContext context) {
@@ -338,7 +414,25 @@ public class FancyTheme implements Theme, Cloneable {
         private float[] javaHeights;
         private double[] nativeHeights;
         private final short[] waterPrefix = new short[PREFIX_SIZE * PREFIX_SIZE];
+        private final FancyThemeTileBuffers buffers = new FancyThemeTileBuffers();
         private int originX, originY;
+
+        FancyThemeTileBuffers buffers() {
+            return buffers;
+        }
+
+        void copyHeightNeighborhood(float[] output) {
+            if (output.length != HEIGHT_SIZE * HEIGHT_SIZE) {
+                throw new IllegalArgumentException("Expected a complete height neighbourhood buffer");
+            }
+            if (nativeHeights != null) {
+                for (int index = 0; index < output.length; index++) {
+                    output[index] = (float) nativeHeights[index];
+                }
+            } else {
+                System.arraycopy(javaHeights, 0, output, 0, output.length);
+            }
+        }
 
         void prepare(FancyTheme theme, int worldTileX, int worldTileY, double[] rawHeightNeighborhood) {
             if ((rawHeightNeighborhood != null)
@@ -398,6 +492,17 @@ public class FancyTheme implements Theme, Cloneable {
         private static final int HEIGHT_SIZE = TILE_SIZE + HEIGHT_NEIGHBORHOOD_RADIUS * 2;
         private static final int PREFIX_SIZE = HEIGHT_SIZE + 1;
         private static final int WATER_WINDOW_SIZE = HEIGHT_NEIGHBORHOOD_RADIUS * 2 + 1;
+    }
+
+    private static final class FancyThemeTileBuffers {
+        private final float[] tileHeights = new float[TILE_SIZE * TILE_SIZE];
+        private final float[] heightNeighborhood = new float[
+                (TILE_SIZE + HEIGHT_NEIGHBORHOOD_RADIUS * 2)
+                        * (TILE_SIZE + HEIGHT_NEIGHBORHOOD_RADIUS * 2)];
+        private final double[] temperatures = new double[TILE_SIZE * TILE_SIZE];
+        private final double[] humidities = new double[TILE_SIZE * TILE_SIZE];
+        private final double[] forestValues = new double[TILE_SIZE * TILE_SIZE];
+        private final byte[] output = new byte[TILE_SIZE * TILE_SIZE * 7];
     }
 
     protected GroundCoverLayer snowLayer = new GroundCoverLayer("Mountain Snow", MixedMaterial.create("Deep Snow", SNOW_BLOCK), WHITE);

@@ -8,6 +8,7 @@ import org.pepsoft.worldpainter.TileFactoryFactory;
 import org.pepsoft.worldpainter.layers.Layer;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
 import java.util.List;
 
@@ -64,6 +65,33 @@ public final class FancyThemeFreshTileBatchTest {
             restoreProperty(batchProperty, previousBatch);
             restoreProperty(Native.GEN_KEY, previousNative);
             restoreProperty(Native.NINE_PATCH_GEN_KEY, previousNinePatch);
+        }
+    }
+
+    @Test
+    public void nativeFancyThemeKernelFillsTerrainAndLayerPlanes() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String previousNative = System.getProperty(Native.GEN_KEY);
+        try {
+            Native.setGenEnabled(true);
+            final float[] tileHeights = {62.0f};
+            final float[] neighborhood = new float[11 * 11];
+            java.util.Arrays.fill(neighborhood, 62.0f);
+            final byte[] output = new byte[7];
+            final boolean filled = NativeSlices.fillFancyThemeTile(1, 1, 62, 82,
+                    Terrain.GRASS.ordinal(), Terrain.DESERT.ordinal(), Terrain.SANDSTONE.ordinal(),
+                    Terrain.BARE_GRASS.ordinal(), Terrain.BEACHES.ordinal(),
+                    Terrain.CUSTOM_1.ordinal(), Terrain.CUSTOM_2.ordinal(),
+                    tileHeights, neighborhood, new double[] {25.0}, new double[] {60.0},
+                    new double[] {0.5}, output);
+            assumeTrue("native library predates the FancyTheme tile entry point", filled);
+            assertEquals(Terrain.BEACHES.ordinal(), output[0] & 0xff);
+            assertEquals(8, output[1] & 0xff);
+            assertEquals(8, output[2] & 0xff);
+            assertEquals(0, output[5] & 0xff);
+            assertEquals(0, output[6] & 0xff);
+        } finally {
+            restoreProperty(Native.GEN_KEY, previousNative);
         }
     }
 
