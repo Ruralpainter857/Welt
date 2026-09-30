@@ -87,8 +87,51 @@ public final class TerrainPaint extends AbstractPaint {
                 }
             }
         } else {
-            // The bounding box of the brush straddles more than one tile; paint to the dimension
-            if (dither) {
+            // The bounding box of the brush straddles more than one tile. While the dimension is
+            // already inhibiting events for this edit, reuse the tile lookup across each row's
+            // horizontal tile segment. Tile.setTerrain still performs the normal copy-on-write
+            // and change notification handling.
+            if (dimension.isEventsInhibited()) {
+                if (dither) {
+                    for (int y = y1; y <= y2; y++) {
+                        final int tileY = y >> TILE_SIZE_BITS;
+                        int cachedTileX = Integer.MIN_VALUE;
+                        Tile tile = null;
+                        for (int x = x1; x <= x2; x++) {
+                            final float strength = dynamicLevel * getStrength(centreX, centreY, x, y);
+                            if ((strength > 0.95f) || (Math.random() < strength)) {
+                                final int tileX = x >> TILE_SIZE_BITS;
+                                if (tileX != cachedTileX) {
+                                    cachedTileX = tileX;
+                                    tile = dimension.getTileForEditing(tileX, tileY);
+                                }
+                                if (tile != null) {
+                                    tile.setTerrain(x & TILE_SIZE_MASK, y & TILE_SIZE_MASK, terrain);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    for (int y = y1; y <= y2; y++) {
+                        final int tileY = y >> TILE_SIZE_BITS;
+                        int cachedTileX = Integer.MIN_VALUE;
+                        Tile tile = null;
+                        for (int x = x1; x <= x2; x++) {
+                            final float strength = dynamicLevel * getFullStrength(centreX, centreY, x, y);
+                            if (strength > 0.75f) {
+                                final int tileX = x >> TILE_SIZE_BITS;
+                                if (tileX != cachedTileX) {
+                                    cachedTileX = tileX;
+                                    tile = dimension.getTileForEditing(tileX, tileY);
+                                }
+                                if (tile != null) {
+                                    tile.setTerrain(x & TILE_SIZE_MASK, y & TILE_SIZE_MASK, terrain);
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (dither) {
                 for (int y = y1; y <= y2; y++) {
                     for (int x = x1; x <= x2; x++) {
                         final float strength = dynamicLevel * getStrength(centreX, centreY, x, y);
