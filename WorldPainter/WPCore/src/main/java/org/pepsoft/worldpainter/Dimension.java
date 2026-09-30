@@ -2093,6 +2093,15 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
         return getAutoBiome(x, y, -1);
     }
 
+    public final void makeAutoBiomesPermanent(Tile tile) {
+        int constantBiome = anchor.dim == DIM_NETHER ? BIOME_HELL : anchor.dim == DIM_END ? BIOME_SKY : -1;
+        if (tile.bakeAutoBiomes(constantBiome, BIOME_PLAINS)) return;
+        for (int x = 0; x < TILE_SIZE; x++) for (int y = 0; y < TILE_SIZE; y++) {
+            if (tile.getLayerValue(Biome.INSTANCE, x, y) == 255)
+                tile.setLayerValue(Biome.INSTANCE, x, y, getAutoBiome(tile, x, y, BIOME_PLAINS));
+        }
+    }
+
     public final int getAutoBiome(int x, int y, int defaultBiome) {
         switch (anchor.dim) {
             case DIM_NETHER:

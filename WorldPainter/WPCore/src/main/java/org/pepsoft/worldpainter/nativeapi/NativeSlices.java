@@ -73,6 +73,16 @@ public final class NativeSlices {
 
     private static native int nativeResizeVerticalTile(ByteBuffer buffer);
 
+    public static boolean bakeAutoBiomes(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || buffer == null || !buffer.isDirect() || buffer.isReadOnly()
+                || buffer.position() != 0 || buffer.limit() != 64 + 16384 * 8) return false;
+        try { return nativeBakeAutoBiomes(buffer) == 0; }
+        catch (UnsatisfiedLinkError e) { return false; }
+    }
+
+    private static native int nativeBakeAutoBiomes(ByteBuffer buffer);
+
     /**
      * Returns whether native tunnel edge caches are enabled. This specialised path is enabled by
      * default when its kernel is available; the dedicated property can disable it without changing

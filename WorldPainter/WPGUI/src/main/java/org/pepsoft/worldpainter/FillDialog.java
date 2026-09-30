@@ -567,13 +567,7 @@ public class FillDialog extends WPDialogWithPaintSelection implements Listener, 
     private void makeAutoBiomesPermanent(ProgressReceiver progressReceiver) throws OperationCancelled {
         dimension.visitTilesForEditing().forFilter(filter).andDo(tile -> {
             if (filter == null) {
-                for (int x = 0; x < TILE_SIZE; x++) {
-                    for (int y = 0; y < TILE_SIZE; y++) {
-                        if (tile.getLayerValue(Biome.INSTANCE, x, y) == 255) {
-                            tile.setLayerValue(Biome.INSTANCE, x, y, dimension.getAutoBiome(tile, x, y, BIOME_PLAINS));
-                        }
-                    }
-                }
+                dimension.makeAutoBiomesPermanent(tile);
             } else {
                 final int worldTileX = tile.getX() << TILE_SIZE_BITS;
                 final int worldTileY = tile.getY() << TILE_SIZE_BITS;

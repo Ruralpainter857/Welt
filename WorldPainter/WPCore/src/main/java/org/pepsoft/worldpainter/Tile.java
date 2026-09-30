@@ -288,6 +288,61 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         return true;
     }
 
+    synchronized boolean bakeAutoBiomes(int constantBiome, int defaultBiome) {
+        if (getClass() != Tile.class || eventInhibitionCounter == 0
+                || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return false;
+        ensureReadable(LAYER_DATA); ensureReadable(BIT_LAYER_DATA); ensureReadable(TERRAIN);
+        ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+        ensureReadable(tall ? TALL_WATERLEVEL : WATERLEVEL);
+        AutoBiomeAccess.Scratch scratch = AutoBiomeAccess.prepare(constantBiome, defaultBiome);
+        ByteBuffer buffer = scratch.buffer;
+        byte[] biomes = layerData.get(Biome.INSTANCE);
+        byte[] deciduous = layerData.get(org.pepsoft.worldpainter.layers.DeciduousForest.INSTANCE);
+        byte[] pine = layerData.get(org.pepsoft.worldpainter.layers.PineForest.INSTANCE);
+        byte[] swamp = layerData.get(org.pepsoft.worldpainter.layers.SwampLand.INSTANCE);
+        byte[] jungle = layerData.get(org.pepsoft.worldpainter.layers.Jungle.INSTANCE);
+        BitSet frost = bitLayerData.get(org.pepsoft.worldpainter.layers.Frost.INSTANCE);
+        BitSet river = bitLayerData.get(org.pepsoft.worldpainter.layers.River.INSTANCE);
+        BitSet lava = bitLayerData.get(FloodWithLava.INSTANCE);
+        for (int i = 0; i < TILE_SIZE * TILE_SIZE; i++) {
+            int ordinal = terrain[i] & 0xff;
+            if (ordinal >= scratch.biomes.length || scratch.biomes[ordinal] < 0 || scratch.biomes[ordinal] > 255) return false;
+            int raw = tall ? tallHeightMap[i] : heightMap[i] & 0xffff;
+            int water = (tall ? tallWaterLevel[i] & 0xffff : waterLevel[i] & 0xff) + minHeight;
+            int flags = (frost != null && frost.get(i) ? 1 : 0) | (river != null && river.get(i) ? 2 : 0)
+                    | (nibblePresent(swamp, i) ? 4 : 0) | (nibblePresent(jungle, i) ? 8 : 0)
+                    | (nibblePresent(deciduous, i) || nibblePresent(pine, i) ? 16 : 0)
+                    | (lava != null && lava.get(i) ? 32 : 0) | (ordinal == Terrain.WATER.ordinal() ? 64 : 0)
+                    | (scratch.forest[ordinal] ? 128 : 0);
+            int offset = 64 + i * 8;
+            buffer.putInt(offset, water - Math.round(raw / 256f + minHeight));
+            buffer.put(offset + 4, (byte) flags).put(offset + 5, biomes == null ? (byte) 255 : biomes[i]);
+            buffer.put(offset + 6, (byte) scratch.biomes[ordinal]).put(offset + 7, (byte) 0);
+        }
+        if (!AutoBiomeAccess.bake(scratch)) return false;
+        if (buffer.getInt(12) == 0) return true;
+        if (biomes == null) {
+            boolean nonDefault = false;
+            for (int i = 0; i < TILE_SIZE * TILE_SIZE; i++) {
+                if (buffer.get(64 + i * 8 + 5) != (byte) 255) { nonDefault = true; break; }
+            }
+            if (!nonDefault) return true;
+        }
+        ensureWriteable(LAYER_DATA);
+        biomes = layerData.get(Biome.INSTANCE);
+        if (biomes == null) {
+            biomes = new byte[TILE_SIZE * TILE_SIZE];
+            layerData.put(Biome.INSTANCE, biomes); cachedLayers = null;
+        } else { biomes = detachSharedLayerDataBuffer(Biome.INSTANCE, biomes); }
+        for (int i = 0; i < biomes.length; i++) biomes[i] = buffer.get(64 + i * 8 + 5);
+        layerDataChanged(Biome.INSTANCE);
+        return true;
+    }
+
+    private static boolean nibblePresent(byte[] data, int i) {
+        return data != null && ((data[i >>> 1] >>> ((i & 1) * 4)) & 15) > 0;
+    }
+
     /** Apply independent height edits, preserving COW and one deferred notification. */
     void applyHeightRegion(int x, int y, int width, int height,
                            float[] source, byte[] modified, int offset, int columnStride) {
