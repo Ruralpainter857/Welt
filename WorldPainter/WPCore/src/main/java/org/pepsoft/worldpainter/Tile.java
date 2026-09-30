@@ -88,6 +88,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         inhibitEvents();
         try {
             synchronized (this) {
+                if (resizeVerticalNative(minHeight, maxHeight, heightTransform)) return;
                 if ((maxHeight != this.maxHeight) || (minHeight != this.minHeight)) {
                     final int oldMinHeight = this.minHeight, minHeightDelta = oldMinHeight - minHeight;
                     this.minHeight = minHeight;
@@ -220,6 +221,71 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                         : (heightMap[index] & 0xffff) / 256f + minHeight;
             }
         }
+    }
+
+    private boolean resizeVerticalNative(int newMin, int newMax, HeightTransform transform) {
+        if (getClass() != Tile.class || !transform.isBuiltIn() || newMin >= newMax
+                || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return false;
+        if (newMin == minHeight && newMax == maxHeight && transform.isIdentity()) return true;
+        boolean newTall = (newMax - newMin) > 256;
+        ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+        ensureReadable(tall ? TALL_WATERLEVEL : WATERLEVEL);
+        ByteBuffer buffer = VerticalResizeAccess.prepare(minHeight, newMin, newMax, tall, newTall, transform);
+        for (int i = 0; i < TILE_SIZE * TILE_SIZE; i++) {
+            buffer.putInt(48 + i * 8, tall ? tallHeightMap[i] : heightMap[i] & 0xffff);
+            buffer.putInt(52 + i * 8, tall
+                    ? (newTall ? tallWaterLevel[i] & 0xffff : tallWaterLevel[i]) : waterLevel[i] & 0xff);
+        }
+        if (!VerticalResizeAccess.resize(buffer)) return false;
+        if (newTall == tall) {
+            ensureWriteable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+            ensureWriteable(tall ? TALL_WATERLEVEL : WATERLEVEL);
+        } else {
+            TileBuffer oldHeight = tall ? TALL_HEIGHTMAP : HEIGHTMAP;
+            TileBuffer oldWater = tall ? TALL_WATERLEVEL : WATERLEVEL;
+            BufferKey<?> oldHeightKey = tall ? TALL_HEIGHTMAP_BUFFER_KEY : HEIGHTMAP_BUFFER_KEY;
+            BufferKey<?> oldWaterKey = tall ? TALL_WATERLEVEL_BUFFER_KEY : WATERLEVEL_BUFFER_KEY;
+            if (newTall) {
+                tallHeightMap = new int[TILE_SIZE * TILE_SIZE];
+                tallWaterLevel = new short[TILE_SIZE * TILE_SIZE];
+                if (undoManager != null) {
+                    undoManager.addBuffer(TALL_HEIGHTMAP_BUFFER_KEY, tallHeightMap, this);
+                    undoManager.addBuffer(TALL_WATERLEVEL_BUFFER_KEY, tallWaterLevel, this);
+                }
+            } else {
+                heightMap = new short[TILE_SIZE * TILE_SIZE];
+                waterLevel = new byte[TILE_SIZE * TILE_SIZE];
+                if (undoManager != null) {
+                    undoManager.addBuffer(HEIGHTMAP_BUFFER_KEY, heightMap, this);
+                    undoManager.addBuffer(WATERLEVEL_BUFFER_KEY, waterLevel, this);
+                }
+            }
+            if (undoManager != null) {
+                undoManager.removeBuffer(oldHeightKey);
+                undoManager.removeBuffer(oldWaterKey);
+                readableBuffers.remove(oldHeight); readableBuffers.remove(oldWater);
+                writeableBuffers.remove(oldHeight); writeableBuffers.remove(oldWater);
+                readableBuffers.add(newTall ? TALL_HEIGHTMAP : HEIGHTMAP);
+                readableBuffers.add(newTall ? TALL_WATERLEVEL : WATERLEVEL);
+                writeableBuffers.add(newTall ? TALL_HEIGHTMAP : HEIGHTMAP);
+                writeableBuffers.add(newTall ? TALL_WATERLEVEL : WATERLEVEL);
+            }
+            if (newTall) { heightMap = null; waterLevel = null; }
+            else { tallHeightMap = null; tallWaterLevel = null; }
+            tall = newTall;
+        }
+        minHeight = newMin; maxHeight = newMax; maxY = newMax - 1;
+        for (int i = 0; i < TILE_SIZE * TILE_SIZE; i++) {
+            if (tall) {
+                tallHeightMap[i] = buffer.getInt(48 + i * 8);
+                tallWaterLevel[i] = (short) buffer.getInt(52 + i * 8);
+            } else {
+                heightMap[i] = (short) buffer.getInt(48 + i * 8);
+                waterLevel[i] = (byte) buffer.getInt(52 + i * 8);
+            }
+        }
+        heightMapChanged(); waterLevelChanged();
+        return true;
     }
 
     /** Apply independent height edits, preserving COW and one deferred notification. */

@@ -30,6 +30,12 @@ public class HeightTransform {
         return Math.round(height * scalingFactor + translateAmount);
     }
 
+    float getScalingFactor() { return scalingFactor; }
+
+    int getTranslateAmount() { return translateAmount; }
+
+    boolean isBuiltIn() { return getClass() == HeightTransform.class || this == IDENTITY; }
+
     public HeightMap transformHeightMap(HeightMap heightMap) {
         if (scalingFactor != 1.0f) {
             heightMap = new ProductHeightMap(heightMap.getName(), heightMap, new ConstantHeightMap("scale", scalingFactor));

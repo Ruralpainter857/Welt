@@ -24,3 +24,4 @@ pub mod selection;
 pub mod smooth_height;
 pub mod sponge;
 pub mod tile_rotation;
+pub mod vertical_resize;

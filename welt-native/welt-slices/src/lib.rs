@@ -40,6 +40,31 @@ mod chunk_buffer;
 mod fluid_flow;
 mod resource_palette;
 
+/// # Safety
+/// Le tampon direct Java doit rester accessible en écriture et exclusif pendant cet appel.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeResizeVerticalTile(
+    env: *mut JNIEnv, _class: jclass, buffer: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if buffer.is_null() { return WeltError::IllegalArgument as jint; }
+            type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
+            type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
+            let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
+            let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
+            let pointer = address(env, buffer);
+            if pointer.is_null() || capacity(env, buffer) < welt_core::vertical_resize::BYTES as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
+            let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), welt_core::vertical_resize::BYTES);
+            match welt_core::vertical_resize::resize(data) {
+                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+            }
+        })
+    }
+}
+
 /// Resamples all compact height/layer planes with one direct-buffer call.
 ///
 /// # Safety
