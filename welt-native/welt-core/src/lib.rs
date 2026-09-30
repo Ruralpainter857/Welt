@@ -10,5 +10,6 @@ pub mod jni;
 pub mod jni_export;
 pub mod jni_gen;
 pub mod noise;
+pub mod raise_pyramid;
 pub mod rng;
 pub mod smooth_height;

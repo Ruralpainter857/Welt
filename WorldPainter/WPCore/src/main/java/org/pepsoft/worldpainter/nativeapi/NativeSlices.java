@@ -245,6 +245,28 @@ public final class NativeSlices {
         }
     }
 
+    /** Builds one square-pyramid height plane and ordered cell-change flags. */
+    public static boolean raiseSquarePyramid(final int maxRing, final float centerHeight,
+                                             final float maxHeight, final float[] heights,
+                                             final byte[] modified) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || heights == null
+                || modified == null || maxRing > 128) {
+            return false;
+        }
+        final long radius = maxRing > 1 ? maxRing - 1L : 0L;
+        final long side = 2L * radius + 1L;
+        final long area = side * side;
+        if (area > 65_536L || heights.length != area || modified.length != area) {
+            return false;
+        }
+        try {
+            return nativeRaiseSquarePyramid(maxRing, centerHeight, maxHeight,
+                    heights, modified) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     /** Fills two height-map trees in one JNI call into separate caller-owned buffers. */
     public static boolean fillHeightMapTreePair(final int originX, final int originY,
                                                 final int width, final int height,
@@ -890,6 +912,10 @@ public final class NativeSlices {
     private static native int nativeSmoothHeightRegion(int inputWidth, int inputHeight,
                                                         float[] heights, float[] strengths,
                                                         float[] output, byte[] modified);
+
+    private static native int nativeRaiseSquarePyramid(int maxRing, float centerHeight,
+                                                        float maxHeight, float[] heights,
+                                                        byte[] modified);
 
     private static native int nativeShadeColours(int[] colours, long[] packedAmounts);
     private static native int nativeShadeColoursCompact(int[] colours, int[] packedAmounts);
