@@ -1631,7 +1631,11 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
         final Point transformedCoords = transform.transform(x << TILE_SIZE_BITS, y << TILE_SIZE_BITS);
         final Tile transformedTile;
-        if (transform.isRotating()) {
+        final Tile nativeRotated = TileRotationAccess.rotate(this, transform, transformedCoords);
+        if (nativeRotated != null) {
+            transformedTile = nativeRotated;
+            transformedTile.init();
+        } else if (transform.isRotating()) {
             transformedTile = new Tile(transformedCoords.x >> TILE_SIZE_BITS, transformedCoords.y >> TILE_SIZE_BITS, minHeight, maxHeight);
             ensureReadable(TERRAIN);
             if (tall) {

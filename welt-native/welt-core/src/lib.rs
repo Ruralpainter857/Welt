@@ -21,3 +21,4 @@ pub mod river_paint;
 pub mod rng;
 pub mod smooth_height;
 pub mod sponge;
+pub mod tile_rotation;

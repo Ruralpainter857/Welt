@@ -40,6 +40,40 @@ mod chunk_buffer;
 mod fluid_flow;
 mod resource_palette;
 
+/// Rotates every compact tile plane through one direct-buffer call.
+///
+/// # Safety
+/// The JVM owns a writable direct buffer for this entire call; Java must not
+/// access it concurrently. The validated length is bounded by its capacity.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeRotateTilePlanes(
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if buffer.is_null() || length < 16 || length as usize > welt_core::tile_rotation::MAX_BYTES {
+                return WeltError::IllegalArgument as jint;
+            }
+            type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
+            type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
+            let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
+            let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
+            let pointer = address(env, buffer);
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
+            let data = std::slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
+            match welt_core::tile_rotation::rotate(data) {
+                Ok(()) => WeltError::Ok as jint,
+                Err(_) => WeltError::IllegalArgument as jint,
+            }
+        })
+    }
+}
+
 #[cfg(windows)]
 #[repr(C)]
 struct ProcessMemoryCounters {

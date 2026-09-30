@@ -20,6 +20,22 @@ public final class NativeSlices {
         throw new AssertionError("Non instanciable");
     }
 
+    /** Rotates the complete v1 tile-plane buffer in place with no JNI array copies. */
+    public static boolean rotateTilePlanes(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || buffer == null || !buffer.isDirect() || buffer.isReadOnly()
+                || buffer.position() != 0 || buffer.limit() < 16 || buffer.limit() > 2 * 1024 * 1024) {
+            return false;
+        }
+        try {
+            return nativeRotateTilePlanes(buffer, buffer.limit()) == 0;
+        } catch (UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
+    private static native int nativeRotateTilePlanes(ByteBuffer buffer, int length);
+
     /**
      * Returns whether native tunnel edge caches are enabled. This specialised path is enabled by
      * default when its kernel is available; the dedicated property can disable it without changing
