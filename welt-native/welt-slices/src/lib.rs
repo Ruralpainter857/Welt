@@ -10,6 +10,7 @@ use welt_core::flood_fill::linear_flood_fill;
 use welt_core::height_edit::{apply_flatten_brush, apply_height_brush, FlattenMode};
 use welt_core::jni::{jclass, jint, jlong, jni_catch, jobject, JNIEnv};
 use welt_core::mountain::raise_mountain;
+use welt_core::nibble_paint::{apply_nibble_layer_brush, NibblePaintMode};
 use welt_core::raise_pyramid::{raise_rotated_pyramid, raise_square_pyramid};
 use welt_core::river_paint::apply_river_paint;
 use welt_core::smooth_height::smooth_height_region;
@@ -736,6 +737,79 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             );
             set_int(env, fill_count, 0, 1, &fill_count_value);
             set_int(env, bounds_hit, 0, 1, &bounds_hit_value);
+            WeltError::Ok as jint
+        })
+    }
+}
+
+/// Computes nibble-layer brush values for Java's normal tile setters.
+///
+/// # Safety
+/// `env`, arrays, and their lengths must be valid references from the JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeApplyNibbleLayerBrush(
+    env: *mut JNIEnv,
+    _class: jclass,
+    mode: jint,
+    values: jobject,
+    strengths: jobject,
+    modified: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if values.is_null() || strengths.is_null() || modified.is_null() {
+                return WeltError::IllegalArgument as jint;
+            }
+            let mode = match mode {
+                0 => NibblePaintMode::Apply,
+                1 => NibblePaintMode::RemoveRounded,
+                2 => NibblePaintMode::RemoveTruncated,
+                _ => return WeltError::IllegalArgument as jint,
+            };
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            let length = get_array_length(env, values);
+            if !(1..=65_536).contains(&length)
+                || get_array_length(env, strengths) != length
+                || get_array_length(env, modified) != length
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+
+            type GetIntArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i32);
+            type GetFloatArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut f32);
+            type SetIntArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i32);
+            type SetByteArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i8);
+            let get_int: GetIntArrayRegion =
+                std::mem::transmute(function(env, GET_INT_ARRAY_REGION));
+            let get_float: GetFloatArrayRegion =
+                std::mem::transmute(function(env, GET_FLOAT_ARRAY_REGION));
+            let set_int: SetIntArrayRegion =
+                std::mem::transmute(function(env, SET_INT_ARRAY_REGION));
+            let set_byte: SetByteArrayRegion =
+                std::mem::transmute(function(env, SET_BYTE_ARRAY_REGION));
+            let mut value_buffer = vec![0_i32; length as usize];
+            let mut strength_buffer = vec![0.0_f32; length as usize];
+            let mut modified_buffer = vec![0_i8; length as usize];
+            get_int(env, values, 0, length, value_buffer.as_mut_ptr());
+            get_float(env, strengths, 0, length, strength_buffer.as_mut_ptr());
+            if apply_nibble_layer_brush(
+                mode,
+                &mut value_buffer,
+                &strength_buffer,
+                &mut modified_buffer,
+            )
+            .is_err()
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            set_int(env, values, 0, length, value_buffer.as_ptr());
+            set_byte(env, modified, 0, length, modified_buffer.as_ptr());
             WeltError::Ok as jint
         })
     }

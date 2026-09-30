@@ -321,6 +321,23 @@ public final class NativeSlices {
         }
     }
 
+    /** Calculates apply/remove values for one nibble-layer brush area. */
+    public static boolean applyNibbleLayerBrush(final int mode, final int[] values,
+                                                final float[] strengths,
+                                                final byte[] modified) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || mode < 0 || mode > 2 || values == null || strengths == null || modified == null
+                || values.length == 0 || values.length > 65_536
+                || strengths.length != values.length || modified.length != values.length) {
+            return false;
+        }
+        try {
+            return nativeApplyNibbleLayerBrush(mode, values, strengths, modified) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     /** Smooths a brush area using caller-owned input, strength and output buffers. */
     public static boolean smoothHeightRegion(final int inputWidth, final int inputHeight,
                                              final float[] heights, final float[] strengths,
@@ -1050,6 +1067,9 @@ public final class NativeSlices {
     private static native int nativeLinearFloodFill(int width, int height, int seedX, int seedY,
                                                      byte[] boundary, int[] fillIndices,
                                                      int[] fillCount, int[] boundsHit);
+
+    private static native int nativeApplyNibbleLayerBrush(int mode, int[] values,
+                                                           float[] strengths, byte[] modified);
 
     private static native int nativeSmoothHeightRegion(int inputWidth, int inputHeight,
                                                         float[] heights, float[] strengths,

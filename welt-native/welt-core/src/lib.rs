@@ -11,6 +11,7 @@ pub mod jni;
 pub mod jni_export;
 pub mod jni_gen;
 pub mod mountain;
+pub mod nibble_paint;
 pub mod noise;
 pub mod raise_pyramid;
 pub mod river_paint;
