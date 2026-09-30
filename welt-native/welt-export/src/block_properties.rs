@@ -214,7 +214,7 @@ fn set_nibble(data: &mut [u8], block_offset: i32, value: u8) {
 
 #[cfg(test)]
 mod tests {
-    use super::{BlockSection, FirstPassError, OPAQUE, first_pass};
+    use super::{first_pass, BlockSection, FirstPassError, OPAQUE};
 
     fn section<'a>(
         indexes: &'a mut [i32],

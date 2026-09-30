@@ -77,6 +77,7 @@ public final class FancyThemeFreshTileBatchTest {
             final float[] tileHeights = {62.0f};
             final float[] neighborhood = new float[11 * 11];
             java.util.Arrays.fill(neighborhood, 62.0f);
+            neighborhood[0] = 61.0f;
             final byte[] output = new byte[7];
             final boolean filled = NativeSlices.fillFancyThemeTile(1, 1, 62, 82,
                     Terrain.GRASS.ordinal(), Terrain.DESERT.ordinal(), Terrain.SANDSTONE.ordinal(),

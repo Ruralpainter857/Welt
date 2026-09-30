@@ -272,7 +272,8 @@ mod tests {
 
     #[test]
     fn beach_can_add_jungle_and_swamp_layers() {
-        let neighborhood = vec![62.0; (1 + 2 * FANCY_THEME_HEIGHT_BORDER).pow(2)];
+        let mut neighborhood = vec![62.0; (1 + 2 * FANCY_THEME_HEIGHT_BORDER).pow(2)];
+        neighborhood[0] = 61.0;
         let output = run_case(62.0, &neighborhood, 25.0, 60.0, 0.5);
         assert_eq!(output[0], BEACH);
         assert_eq!(output[1], 8); // The near-water jungle rule.
