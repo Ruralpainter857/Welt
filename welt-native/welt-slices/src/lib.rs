@@ -8,6 +8,7 @@ use welt_core::erosion::erode_raw_height_region;
 use welt_core::error::WeltError;
 use welt_core::height_edit::{apply_flatten_brush, apply_height_brush, FlattenMode};
 use welt_core::jni::{jclass, jint, jlong, jni_catch, jobject, JNIEnv};
+use welt_core::mountain::raise_mountain;
 use welt_core::raise_pyramid::{raise_rotated_pyramid, raise_square_pyramid};
 use welt_core::smooth_height::smooth_height_region;
 use welt_export::edge_distance::bake_edge_distances;
@@ -343,6 +344,103 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             }
             set_float(env, heights, 0, length, height_values.as_ptr());
             set_byte(env, modified, 0, length, modified_values.as_ptr());
+            WeltError::Ok as jint
+        })
+    }
+}
+
+/// Computes one Raise Mountain height plane from Java-prepared heights and brush strengths.
+///
+/// # Safety
+/// `env`, arrays, and their lengths must be valid references from the JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeApplyRaiseMountain(
+    env: *mut JNIEnv,
+    _class: jclass,
+    origin_x: jint,
+    origin_y: jint,
+    width: jint,
+    height: jint,
+    min_z: jint,
+    max_range: jint,
+    peak_height: f32,
+    peak_factor: f32,
+    inverse: jint,
+    noise_scale: f32,
+    noise_seed: jlong,
+    heights: jobject,
+    strengths: jobject,
+    modified: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if width <= 0
+                || height <= 0
+                || heights.is_null()
+                || strengths.is_null()
+                || modified.is_null()
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            let area = match (width as usize).checked_mul(height as usize) {
+                Some(area) if area <= 65_536 => area,
+                _ => return WeltError::IllegalArgument as jint,
+            };
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            if get_array_length(env, heights) != area as jint
+                || get_array_length(env, strengths) != area as jint
+                || get_array_length(env, modified) != area as jint
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+
+            type GetFloatArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut f32);
+            type SetFloatArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const f32);
+            type SetByteArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i8);
+            let get_float: GetFloatArrayRegion =
+                std::mem::transmute(function(env, GET_FLOAT_ARRAY_REGION));
+            let set_float: SetFloatArrayRegion =
+                std::mem::transmute(function(env, SET_FLOAT_ARRAY_REGION));
+            let set_byte: SetByteArrayRegion =
+                std::mem::transmute(function(env, SET_BYTE_ARRAY_REGION));
+            let mut height_values = vec![0.0_f32; area];
+            let mut strength_values = vec![0.0_f32; area];
+            let mut modified_values = vec![0_i8; area];
+            get_float(env, heights, 0, area as jint, height_values.as_mut_ptr());
+            get_float(
+                env,
+                strengths,
+                0,
+                area as jint,
+                strength_values.as_mut_ptr(),
+            );
+            if raise_mountain(
+                origin_x,
+                origin_y,
+                width as usize,
+                height as usize,
+                min_z as f32,
+                max_range as f32,
+                peak_height,
+                peak_factor,
+                inverse != 0,
+                noise_scale,
+                noise_seed as i64,
+                &mut height_values,
+                &strength_values,
+                &mut modified_values,
+            )
+            .is_err()
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            set_float(env, heights, 0, area as jint, height_values.as_ptr());
+            set_byte(env, modified, 0, area as jint, modified_values.as_ptr());
             WeltError::Ok as jint
         })
     }

@@ -9,6 +9,7 @@ pub mod height_edit;
 pub mod jni;
 pub mod jni_export;
 pub mod jni_gen;
+pub mod mountain;
 pub mod noise;
 pub mod raise_pyramid;
 pub mod rng;

@@ -9,6 +9,9 @@ import org.pepsoft.util.PerlinNoise;
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.WorldPainter;
 import org.pepsoft.worldpainter.brushes.Brush;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
 import javax.swing.*;
 
@@ -50,22 +53,76 @@ public class RaiseMountain extends AbstractBrushOperation {
         try {
             final int radius = getEffectiveRadius();
             final boolean applyTheme = options.isApplyTheme();
-            for (int x = centreX - radius; x <= centreX + radius; x++) {
-                for (int y = centreY - radius; y <= centreY + radius; y++) {
-                    final float currentHeight = dimension.getHeightAt(x, y);
-                    final float targetHeight = getTargetHeight(minZ, maxRange, centreX, centreY, x, y, peakHeight, inverse);
-                    if (inverse ? (targetHeight < currentHeight) : (targetHeight > currentHeight)) {
-//                        float strength = calcStrength(centerX, centerY, x, y);
-//                        float newHeight = strength * targetHeight  + (1f - strength) * currentHeight;
-                        dimension.setHeightAt(x, y, targetHeight);
-                        if (applyTheme) {
-                            dimension.applyTheme(x, y);
+            if (!applyNativeMountain(dimension, centreX, centreY, radius,
+                    inverse, minZ, maxRange, peakHeight, applyTheme)) {
+                for (int x = centreX - radius; x <= centreX + radius; x++) {
+                    for (int y = centreY - radius; y <= centreY + radius; y++) {
+                        final float currentHeight = dimension.getHeightAt(x, y);
+                        final float targetHeight = getTargetHeight(minZ, maxRange, centreX, centreY, x, y, peakHeight, inverse);
+                        if (inverse ? (targetHeight < currentHeight) : (targetHeight > currentHeight)) {
+    //                        float strength = calcStrength(centerX, centerY, x, y);
+    //                        float newHeight = strength * targetHeight  + (1f - strength) * currentHeight;
+                            dimension.setHeightAt(x, y, targetHeight);
+                            if (applyTheme) {
+                                dimension.applyTheme(x, y);
+                            }
                         }
                     }
                 }
             }
         } finally {
             dimension.setEventsInhibited(false);
+        }
+    }
+
+    private boolean applyNativeMountain(Dimension dimension, int centreX, int centreY,
+                                        int radius, boolean inverse, int minZ, int maxRange,
+                                        float peakHeight, boolean applyTheme) {
+        final long diameterLong = 2L * radius + 1L;
+        if (radius < 0 || diameterLong > 255L || !Native.isGenEnabled()
+                || !NativeLoader.areSlicesAvailable()) {
+            return false;
+        }
+        final int diameter = (int) diameterLong;
+        final int area = diameter * diameter;
+        ensureNativeBuffers(area);
+
+        final Brush brush = getBrush();
+        int index = 0;
+        for (int x = centreX - radius; x <= centreX + radius; x++) {
+            for (int y = centreY - radius; y <= centreY + radius; y++) {
+                nativeHeights[index] = dimension.getHeightAt(x, y);
+                nativeStrengths[index] = brush.getFullStrength(x - centreX, y - centreY);
+                index++;
+            }
+        }
+
+        if (!NativeSlices.applyRaiseMountain(centreX - radius, centreY - radius,
+                diameter, diameter, minZ, maxRange, peakHeight, peakFactor,
+                inverse, MEDIUM_BLOBS, 67L, nativeHeights, nativeStrengths, nativeModified)) {
+            return false;
+        }
+
+        index = 0;
+        for (int x = centreX - radius; x <= centreX + radius; x++) {
+            for (int y = centreY - radius; y <= centreY + radius; y++) {
+                if (nativeModified[index] != 0) {
+                    dimension.setHeightAt(x, y, nativeHeights[index]);
+                    if (applyTheme) {
+                        dimension.applyTheme(x, y);
+                    }
+                }
+                index++;
+            }
+        }
+        return true;
+    }
+
+    private void ensureNativeBuffers(int area) {
+        if (nativeHeights == null || nativeHeights.length != area) {
+            nativeHeights = new float[area];
+            nativeStrengths = new float[area];
+            nativeModified = new byte[area];
         }
     }
     
@@ -167,4 +224,7 @@ public class RaiseMountain extends AbstractBrushOperation {
     private final TerrainShapingOptionsPanel optionsPanel;
     private int peakDX, peakDY;
     private float peakFactor;
+    private float[] nativeHeights;
+    private float[] nativeStrengths;
+    private byte[] nativeModified;
 }

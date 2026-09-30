@@ -223,6 +223,31 @@ public final class NativeSlices {
         }
     }
 
+    /** Calculates a Raise Mountain brush area in one native call. */
+    public static boolean applyRaiseMountain(final int originX, final int originY,
+                                             final int width, final int height,
+                                             final int minZ, final int maxRange,
+                                             final float peakHeight, final float peakFactor,
+                                             final boolean inverse, final float noiseScale,
+                                             final long noiseSeed, final float[] heights,
+                                             final float[] strengths, final byte[] modified) {
+        final long area = (long) width * height;
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || width <= 0 || height <= 0 || area <= 0 || area > 65_536L
+                || heights == null || strengths == null || modified == null
+                || heights.length != area || strengths.length != area
+                || modified.length != area || !Float.isFinite(noiseScale) || noiseScale <= 0.0f) {
+            return false;
+        }
+        try {
+            return nativeApplyRaiseMountain(originX, originY, width, height,
+                    minZ, maxRange, peakHeight, peakFactor, inverse ? 1 : 0,
+                    noiseScale, noiseSeed, heights, strengths, modified) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     /** Smooths a brush area using caller-owned input, strength and output buffers. */
     public static boolean smoothHeightRegion(final int inputWidth, final int inputHeight,
                                              final float[] heights, final float[] strengths,
@@ -930,6 +955,14 @@ public final class NativeSlices {
     private static native int nativeApplyFlattenBrush(int mode, float targetHeight,
                                                        float[] heights, float[] strengths,
                                                        byte[] modified);
+
+    private static native int nativeApplyRaiseMountain(int originX, int originY,
+                                                        int width, int height,
+                                                        int minZ, int maxRange,
+                                                        float peakHeight, float peakFactor,
+                                                        int inverse, float noiseScale,
+                                                        long noiseSeed, float[] heights,
+                                                        float[] strengths, byte[] modified);
 
     private static native int nativeSmoothHeightRegion(int inputWidth, int inputHeight,
                                                         float[] heights, float[] strengths,
