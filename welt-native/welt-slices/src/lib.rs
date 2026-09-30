@@ -328,6 +328,10 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
     }
 }
 
+/// Applies compact terrain and fluid brightness amounts to one ARGB tile.
+///
+/// # Safety
+/// `env` and both arrays must be valid references supplied by the current JVM frame.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeShadeColoursCompact(
     env: *mut JNIEnv,
@@ -2197,7 +2201,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             if output_pointer.is_null() {
                 return WeltError::Internal as jint;
             }
-            let mut output_values = ByteArrayOutput {
+            let output_values = ByteArrayOutput {
                 env,
                 array: output,
                 values: output_pointer,

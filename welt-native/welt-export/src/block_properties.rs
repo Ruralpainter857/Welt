@@ -46,6 +46,7 @@ pub enum FirstPassError {
 /// `heights[x * 16 + z]` receives the updated height map. Input section arrays
 /// are modified in place, and materials with an explicit leaf distance are
 /// replaced by their pre-reserved palette index.
+#[allow(clippy::too_many_arguments)]
 pub fn first_pass(
     sections: &mut [BlockSection<'_>],
     min_y: i32,
@@ -259,7 +260,7 @@ mod tests {
         assert_eq!(heights[0], 1);
         assert_eq!(sky[0] & 0x0f, 0);
         assert_eq!(block[0] & 0x0f, 12);
-        assert_eq!(sky[(15 << 7) | 0] & 0x0f, 15);
+        assert_eq!(sky[15 << 7] & 0x0f, 15);
     }
 
     #[test]

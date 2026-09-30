@@ -158,7 +158,7 @@ pub fn fill_fancy_theme_tile(
             };
             output[plane(index, 0)] = terrain;
 
-            if !(slope > 2.0) && height > below_water_threshold && forest > 0.35 {
+            if height > below_water_threshold && forest > 0.35 {
                 if temperature > 20.0 {
                     if humidity > 55.0 {
                         if height < above_water_threshold {
@@ -290,6 +290,7 @@ mod tests {
         neighborhood[center - side] = 74.0;
         let output = run_case(70.0, &neighborhood, -1.0, 60.0, 0.5);
         assert_eq!(output[0], STONE_GRAVEL);
+        assert_eq!(output[4], 8); // Forest layers are independent of steep-terrain selection.
         assert_eq!(output[5], 1);
         assert_eq!(output[6], 0);
     }
