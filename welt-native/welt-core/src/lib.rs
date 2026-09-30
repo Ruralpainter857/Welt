@@ -14,3 +14,4 @@ pub mod noise;
 pub mod raise_pyramid;
 pub mod rng;
 pub mod smooth_height;
+pub mod sponge;

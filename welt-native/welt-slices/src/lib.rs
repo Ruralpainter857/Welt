@@ -11,6 +11,7 @@ use welt_core::jni::{jclass, jint, jlong, jni_catch, jobject, JNIEnv};
 use welt_core::mountain::raise_mountain;
 use welt_core::raise_pyramid::{raise_rotated_pyramid, raise_square_pyramid};
 use welt_core::smooth_height::smooth_height_region;
+use welt_core::sponge::apply_sponge_brush;
 use welt_export::edge_distance::bake_edge_distances;
 use welt_export::edge_height::bake_edge_heights;
 use welt_export::frost::{
@@ -441,6 +442,59 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             }
             set_float(env, heights, 0, area as jint, height_values.as_ptr());
             set_byte(env, modified, 0, area as jint, modified_values.as_ptr());
+            WeltError::Ok as jint
+        })
+    }
+}
+
+/// Prepares one Sponge stroke's per-cell water and lava actions.
+///
+/// # Safety
+/// `env`, arrays, and their lengths must be valid references from the JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeApplySpongeBrush(
+    env: *mut JNIEnv,
+    _class: jclass,
+    inverse: jint,
+    water_height: jint,
+    strengths: jobject,
+    actions: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if strengths.is_null() || actions.is_null() {
+                return WeltError::IllegalArgument as jint;
+            }
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            let length = get_array_length(env, strengths);
+            if !(1..=65_536).contains(&length) || get_array_length(env, actions) != length {
+                return WeltError::IllegalArgument as jint;
+            }
+
+            type GetFloatArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut f32);
+            type SetByteArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i8);
+            let get_float: GetFloatArrayRegion =
+                std::mem::transmute(function(env, GET_FLOAT_ARRAY_REGION));
+            let set_byte: SetByteArrayRegion =
+                std::mem::transmute(function(env, SET_BYTE_ARRAY_REGION));
+            let mut strength_values = vec![0.0_f32; length as usize];
+            let mut action_values = vec![0_i8; length as usize];
+            get_float(env, strengths, 0, length, strength_values.as_mut_ptr());
+            if apply_sponge_brush(
+                inverse != 0,
+                water_height,
+                &strength_values,
+                &mut action_values,
+            )
+            .is_err()
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            set_byte(env, actions, 0, length, action_values.as_ptr());
             WeltError::Ok as jint
         })
     }

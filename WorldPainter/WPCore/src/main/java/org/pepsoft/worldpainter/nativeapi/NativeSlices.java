@@ -248,6 +248,22 @@ public final class NativeSlices {
         }
     }
 
+    /** Selects the water and lava actions for one Sponge brush stroke. */
+    public static boolean applySpongeBrush(final boolean inverse, final int waterHeight,
+                                           final float[] strengths, final byte[] actions) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || strengths == null || actions == null || strengths.length == 0
+                || strengths.length > 65_536 || actions.length != strengths.length) {
+            return false;
+        }
+        try {
+            return nativeApplySpongeBrush(inverse ? 1 : 0, waterHeight,
+                    strengths, actions) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     /** Smooths a brush area using caller-owned input, strength and output buffers. */
     public static boolean smoothHeightRegion(final int inputWidth, final int inputHeight,
                                              final float[] heights, final float[] strengths,
@@ -963,6 +979,9 @@ public final class NativeSlices {
                                                         int inverse, float noiseScale,
                                                         long noiseSeed, float[] heights,
                                                         float[] strengths, byte[] modified);
+
+    private static native int nativeApplySpongeBrush(int inverse, int waterHeight,
+                                                      float[] strengths, byte[] actions);
 
     private static native int nativeSmoothHeightRegion(int inputWidth, int inputHeight,
                                                         float[] heights, float[] strengths,
