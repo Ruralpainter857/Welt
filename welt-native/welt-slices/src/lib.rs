@@ -40,6 +40,36 @@ mod chunk_buffer;
 mod fluid_flow;
 mod resource_palette;
 
+/// Edits both compact selection levels using one direct buffer.
+///
+/// # Safety
+/// Java owns an exclusively accessible, writable direct buffer during this call.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeEditSelection(
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if buffer.is_null() { return WeltError::IllegalArgument as jint; }
+            type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
+            type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
+            let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
+            let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
+            let pointer = address(env, buffer);
+            if pointer.is_null() || capacity(env, buffer) != welt_core::selection::LENGTH as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
+            let data = std::slice::from_raw_parts_mut(pointer.cast::<u8>(), welt_core::selection::LENGTH);
+            match welt_core::selection::edit(data) {
+                Ok(()) => WeltError::Ok as jint,
+                Err(_) => WeltError::IllegalArgument as jint,
+            }
+        })
+    }
+}
+
 /// Rotates every compact tile plane through one direct-buffer call.
 ///
 /// # Safety

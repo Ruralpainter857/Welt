@@ -14,10 +14,15 @@ import org.pepsoft.worldpainter.layers.Biome;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.layers.Layer;
 import org.pepsoft.worldpainter.layers.Layer.DataSize;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.selection.SelectionBlock;
+import org.pepsoft.worldpainter.selection.SelectionChunk;
 
 import java.awt.*;
 import java.io.*;
 import java.lang.ref.WeakReference;
+import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -1242,6 +1247,40 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
             bitSet.set(bitOffset, value);
         }
         layerDataChanged(layer);
+    }
+
+    /**
+     * Edit the two compact selection planes together. False requests the normal
+     * Java shape path. Deferred events are required to preserve notification
+     * semantics while replacing the undo-aware bit-layer map in one transaction.
+     */
+    public boolean editSelectionShape(Shape shape, boolean add) {
+        final int flags;
+        synchronized (this) {
+            if (getClass() != Tile.class || eventInhibitionCounter == 0
+                    || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) {
+                return false;
+            }
+            ensureReadable(BIT_LAYER_DATA);
+            final var chunkLayer = SelectionChunk.INSTANCE;
+            final var blockLayer = SelectionBlock.INSTANCE;
+            final ByteBuffer result = SelectionTileAccess.edit(this, shape, add,
+                    bitLayerData.get(chunkLayer), bitLayerData.get(blockLayer));
+            if (result == null) return false;
+            flags = result.getInt(12);
+            if (flags == 0) return true;
+            ensureWriteable(BIT_LAYER_DATA);
+            if ((flags & 1) != 0) {
+                bitLayerData.put(chunkLayer, SelectionTileAccess.applyBits(result, 88, 8, bitLayerData.get(chunkLayer)));
+            }
+            if ((flags & 2) != 0) {
+                bitLayerData.put(blockLayer, SelectionTileAccess.applyBits(result, 96, 2048, bitLayerData.get(blockLayer)));
+            }
+            cachedLayers = null;
+        }
+        if ((flags & 1) != 0) layerDataChanged(SelectionChunk.INSTANCE);
+        if ((flags & 2) != 0) layerDataChanged(SelectionBlock.INSTANCE);
+        return true;
     }
 
     /**

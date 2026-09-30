@@ -36,6 +36,22 @@ public final class NativeSlices {
 
     private static native int nativeRotateTilePlanes(ByteBuffer buffer, int length);
 
+    /** Edits both selection planes in the fixed v1 direct buffer. */
+    public static boolean editSelection(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || buffer == null || !buffer.isDirect() || buffer.isReadOnly()
+                || buffer.position() != 0 || buffer.limit() != 4192 || buffer.capacity() != 4192) {
+            return false;
+        }
+        try {
+            return nativeEditSelection(buffer) == 0;
+        } catch (UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
+    private static native int nativeEditSelection(ByteBuffer buffer);
+
     /**
      * Returns whether native tunnel edge caches are enabled. This specialised path is enabled by
      * default when its kernel is available; the dedicated property can disable it without changing

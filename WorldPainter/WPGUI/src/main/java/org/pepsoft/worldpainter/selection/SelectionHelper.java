@@ -598,6 +598,9 @@ outer:  for (int dx = -1; dx <= 1; dx++) {
                             tile.clearLayerData(SelectionChunk.INSTANCE);
                         }
                     } else if (shape.intersects(tileBounds)) {
+                        if (tile.editSelectionShape(shape, add)) {
+                            continue;
+                        }
                         // The tile intersects the selection, but does not
                         // lie entirely inside it; go chunk by chunk
                         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
