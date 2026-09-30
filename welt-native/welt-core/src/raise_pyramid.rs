@@ -22,6 +22,35 @@ pub fn raise_square_pyramid(
     heights: &mut [f32],
     modified: &mut [i8],
 ) -> Result<(), PyramidError> {
+    raise_pyramid(
+        false,
+        max_ring,
+        center_height,
+        max_height,
+        heights,
+        modified,
+    )
+}
+
+/// Builds a 45-degree rotated sandstone pyramid's height changes.
+pub fn raise_rotated_pyramid(
+    max_ring: i32,
+    center_height: f32,
+    max_height: f32,
+    heights: &mut [f32],
+    modified: &mut [i8],
+) -> Result<(), PyramidError> {
+    raise_pyramid(true, max_ring, center_height, max_height, heights, modified)
+}
+
+fn raise_pyramid(
+    rotated: bool,
+    max_ring: i32,
+    center_height: f32,
+    max_height: f32,
+    heights: &mut [f32],
+    modified: &mut [i8],
+) -> Result<(), PyramidError> {
     if max_ring > 128 {
         return Err(PyramidError::TooManyCells);
     }
@@ -61,41 +90,80 @@ pub fn raise_square_pyramid(
     let mut desired_height = center_height;
     for ring in 1..max_ring {
         let mut raised = false;
-        for offset in -(ring) as isize..=ring as isize {
-            raised |= raise_if_lower(
-                offset + radius as isize,
-                -(ring as isize) + radius as isize,
-                side,
-                desired_height,
-                heights,
-                modified,
-            );
-            raised |= raise_if_lower(
-                offset + radius as isize,
-                ring as isize + radius as isize,
-                side,
-                desired_height,
-                heights,
-                modified,
-            );
-        }
-        for offset in (-ring + 1) as isize..ring as isize {
-            raised |= raise_if_lower(
-                -(ring as isize) + radius as isize,
-                offset + radius as isize,
-                side,
-                desired_height,
-                heights,
-                modified,
-            );
-            raised |= raise_if_lower(
-                ring as isize + radius as isize,
-                offset + radius as isize,
-                side,
-                desired_height,
-                heights,
-                modified,
-            );
+        if rotated {
+            for offset in 0..ring as isize {
+                let ring = ring as isize;
+                let center = radius as isize;
+                raised |= raise_if_lower(
+                    center - ring + offset,
+                    center - offset,
+                    side,
+                    desired_height,
+                    heights,
+                    modified,
+                );
+                raised |= raise_if_lower(
+                    center + offset,
+                    center - ring + offset,
+                    side,
+                    desired_height,
+                    heights,
+                    modified,
+                );
+                raised |= raise_if_lower(
+                    center + ring - offset,
+                    center + offset,
+                    side,
+                    desired_height,
+                    heights,
+                    modified,
+                );
+                raised |= raise_if_lower(
+                    center - offset,
+                    center + ring - offset,
+                    side,
+                    desired_height,
+                    heights,
+                    modified,
+                );
+            }
+        } else {
+            for offset in -(ring) as isize..=ring as isize {
+                raised |= raise_if_lower(
+                    offset + radius as isize,
+                    -(ring as isize) + radius as isize,
+                    side,
+                    desired_height,
+                    heights,
+                    modified,
+                );
+                raised |= raise_if_lower(
+                    offset + radius as isize,
+                    ring as isize + radius as isize,
+                    side,
+                    desired_height,
+                    heights,
+                    modified,
+                );
+            }
+            for offset in (-ring + 1) as isize..ring as isize {
+                raised |= raise_if_lower(
+                    -(ring as isize) + radius as isize,
+                    offset + radius as isize,
+                    side,
+                    desired_height,
+                    heights,
+                    modified,
+                );
+                raised |= raise_if_lower(
+                    ring as isize + radius as isize,
+                    offset + radius as isize,
+                    side,
+                    desired_height,
+                    heights,
+                    modified,
+                );
+            }
         }
         if !raised {
             break;

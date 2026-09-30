@@ -8,7 +8,7 @@ use welt_core::erosion::erode_raw_height_region;
 use welt_core::error::WeltError;
 use welt_core::height_edit::{apply_flatten_brush, apply_height_brush, FlattenMode};
 use welt_core::jni::{jclass, jint, jlong, jni_catch, jobject, JNIEnv};
-use welt_core::raise_pyramid::raise_square_pyramid;
+use welt_core::raise_pyramid::{raise_rotated_pyramid, raise_square_pyramid};
 use welt_core::smooth_height::smooth_height_region;
 use welt_export::edge_distance::bake_edge_distances;
 use welt_export::edge_height::bake_edge_heights;
@@ -507,6 +507,80 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let mut modified_values = vec![0_i8; area];
             get_float(env, heights, 0, area as jint, height_values.as_mut_ptr());
             if raise_square_pyramid(
+                max_ring,
+                center_height,
+                max_height,
+                &mut height_values,
+                &mut modified_values,
+            )
+            .is_err()
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            set_float(env, heights, 0, area as jint, height_values.as_ptr());
+            set_byte(env, modified, 0, area as jint, modified_values.as_ptr());
+            WeltError::Ok as jint
+        })
+    }
+}
+
+/// Computes one 45-degree rotated sandstone pyramid's ordered height updates.
+///
+/// # Safety
+/// `env`, arrays, and their lengths must be valid references from the JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeRaiseRotatedPyramid(
+    env: *mut JNIEnv,
+    _class: jclass,
+    max_ring: jint,
+    center_height: f32,
+    max_height: f32,
+    heights: jobject,
+    modified: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if heights.is_null() || modified.is_null() || max_ring > 128 {
+                return WeltError::IllegalArgument as jint;
+            }
+            let radius = if max_ring > 1 {
+                (max_ring - 1) as usize
+            } else {
+                0
+            };
+            let side = match radius.checked_mul(2).and_then(|value| value.checked_add(1)) {
+                Some(value) => value,
+                None => return WeltError::IllegalArgument as jint,
+            };
+            let area = match side.checked_mul(side) {
+                Some(value) if value <= 65_536 => value,
+                _ => return WeltError::IllegalArgument as jint,
+            };
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            if get_array_length(env, heights) != area as jint
+                || get_array_length(env, modified) != area as jint
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+
+            type GetFloatArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut f32);
+            type SetFloatArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const f32);
+            type SetByteArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i8);
+            let get_float: GetFloatArrayRegion =
+                std::mem::transmute(function(env, GET_FLOAT_ARRAY_REGION));
+            let set_float: SetFloatArrayRegion =
+                std::mem::transmute(function(env, SET_FLOAT_ARRAY_REGION));
+            let set_byte: SetByteArrayRegion =
+                std::mem::transmute(function(env, SET_BYTE_ARRAY_REGION));
+            let mut height_values = vec![0.0_f32; area];
+            let mut modified_values = vec![0_i8; area];
+            get_float(env, heights, 0, area as jint, height_values.as_mut_ptr());
+            if raise_rotated_pyramid(
                 max_ring,
                 center_height,
                 max_height,
