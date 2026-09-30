@@ -24,9 +24,10 @@ pub fn edit(data: &mut [u8]) -> Result<(), WeltError> {
         let side = word(data, d);
         let bits = word(data, d + 4);
         if !matches!(side, 8 | 128)
-            || !matches!(bits, 1 | 4 | 8)
+            || !matches!(bits, 1 | 4 | 8 | 16)
             || (side == 8 && bits != 1)
-            || word(data, d + 8) > 1
+            || word(data, d + 8) > 2
+            || (bits == 16 && word(data, d + 8) != 2)
             || word(data, d + 12) >= (1 << bits)
             || word(data, d + 16) != end
             || side * side * bits / 8 > data.len() - end
@@ -43,12 +44,37 @@ pub fn edit(data: &mut [u8]) -> Result<(), WeltError> {
         let side = word(data, d);
         let bits = word(data, d + 4);
         let action = word(data, d + 8);
-        let value = word(data, d + 12) as u8;
+        let value = word(data, d + 12) as u16;
         let offset = word(data, d + 16);
         let mut changed = false;
+        if bits == 16 {
+            let packed = value.to_le_bytes();
+            for cell in data[offset..offset + side * side * 2]
+                .as_chunks_mut::<2>()
+                .0
+            {
+                changed |= *cell != packed;
+                *cell = packed;
+            }
+            data[d + 20..d + 24].copy_from_slice(&(u32::from(changed)).to_le_bytes());
+            continue;
+        }
+        let value = value as u8;
         for byte in &mut data[offset..offset + side * side * bits / 8] {
             let edited = if action == 0 {
                 !*byte
+            } else if action == 2 {
+                match bits {
+                    1 => {
+                        if value == 0 {
+                            0
+                        } else {
+                            255
+                        }
+                    }
+                    4 => value | (value << 4),
+                    _ => value,
+                }
             } else if bits == 1 {
                 if value != 0 {
                     255
@@ -108,5 +134,34 @@ mod tests {
         let before = data.clone();
         assert!(edit(&mut data).is_err());
         assert_eq!(data, before);
+    }
+
+    #[test]
+    fn constant_short_and_bit_planes_keep_little_endian_layout() {
+        let mut data = vec![0; 64 + 32768 + 2048];
+        for (offset, value) in [
+            (0, 0x44454c57u32),
+            (4, 1),
+            (8, 2),
+            (16, 128),
+            (20, 16),
+            (24, 2),
+            (28, 0xabcd),
+            (32, 64),
+            (40, 128),
+            (44, 1),
+            (48, 2),
+            (52, 1),
+            (56, 32832),
+        ] {
+            data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        edit(&mut data).unwrap();
+        assert!(data[64..32832]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .all(|v| *v == [0xcd, 0xab]));
+        assert!(data[32832..].iter().all(|v| *v == 255));
     }
 }

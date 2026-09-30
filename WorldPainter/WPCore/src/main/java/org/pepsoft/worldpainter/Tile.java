@@ -2452,6 +2452,36 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
 
     public void invertLayer(Layer layer) { editWholeLayer(layer, true, 0); }
 
+    public void resetFluids(int level, boolean lava) {
+        if (resetFluidsNative(level, lava)) return;
+        if (!lava) clearLayerData(FloodWithLava.INSTANCE);
+        for (int x = 0; x < TILE_SIZE; x++) for (int y = 0; y < TILE_SIZE; y++) {
+            setWaterLevel(x, y, level);
+            if (lava) setBitLayerValue(FloodWithLava.INSTANCE, x, y, true);
+        }
+    }
+
+    synchronized boolean resetFluidsNative(int level, boolean lava) {
+        if (getClass() != Tile.class || eventInhibitionCounter == 0
+                || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return false;
+        ByteBuffer buffer = LayerEditAccess.resetFluids(tall, level - minHeight, lava);
+        if (buffer == null) return false;
+        if (!lava) clearLayerData(FloodWithLava.INSTANCE);
+        ensureWriteable(tall ? TALL_WATERLEVEL : WATERLEVEL);
+        buffer.position(64);
+        if (tall) LayerEditAccess.copyFluidWater(buffer, tallWaterLevel);
+        else buffer.get(waterLevel);
+        if (lava) {
+            ensureWriteable(BIT_LAYER_DATA);
+            bitLayerData.put(FloodWithLava.INSTANCE, SelectionTileAccess.applyBits(buffer,
+                    64 + (tall ? 32768 : 16384), 2048, bitLayerData.get(FloodWithLava.INSTANCE)));
+            cachedLayers = null;
+            layerDataChanged(FloodWithLava.INSTANCE);
+        }
+        waterLevelChanged();
+        return true;
+    }
+
     public void raiseLayerTo(Layer layer, int minimum) { editWholeLayer(layer, false, minimum); }
 
     private void editWholeLayer(Layer layer, boolean invert, int minimum) {

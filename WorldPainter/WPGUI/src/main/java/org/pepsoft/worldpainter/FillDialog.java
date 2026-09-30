@@ -599,6 +599,10 @@ public class FillDialog extends WPDialogWithPaintSelection implements Listener, 
         if (tileFactory instanceof HeightMapTileFactory) {
             int waterLevel = ((HeightMapTileFactory) tileFactory).getWaterHeight();
             boolean floodWithLava = ((HeightMapTileFactory) tileFactory).isFloodWithLava();
+            if (filter == null) {
+                dimension.visitTilesForEditing().andDo(tile -> tile.resetFluids(waterLevel, floodWithLava), progressReceiver);
+                return;
+            }
             dimension.visitTilesForEditing().forFilter(filter).andDo(tile -> {
                 final int worldTileX = tile.getX() << TILE_SIZE_BITS;
                 final int worldTileY = tile.getY() << TILE_SIZE_BITS;

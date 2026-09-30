@@ -80,6 +80,17 @@ final class SelectionTileAccess {
     static BitSet applyBits(ByteBuffer buffer, int offset, int length, BitSet destination) {
         if (destination == null) destination = new BitSet(length * 8);
         destination.clear();
+        long first = buffer.getLong(offset);
+        if (first == 0 || first == -1L) {
+            boolean uniform = true;
+            for (int word = 1; word < length / 8; word++) {
+                if (buffer.getLong(offset + word * 8) != first) { uniform = false; break; }
+            }
+            if (uniform) {
+                if (first != 0) destination.set(0, length * 8);
+                return destination;
+            }
+        }
         for (int word = 0; word < length / 8; word++) {
             long value = buffer.getLong(offset + word * 8);
             while (value != 0) {
