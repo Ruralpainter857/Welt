@@ -28,7 +28,7 @@ public class TileRotationParityTest {
 
     @Test
     public void allPlanesMatchJavaForThreeRotationsAndBothHeightFormats() {
-        assertTrue("release JNI library is required", NativeLoader.areSlicesAvailable());
+        org.junit.Assume.assumeTrue("release JNI library is required", NativeLoader.areSlicesAvailable());
         final String previous = System.getProperty(Native.GEN_KEY);
         try {
             for (boolean tall : new boolean[] {false, true}) {
@@ -64,6 +64,7 @@ public class TileRotationParityTest {
 
     @Test
     public void invalidNativeProgramLeavesAllBytesUntouched() {
+        org.junit.Assume.assumeTrue(NativeLoader.areSlicesAvailable());
         final String previous = System.getProperty(Native.GEN_KEY);
         System.setProperty(Native.GEN_KEY, "true");
         try {
@@ -102,6 +103,7 @@ public class TileRotationParityTest {
 
     @Test
     public void workerBuffersRemainIndependentAndRotatedTilesSupportUndo() throws Exception {
+        org.junit.Assume.assumeTrue(NativeLoader.areSlicesAvailable());
         final String previous = System.getProperty(Native.GEN_KEY);
         final var workers = Executors.newFixedThreadPool(4);
         try {

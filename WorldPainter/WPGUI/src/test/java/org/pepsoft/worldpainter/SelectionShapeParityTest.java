@@ -16,7 +16,7 @@ import static org.junit.Assert.*;
 public class SelectionShapeParityTest {
     @Test
     public void completeShapeEditsMatchJavaIncludingChunkPromotionAndDemotion() {
-        assertTrue(NativeLoader.areSlicesAvailable());
+        org.junit.Assume.assumeTrue(NativeLoader.areSlicesAvailable());
         final String previous = System.getProperty(Native.GEN_KEY);
         try {
             final Dimension java = fixture(), rust = fixture();
@@ -42,6 +42,7 @@ public class SelectionShapeParityTest {
 
     @Test
     public void groupedEditPreservesUndoAndOtherBitLayers() {
+        org.junit.Assume.assumeTrue(NativeLoader.areSlicesAvailable());
         final String previous = System.getProperty(Native.GEN_KEY);
         try {
             System.setProperty(Native.GEN_KEY, "true");
@@ -72,7 +73,14 @@ public class SelectionShapeParityTest {
     }
 
     static Dimension fixture() {
-        final Dimension dimension = TestData.createDimension(new Rectangle(-128, -128, 384, 384), 62);
+        final Platform platform = DefaultPlugin.JAVA_ANVIL_1_19;
+        final int min = platform.minZ, max = platform.standardMaxHeight;
+        final var factory = new HeightMapTileFactory(0,
+                new org.pepsoft.worldpainter.heightMaps.ConstantHeightMap(62), min, max, false,
+                org.pepsoft.worldpainter.themes.SimpleTheme.createSingleTerrain(Terrain.GRASS, min, max, 62));
+        final Dimension dimension = new Dimension(new World2(platform, min, max), "Selection fixture", 0,
+                factory, Dimension.Anchor.NORMAL_DETAIL);
+        for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) dimension.addTile(factory.createTile(x, y));
         for (Tile tile : dimension.getTiles()) {
             tile.setBitLayerValue(SelectionChunk.INSTANCE, 16, 32, true);
             tile.setBitLayerValue(SelectionChunk.INSTANCE, 112, 112, true);

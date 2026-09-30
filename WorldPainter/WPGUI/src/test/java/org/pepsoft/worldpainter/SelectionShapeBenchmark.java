@@ -9,7 +9,7 @@ import java.lang.management.ManagementFactory;
 import java.util.Arrays;
 import java.util.Locale;
 
-/** Complete multi-tile add/remove benchmark, including shape predicates, COW, notifications and JNI. */
+/** GUI-module multi-tile benchmark, including shape predicates, COW, notifications and JNI. */
 public final class SelectionShapeBenchmark {
     public static void main(String[] args) {
         final Dimension[] dimensions = {SelectionShapeParityTest.fixture(), SelectionShapeParityTest.fixture()};
