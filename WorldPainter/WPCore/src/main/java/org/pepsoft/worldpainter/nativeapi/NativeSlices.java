@@ -205,6 +205,24 @@ public final class NativeSlices {
         }
     }
 
+    /** Applies flatten, raise-only, or lower-only blending to reusable brush buffers. */
+    public static boolean applyFlattenBrush(final int mode, final float targetHeight,
+                                            final float[] heights, final float[] strengths,
+                                            final byte[] modified) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || mode < 0 || mode > 2 || heights == null || strengths == null || modified == null
+                || heights.length == 0 || heights.length > 65_536
+                || strengths.length != heights.length || modified.length != heights.length) {
+            return false;
+        }
+        try {
+            return nativeApplyFlattenBrush(mode, targetHeight,
+                    heights, strengths, modified) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     /** Smooths a brush area using caller-owned input, strength and output buffers. */
     public static boolean smoothHeightRegion(final int inputWidth, final int inputHeight,
                                              final float[] heights, final float[] strengths,
@@ -864,6 +882,10 @@ public final class NativeSlices {
                                                       float maxHeight, float adjustment,
                                                       float[] heights, float[] strengths,
                                                       byte[] modified);
+
+    private static native int nativeApplyFlattenBrush(int mode, float targetHeight,
+                                                       float[] heights, float[] strengths,
+                                                       byte[] modified);
 
     private static native int nativeSmoothHeightRegion(int inputWidth, int inputHeight,
                                                         float[] heights, float[] strengths,

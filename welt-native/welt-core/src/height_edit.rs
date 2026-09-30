@@ -10,6 +10,13 @@ pub enum HeightEditError {
     ModifiedLength { expected: usize, actual: usize },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlattenMode {
+    Flatten,
+    Raise,
+    Lower,
+}
+
 /// Applies WorldPainter's raise/lower height brush to one row-major brush area.
 ///
 /// The caller prepares current heights and brush strengths in Java order. The
@@ -55,6 +62,50 @@ pub fn apply_height_brush(
             } else {
                 new_height > current_height
             } {
+                heights[index] = new_height;
+                modified[index] = 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Applies WorldPainter's flatten, raise-only, or lower-only brush pass.
+pub fn apply_flatten_brush(
+    mode: FlattenMode,
+    target_height: f32,
+    heights: &mut [f32],
+    strengths: &[f32],
+    modified: &mut [i8],
+) -> Result<(), HeightEditError> {
+    if heights.len() > MAX_HEIGHT_CELLS {
+        return Err(HeightEditError::TooManyCells);
+    }
+    if strengths.len() != heights.len() {
+        return Err(HeightEditError::StrengthLength {
+            expected: heights.len(),
+            actual: strengths.len(),
+        });
+    }
+    if modified.len() != heights.len() {
+        return Err(HeightEditError::ModifiedLength {
+            expected: heights.len(),
+            actual: modified.len(),
+        });
+    }
+
+    modified.fill(0);
+    for index in 0..heights.len() {
+        let current_height = heights[index];
+        let strength = strengths[index];
+        if strength > 0.0_f32 {
+            let new_height = strength * target_height + (1.0_f32 - strength) * current_height;
+            let should_write = match mode {
+                FlattenMode::Flatten => true,
+                FlattenMode::Raise => new_height > current_height,
+                FlattenMode::Lower => new_height < current_height,
+            };
+            if should_write {
                 heights[index] = new_height;
                 modified[index] = 1;
             }
