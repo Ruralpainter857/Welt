@@ -828,6 +828,19 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
     }
 
     private void changeTerrainHeight(ProgressReceiver progressReceiver) throws OperationCancelled {
+        if (filter == null) {
+            TerrainHeightOperation operation = switch ((String) comboBoxTerrainOperation.getSelectedItem()) {
+                case "raise terrain height to" -> TerrainHeightOperation.RAISE_TO;
+                case "raise terrain height by" -> TerrainHeightOperation.RAISE_BY;
+                case "lower terrain height to" -> TerrainHeightOperation.LOWER_TO;
+                case "lower terrain height by" -> TerrainHeightOperation.LOWER_BY;
+                default -> TerrainHeightOperation.SET;
+            };
+            float value = (Integer) spinnerTerrainHeight.getValue();
+            dimension.visitTilesForEditing().andDo(tile -> tile.editTerrainHeight(operation, value,
+                    dimension.getMinHeight(), dimension.getMaxHeight() - 1), progressReceiver);
+            return;
+        }
         dimension.visitTilesForEditing().forFilter(filter).andDo(tile -> {
             final int worldTileX = tile.getX() << TILE_SIZE_BITS;
             final int worldTileY = tile.getY() << TILE_SIZE_BITS;

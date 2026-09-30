@@ -2461,6 +2461,40 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    public void editTerrainHeight(TerrainHeightOperation operation, float value, int minClamp, int maxClamp) {
+        Objects.requireNonNull(operation);
+        if (editTerrainHeightNative(operation, value, minClamp, maxClamp)) return;
+        for (int x = 0; x < TILE_SIZE; x++) for (int y = 0; y < TILE_SIZE; y++) {
+            if (operation == TerrainHeightOperation.SET) { setHeight(x, y, value); continue; }
+            float current = getHeight(x, y);
+            float target = switch (operation) {
+                case SET, RAISE_TO, LOWER_TO -> value;
+                case RAISE_BY -> Math.min(current + value, maxClamp);
+                case LOWER_BY -> Math.max(current - value, minClamp);
+            };
+            boolean write = switch (operation) {
+                case SET -> true;
+                case RAISE_TO, RAISE_BY -> current < target;
+                case LOWER_TO, LOWER_BY -> current > target;
+            };
+            if (write) setHeight(x, y, target);
+        }
+    }
+
+    synchronized boolean editTerrainHeightNative(TerrainHeightOperation operation, float value, int minClamp, int maxClamp) {
+        if (getClass() != Tile.class || eventInhibitionCounter == 0 || minClamp > maxClamp
+                || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return false;
+        ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+        HeightPlaneAccess.Scratch result = HeightPlaneAccess.edit(minHeight, minClamp, maxClamp, operation, value,
+                tall ? null : heightMap, tall ? tallHeightMap : null);
+        if (result == null) return false;
+        if (result.buffer.getInt(32) == 0) return true;
+        ensureWriteable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+        if (tall) result.copy(tallHeightMap); else result.copy(heightMap);
+        heightMapChanged();
+        return true;
+    }
+
     synchronized boolean resetFluidsNative(int level, boolean lava) {
         if (getClass() != Tile.class || eventInhibitionCounter == 0
                 || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return false;
