@@ -6,6 +6,7 @@
 package org.pepsoft.worldpainter.operations;
 
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.TerrainHeightAccess;
 import org.pepsoft.worldpainter.WorldPainter;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
@@ -67,12 +68,8 @@ public class Smooth extends AbstractBrushOperation {
         int outputArea = (int) outputAreaLong;
         ensureNativeBuffers(inputSide, inputArea, outputArea);
 
-        for (int x = 0; x < inputSide; x++) {
-            for (int y = 0; y < inputSide; y++) {
-                nativeHeights[x * inputSide + y] = dimension.getHeightAt(
-                        centreX - radius + x - 5, centreY - radius + y - 5);
-            }
-        }
+        TerrainHeightAccess.copy(dimension, centreX - radius - 5, centreY - radius - 5,
+                inputSide, inputSide, nativeHeights);
         for (int x = 0; x < diameter; x++) {
             for (int y = 0; y < diameter; y++) {
                 nativeStrengths[x * diameter + y] = dynamicLevel * getStrength(
@@ -86,6 +83,11 @@ public class Smooth extends AbstractBrushOperation {
                     nativeStrengths, nativeOutputHeights, nativeModified);
         }
 
+        if (!applyTheme) {
+            TerrainHeightAccess.apply(dimension, centreX - radius, centreY - radius,
+                    diameter, diameter, nativeOutputHeights, nativeModified);
+            return true;
+        }
         int index = 0;
         for (int x = 0; x < diameter; x++) {
             for (int y = 0; y < diameter; y++) {

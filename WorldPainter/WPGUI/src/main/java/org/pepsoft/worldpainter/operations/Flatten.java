@@ -8,6 +8,7 @@ package org.pepsoft.worldpainter.operations;
 import org.pepsoft.util.DesktopUtils;
 import org.pepsoft.util.IconUtils;
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.TerrainHeightAccess;
 import org.pepsoft.worldpainter.WorldPainter;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
@@ -124,11 +125,13 @@ public class Flatten extends AbstractBrushOperation {
         }
         int area = (int) areaLong;
         ensureNativeBuffers(radius, area);
+        final int diameter = (int) diameterLong;
+        TerrainHeightAccess.copy(dimension, centreX - radius, centreY - radius,
+                diameter, diameter, nativeHeights);
 
         int index = 0;
         for (int x = centreX - radius; x <= centreX + radius; x++) {
             for (int y = centreY - radius; y <= centreY + radius; y++) {
-                nativeHeights[index] = dimension.getHeightAt(x, y);
                 nativeStrengths[index] = dynamicLevel * getStrength(centreX, centreY, x, y);
                 index++;
             }
@@ -141,6 +144,11 @@ public class Flatten extends AbstractBrushOperation {
                     nativeHeights, nativeStrengths, nativeModified);
         }
 
+        if (!applyTheme) {
+            TerrainHeightAccess.apply(dimension, centreX - radius, centreY - radius,
+                    diameter, diameter, nativeHeights, nativeModified);
+            return true;
+        }
         index = 0;
         for (int x = centreX - radius; x <= centreX + radius; x++) {
             for (int y = centreY - radius; y <= centreY + radius; y++) {

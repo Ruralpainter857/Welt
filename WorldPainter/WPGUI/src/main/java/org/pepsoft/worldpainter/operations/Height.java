@@ -6,6 +6,7 @@
 package org.pepsoft.worldpainter.operations;
 
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.TerrainHeightAccess;
 import org.pepsoft.worldpainter.WorldPainter;
 import org.pepsoft.worldpainter.panels.DefaultFilter;
 import org.pepsoft.worldpainter.nativeapi.Native;
@@ -83,11 +84,12 @@ public class Height extends AbstractBrushOperation {
             return false;
         }
         ensureNativeBuffers(area);
+        TerrainHeightAccess.copy(dimension, centreX - radius, centreY - radius,
+                diameter, diameter, nativeHeights);
 
         int index = 0;
         for (int x = centreX - radius; x <= centreX + radius; x++) {
             for (int y = centreY - radius; y <= centreY + radius; y++) {
-                nativeHeights[index] = dimension.getHeightAt(x, y);
                 nativeStrengths[index] = getFullStrength(centreX, centreY, x, y);
                 index++;
             }
@@ -100,6 +102,11 @@ public class Height extends AbstractBrushOperation {
                     nativeHeights, nativeStrengths, nativeModified);
         }
 
+        if (!applyTheme) {
+            TerrainHeightAccess.apply(dimension, centreX - radius, centreY - radius,
+                    diameter, diameter, nativeHeights, nativeModified);
+            return true;
+        }
         index = 0;
         for (int x = centreX - radius; x <= centreX + radius; x++) {
             for (int y = centreY - radius; y <= centreY + radius; y++) {

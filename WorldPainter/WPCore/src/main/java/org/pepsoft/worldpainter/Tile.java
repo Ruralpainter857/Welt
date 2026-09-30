@@ -202,6 +202,64 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    /** Copy a rectangle into a caller-owned, X-major region buffer under one lock. */
+    synchronized void copyHeightRegion(int x, int y, int width, int height,
+                                     float[] destination, int offset, int columnStride) {
+        checkHeightRegion(x, y, width, height, destination.length, offset, columnStride);
+        ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+        for (int dx = 0; dx < width; dx++) {
+            for (int dy = 0; dy < height; dy++) {
+                final int index = (x + dx) | ((y + dy) << TILE_SIZE_BITS);
+                destination[offset + dx * columnStride + dy] = tall
+                        ? tallHeightMap[index] / 256f + minHeight
+                        : (heightMap[index] & 0xffff) / 256f + minHeight;
+            }
+        }
+    }
+
+    /** Apply independent height edits, preserving COW and one deferred notification. */
+    void applyHeightRegion(int x, int y, int width, int height,
+                           float[] source, byte[] modified, int offset, int columnStride) {
+        checkHeightRegion(x, y, width, height, source.length, offset, columnStride);
+        checkHeightRegion(x, y, width, height, modified.length, offset, columnStride);
+        boolean changed = false;
+        synchronized (this) {
+            if (eventInhibitionCounter == 0) {
+                throw new IllegalStateException("Bulk height editing requires inhibited events");
+            }
+            for (int dx = 0; dx < width; dx++) {
+                for (int dy = 0; dy < height; dy++) {
+                    final int input = offset + dx * columnStride + dy;
+                    if (modified[input] != 0) {
+                        if (!changed) {
+                            ensureWriteable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+                            changed = true;
+                        }
+                        final int index = (x + dx) | ((y + dy) << TILE_SIZE_BITS);
+                        if (tall) {
+                            tallHeightMap[index] = (int) ((source[input] - minHeight) * 256);
+                        } else {
+                            heightMap[index] = (short) ((source[input] - minHeight) * 256);
+                        }
+                    }
+                }
+            }
+        }
+        if (changed) {
+            heightMapChanged();
+        }
+    }
+
+    private static void checkHeightRegion(int x, int y, int width, int height,
+                                          int length, int offset, int columnStride) {
+        if (x < 0 || y < 0 || width <= 0 || height <= 0
+                || (long) x + width > TILE_SIZE || (long) y + height > TILE_SIZE
+                || offset < 0 || columnStride < height
+                || (long) offset + (long) (width - 1) * columnStride + height > length) {
+            throw new IndexOutOfBoundsException("Invalid tile height region");
+        }
+    }
+
     /** Copies the height and water snapshot for callers that do not need terrain ordinals. */
     void copyRenderHeightDataTo(float[] heights, int[] intHeights, int[] waterLevels) {
         copyRenderDataTo(heights, intHeights, waterLevels, null);
