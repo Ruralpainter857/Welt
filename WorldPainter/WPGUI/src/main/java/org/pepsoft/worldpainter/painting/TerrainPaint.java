@@ -22,6 +22,9 @@ import org.pepsoft.worldpainter.ColourScheme;
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.Terrain;
 import org.pepsoft.worldpainter.Tile;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
 import java.awt.*;
 import java.awt.image.BufferedImage;
@@ -59,7 +62,12 @@ public final class TerrainPaint extends AbstractPaint {
         final Rectangle boundingBox = brush.getBoundingBox();
         final int x1 = centreX + boundingBox.x, y1 = centreY + boundingBox.y, x2 = x1 + boundingBox.width - 1, y2 = y1 + boundingBox.height - 1;
         final int tileX1 = x1 >> TILE_SIZE_BITS, tileY1 = y1 >> TILE_SIZE_BITS, tileX2 = x2 >> TILE_SIZE_BITS, tileY2 = y2 >> TILE_SIZE_BITS;
-        if ((tileX1 == tileX2) && (tileY1 == tileY2)) {
+        final boolean oneTile = (tileX1 == tileX2) && (tileY1 == tileY2);
+        if (applyNativeTerrainBrush(dimension, centreX, centreY, dynamicLevel,
+                x1, y1, x2, y2, oneTile, false)) {
+            return;
+        }
+        if (oneTile) {
             // The bounding box of the brush is entirely on one tile; optimize by painting directly to the tile
             final Tile tile = dimension.getTileForEditing(tileX1, tileY1);
             if (tile == null) {
@@ -163,6 +171,10 @@ public final class TerrainPaint extends AbstractPaint {
         }
         final Rectangle boundingBox = brush.getBoundingBox();
         final int x1 = centreX + boundingBox.x, y1 = centreY + boundingBox.y, x2 = x1 + boundingBox.width - 1, y2 = y1 + boundingBox.height - 1;
+        if (applyNativeTerrainBrush(dimension, centreX, centreY, dynamicLevel,
+                x1, y1, x2, y2, false, true)) {
+            return;
+        }
         // Can't optimise by painting directly to tile, because Tile doesn't have the applyTheme() method
         if (dither) {
             for (int y = y1; y <= y2; y++) {
@@ -200,5 +212,64 @@ public final class TerrainPaint extends AbstractPaint {
         return terrain.getScaledIcon(16, colourScheme);
     }
 
+    private boolean applyNativeTerrainBrush(Dimension dimension, int centreX, int centreY,
+                                            float dynamicLevel, int x1, int y1, int x2, int y2,
+                                            boolean oneTile, boolean remove) {
+        final long width = (long) x2 - x1 + 1L;
+        final long height = (long) y2 - y1 + 1L;
+        if (dither || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || width <= 0 || height <= 0 || width > 65_536L || height > 65_536L
+                || width * height > 65_536L) {
+            return false;
+        }
+        final int area = (int) (width * height);
+        final Tile tile;
+        if (oneTile && !remove) {
+            tile = dimension.getTileForEditing(x1 >> TILE_SIZE_BITS, y1 >> TILE_SIZE_BITS);
+            if (tile == null) {
+                return true;
+            }
+        } else {
+            tile = null;
+        }
+        ensureNativeBuffers(area);
+
+        int index = 0;
+        for (int y = y1; y <= y2; y++) {
+            for (int x = x1; x <= x2; x++) {
+                nativeStrengths[index++] = dynamicLevel * getFullStrength(centreX, centreY, x, y);
+            }
+        }
+        if (!NativeSlices.paintThresholdMask(nativeStrengths, nativeModified)) {
+            return false;
+        }
+
+        index = 0;
+        for (int y = y1; y <= y2; y++) {
+            for (int x = x1; x <= x2; x++) {
+                if (nativeModified[index] != 0) {
+                    if (remove) {
+                        dimension.applyTheme(x, y);
+                    } else if (oneTile) {
+                        tile.setTerrain(x & TILE_SIZE_MASK, y & TILE_SIZE_MASK, terrain);
+                    } else {
+                        dimension.setTerrainAt(x, y, terrain);
+                    }
+                }
+                index++;
+            }
+        }
+        return true;
+    }
+
+    private void ensureNativeBuffers(int area) {
+        if (nativeStrengths == null || nativeStrengths.length != area) {
+            nativeStrengths = new float[area];
+            nativeModified = new byte[area];
+        }
+    }
+
     private final Terrain terrain;
+    private float[] nativeStrengths;
+    private byte[] nativeModified;
 }
