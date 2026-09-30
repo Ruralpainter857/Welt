@@ -186,6 +186,25 @@ public final class NativeSlices {
         }
     }
 
+    /** Applies one raise/lower height-brush pass to reusable caller-owned arrays. */
+    public static boolean applyHeightBrush(final boolean inverse, final float minHeight,
+                                           final float maxHeight, final float adjustment,
+                                           final float[] heights, final float[] strengths,
+                                           final byte[] modified) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || heights == null || strengths == null || modified == null
+                || heights.length == 0 || heights.length > 65_536
+                || strengths.length != heights.length || modified.length != heights.length) {
+            return false;
+        }
+        try {
+            return nativeApplyHeightBrush(inverse ? 1 : 0, minHeight, maxHeight,
+                    adjustment, heights, strengths, modified) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     /** Fills two height-map trees in one JNI call into separate caller-owned buffers. */
     public static boolean fillHeightMapTreePair(final int originX, final int originY,
                                                 final int width, final int height,
@@ -818,6 +837,11 @@ public final class NativeSlices {
     private static native int nativeErodeRawHeightRegion(int radius, int[] heights,
                                                           byte[] controls, int[] writeLog,
                                                           int[] writeCount);
+
+    private static native int nativeApplyHeightBrush(int inverse, float minHeight,
+                                                      float maxHeight, float adjustment,
+                                                      float[] heights, float[] strengths,
+                                                      byte[] modified);
 
     private static native int nativeShadeColours(int[] colours, long[] packedAmounts);
     private static native int nativeShadeColoursCompact(int[] colours, int[] packedAmounts);

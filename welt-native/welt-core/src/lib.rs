@@ -5,6 +5,7 @@
 pub mod abi;
 pub mod erosion;
 pub mod error;
+pub mod height_edit;
 pub mod jni;
 pub mod jni_export;
 pub mod jni_gen;

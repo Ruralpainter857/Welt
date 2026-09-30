@@ -6,6 +6,7 @@ use std::ffi::c_void;
 use std::slice;
 use welt_core::erosion::erode_raw_height_region;
 use welt_core::error::WeltError;
+use welt_core::height_edit::apply_height_brush;
 use welt_core::jni::{jclass, jint, jlong, jni_catch, jobject, JNIEnv};
 use welt_export::edge_distance::bake_edge_distances;
 use welt_export::edge_height::bake_edge_heights;
@@ -200,6 +201,75 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             );
             let count = write_count as i32;
             set_int(env, write_count_array, 0, 1, &count);
+            WeltError::Ok as jint
+        })
+    }
+}
+
+/// Applies the interactive raise/lower brush to a prepared row-major height area.
+///
+/// # Safety
+/// `env`, arrays, and their lengths must be valid references from the JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeApplyHeightBrush(
+    env: *mut JNIEnv,
+    _class: jclass,
+    inverse: jint,
+    min_height: f32,
+    max_height: f32,
+    adjustment: f32,
+    heights: jobject,
+    strengths: jobject,
+    modified: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if heights.is_null() || strengths.is_null() || modified.is_null() {
+                return WeltError::IllegalArgument as jint;
+            }
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            let length = get_array_length(env, heights);
+            if !(1..=65_536).contains(&length)
+                || get_array_length(env, strengths) != length
+                || get_array_length(env, modified) != length
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+
+            type GetFloatArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut f32);
+            type SetFloatArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const f32);
+            type SetByteArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i8);
+            let get_float: GetFloatArrayRegion =
+                std::mem::transmute(function(env, GET_FLOAT_ARRAY_REGION));
+            let set_float: SetFloatArrayRegion =
+                std::mem::transmute(function(env, SET_FLOAT_ARRAY_REGION));
+            let set_byte: SetByteArrayRegion =
+                std::mem::transmute(function(env, SET_BYTE_ARRAY_REGION));
+            let mut height_values = vec![0.0_f32; length as usize];
+            let mut strength_values = vec![0.0_f32; length as usize];
+            let mut modified_values = vec![0_i8; length as usize];
+            get_float(env, heights, 0, length, height_values.as_mut_ptr());
+            get_float(env, strengths, 0, length, strength_values.as_mut_ptr());
+            if apply_height_brush(
+                inverse != 0,
+                min_height,
+                max_height,
+                adjustment,
+                &mut height_values,
+                &strength_values,
+                &mut modified_values,
+            )
+            .is_err()
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            set_float(env, heights, 0, length, height_values.as_ptr());
+            set_byte(env, modified, 0, length, modified_values.as_ptr());
             WeltError::Ok as jint
         })
     }
