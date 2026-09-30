@@ -26,6 +26,17 @@ public final class NativeRenderShadingParityTest {
     private static final int PIXELS = 128 * 128;
     private static volatile Object tileRendererMemorySink;
 
+    private static final class Java2dFallbackImage extends BufferedImage {
+        private Java2dFallbackImage(int width, int height) {
+            super(width, height, BufferedImage.TYPE_INT_ARGB);
+        }
+
+        @Override
+        public int getType() {
+            return BufferedImage.TYPE_CUSTOM;
+        }
+    }
+
     @Test
     public void tileRenderHeightSnapshotMatchesScalarGettersForBothStorageLayouts() {
         assertRenderHeightSnapshotMatches(new Tile(0, 0, 0, 256));
@@ -335,6 +346,161 @@ public final class NativeRenderShadingParityTest {
     }
 
     @Test
+    public void directArgbTileCopyMatchesJava2dForTransparentPixelsAndOffsets() {
+        final String previousFlag = System.getProperty(Native.RENDER_KEY);
+        Native.setRenderEnabled(false);
+        try {
+            final Dimension dimension = TestData.createDimension(
+                    new Rectangle(0, 0, Constants.TILE_SIZE, Constants.TILE_SIZE), 64);
+            final Tile tile = dimension.getTile(0, 0);
+            tile.inhibitEvents();
+            try {
+                for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                    for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                        tile.setHeight(x, y, 32 + ((x * 7 + y * 11) % 96));
+                        tile.setWaterLevel(x, y, 62 + ((x + y) % 24));
+                    }
+                }
+                tile.setBitLayerValue(org.pepsoft.worldpainter.layers.Void.INSTANCE, 4, 8, true);
+                tile.setBitLayerValue(NotPresent.INSTANCE, 12, 5, true);
+            } finally {
+                tile.releaseEvents();
+            }
+
+            final int imageWidth = Constants.TILE_SIZE + 8;
+            final int imageHeight = Constants.TILE_SIZE + 10;
+            final int dx = 3, dy = 5;
+            final int initialColour = 0xff375a9c;
+            final BufferedImage directImage = new BufferedImage(
+                    imageWidth, imageHeight, BufferedImage.TYPE_INT_ARGB);
+            final BufferedImage java2dImage = new BufferedImage(
+                    imageWidth, imageHeight, BufferedImage.TYPE_INT_ARGB_PRE);
+            Arrays.fill(((DataBufferInt) directImage.getRaster().getDataBuffer()).getData(), initialColour);
+            Arrays.fill(((DataBufferInt) java2dImage.getRaster().getDataBuffer()).getData(), initialColour);
+
+            new TileRenderer(dimension, ColourScheme.DEFAULT, null, 0, true, null)
+                    .renderTile(tile, directImage, dx, dy);
+            new TileRenderer(dimension, ColourScheme.DEFAULT, null, 0, true, null)
+                    .renderTile(tile, java2dImage, dx, dy);
+
+            assertArrayEquals(java2dImage.getRGB(0, 0, imageWidth, imageHeight, null, 0, imageWidth),
+                    directImage.getRGB(0, 0, imageWidth, imageHeight, null, 0, imageWidth));
+            assertEquals(initialColour, directImage.getRGB(0, 0));
+            assertEquals(0, directImage.getRGB(dx + 4, dy + 8));
+            assertEquals(0, directImage.getRGB(dx + 12, dy + 5));
+
+            final int clippedWidth = Constants.TILE_SIZE - 4;
+            final int clippedHeight = Constants.TILE_SIZE - 6;
+            final BufferedImage clippedDirectImage = new BufferedImage(
+                    clippedWidth, clippedHeight, BufferedImage.TYPE_INT_ARGB);
+            final BufferedImage clippedJava2dImage = new BufferedImage(
+                    clippedWidth, clippedHeight, BufferedImage.TYPE_INT_ARGB_PRE);
+            Arrays.fill(((DataBufferInt) clippedDirectImage.getRaster().getDataBuffer()).getData(), initialColour);
+            Arrays.fill(((DataBufferInt) clippedJava2dImage.getRaster().getDataBuffer()).getData(), initialColour);
+            new TileRenderer(dimension, ColourScheme.DEFAULT, null, 0, true, null)
+                    .renderTile(tile, clippedDirectImage, -2, -4);
+            new TileRenderer(dimension, ColourScheme.DEFAULT, null, 0, true, null)
+                    .renderTile(tile, clippedJava2dImage, -2, -4);
+            assertArrayEquals(clippedJava2dImage.getRGB(0, 0, clippedWidth, clippedHeight,
+                            null, 0, clippedWidth),
+                    clippedDirectImage.getRGB(0, 0, clippedWidth, clippedHeight,
+                            null, 0, clippedWidth));
+        } finally {
+            restoreFlag(previousFlag);
+        }
+    }
+
+    @Test
+    public void benchmarkFullWorldViewDirectArgbCopyWhenRequested() throws Exception {
+        assumeTrue(Boolean.getBoolean("welt.render.view.direct-copy.benchmark"));
+        final String previousFlag = System.getProperty(Native.RENDER_KEY);
+        Native.setRenderEnabled(false);
+        try {
+            final int tilesPerSide = 3;
+            final int viewSize = tilesPerSide * Constants.TILE_SIZE;
+            final Dimension dimension = TestData.createDimension(
+                    new Rectangle(0, 0, viewSize, viewSize), 64);
+            final Tile[] tiles = dimension.getTiles().toArray(new Tile[0]);
+            for (Tile tile : tiles) {
+                tile.inhibitEvents();
+                try {
+                    for (int x = 0; x < Constants.TILE_SIZE; x++) {
+                        for (int y = 0; y < Constants.TILE_SIZE; y++) {
+                            final int worldX = (tile.getX() << Constants.TILE_SIZE_BITS) + x;
+                            final int worldY = (tile.getY() << Constants.TILE_SIZE_BITS) + y;
+                            tile.setHeight(x, y, 32 + ((worldX * 7 + worldY * 11) & 95));
+                            tile.setWaterLevel(x, y, 62 + ((worldX + worldY) & 15));
+                        }
+                    }
+                } finally {
+                    tile.releaseEvents();
+                }
+            }
+
+            final TileRenderer directRenderer = new TileRenderer(
+                    dimension, ColourScheme.DEFAULT, null, 0, true, null);
+            final TileRenderer java2dRenderer = new TileRenderer(
+                    dimension, ColourScheme.DEFAULT, null, 0, true, null);
+            final BufferedImage directImage = new BufferedImage(
+                    viewSize, viewSize, BufferedImage.TYPE_INT_ARGB);
+            final BufferedImage java2dImage = new Java2dFallbackImage(viewSize, viewSize);
+            for (int warmup = 0; warmup < 4; warmup++) {
+                renderView(directRenderer, directImage, tiles);
+                renderView(java2dRenderer, java2dImage, tiles);
+            }
+            assertArrayEquals(java2dImage.getRGB(0, 0, viewSize, viewSize, null, 0, viewSize),
+                    directImage.getRGB(0, 0, viewSize, viewSize, null, 0, viewSize));
+
+            final int iterations = Math.max(1, Integer.getInteger("welt.render.view.iterations", 4));
+            final long[] directNanos = new long[9];
+            final long[] java2dNanos = new long[9];
+            for (int sample = 0; sample < directNanos.length; sample++) {
+                if ((sample & 1) == 0) {
+                    long start = System.nanoTime();
+                    for (int iteration = 0; iteration < iterations; iteration++) {
+                        renderView(directRenderer, directImage, tiles);
+                    }
+                    directNanos[sample] = (System.nanoTime() - start) / iterations;
+
+                    start = System.nanoTime();
+                    for (int iteration = 0; iteration < iterations; iteration++) {
+                        renderView(java2dRenderer, java2dImage, tiles);
+                    }
+                    java2dNanos[sample] = (System.nanoTime() - start) / iterations;
+                } else {
+                    long start = System.nanoTime();
+                    for (int iteration = 0; iteration < iterations; iteration++) {
+                        renderView(java2dRenderer, java2dImage, tiles);
+                    }
+                    java2dNanos[sample] = (System.nanoTime() - start) / iterations;
+
+                    start = System.nanoTime();
+                    for (int iteration = 0; iteration < iterations; iteration++) {
+                        renderView(directRenderer, directImage, tiles);
+                    }
+                    directNanos[sample] = (System.nanoTime() - start) / iterations;
+                }
+            }
+            Arrays.sort(directNanos);
+            Arrays.sort(java2dNanos);
+            final BenchmarkMemorySupport.Snapshot directMemory = BenchmarkMemorySupport.measure(
+                    () -> renderView(directRenderer, directImage, tiles));
+            final BenchmarkMemorySupport.Snapshot java2dMemory = BenchmarkMemorySupport.measure(
+                    () -> renderView(java2dRenderer, java2dImage, tiles));
+            System.out.printf("Full 3x3 view direct ARGB copy median %.3f ms, Java2D median %.3f ms, "
+                            + "ratio %.3fx direct_memory=[%s] java2d_memory=[%s] "
+                            + "worker_allocated_direct=%.1f KiB worker_allocated_java2d=%.1f KiB%n",
+                    directNanos[4] / 1_000_000.0, java2dNanos[4] / 1_000_000.0,
+                    (double) java2dNanos[4] / directNanos[4], directMemory, java2dMemory,
+                    directMemory.allocatedBytes() / 1024.0, java2dMemory.allocatedBytes() / 1024.0);
+            assertArrayEquals(java2dImage.getRGB(0, 0, viewSize, viewSize, null, 0, viewSize),
+                    directImage.getRGB(0, 0, viewSize, viewSize, null, 0, viewSize));
+        } finally {
+            restoreFlag(previousFlag);
+        }
+    }
+
+    @Test
     public void benchmarkTileRendererConstructionMemoryWhenRequested() throws Exception {
         assumeTrue(Boolean.getBoolean("welt.render.tile-construction.benchmark"));
         assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
@@ -411,6 +577,14 @@ public final class NativeRenderShadingParityTest {
         new TileRenderer(dimension, ColourScheme.DEFAULT, null, 0, true, null)
                 .renderTile(tile, image, 0, 0);
         return ((DataBufferInt) image.getRaster().getDataBuffer()).getData().clone();
+    }
+
+    private static void renderView(TileRenderer renderer, BufferedImage image, Tile[] tiles) {
+        for (Tile tile : tiles) {
+            renderer.renderTile(tile, image,
+                    tile.getX() << Constants.TILE_SIZE_BITS,
+                    tile.getY() << Constants.TILE_SIZE_BITS);
+        }
     }
 
     private static void assertRenderHeightSnapshotMatches(Tile tile) {

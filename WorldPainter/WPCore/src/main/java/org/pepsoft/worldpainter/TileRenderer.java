@@ -22,6 +22,8 @@ import org.pepsoft.worldpainter.ramps.ColourRamp;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
+import java.awt.image.SinglePixelPackedSampleModel;
+import java.awt.image.WritableRaster;
 import java.util.*;
 import java.util.List;
 
@@ -304,9 +306,8 @@ public final class TileRenderer {
         if (nativeShading && (renderShadeAmounts == null)) {
             renderShadeAmounts = new int[TILE_SIZE * TILE_SIZE];
         }
-        final Graphics2D g2 = (Graphics2D) image.getGraphics();
+        Graphics2D g2 = null;
         try {
-            g2.setComposite(AlphaComposite.Src);
             if (zoom == 0) {
                 for (int x = 0; x < TILE_SIZE; x++) {
                     for (int y = 0; y < TILE_SIZE; y++) {
@@ -362,7 +363,11 @@ public final class TileRenderer {
                     }
                 }
 
-                g2.drawImage(bufferedImage, dx, dy, null);
+                if (!copyRenderBufferToArgbImage(image, dx, dy)) {
+                    g2 = (Graphics2D) image.getGraphics();
+                    g2.setComposite(AlphaComposite.Src);
+                    g2.drawImage(bufferedImage, dx, dy, null);
+                }
             } else {
                 final int tileSize = TILE_SIZE / scale;
                 for (int x = 0; x < TILE_SIZE; x += scale) {
@@ -391,12 +396,59 @@ public final class TileRenderer {
                     }
                 }
 
+                g2 = (Graphics2D) image.getGraphics();
+                g2.setComposite(AlphaComposite.Src);
                 g2.drawImage(bufferedImage, dx, dy, dx + tileSize, dy + tileSize, 0, 0, tileSize, tileSize, null);
             }
         } finally {
-            g2.dispose();
+            if (g2 != null) {
+                g2.dispose();
+            }
         }
 //        }
+    }
+
+    private boolean copyRenderBufferToArgbImage(Image image, int dx, int dy) {
+        if (!(image instanceof BufferedImage) || (zoom != 0)) {
+            return false;
+        }
+        final BufferedImage destination = (BufferedImage) image;
+        final int imageWidth = destination.getWidth();
+        final int imageHeight = destination.getHeight();
+        if ((destination.getType() != BufferedImage.TYPE_INT_ARGB)
+                || (dx < 0) || (dy < 0)
+                || (dx > imageWidth - TILE_SIZE) || (dy > imageHeight - TILE_SIZE)
+                || !destination.getColorModel().equals(bufferedImage.getColorModel())) {
+            return false;
+        }
+        final WritableRaster raster = destination.getRaster();
+        if ((raster.getMinX() != 0) || (raster.getMinY() != 0)
+                || (raster.getSampleModelTranslateX() != 0)
+                || (raster.getSampleModelTranslateY() != 0)
+                || !(raster.getDataBuffer() instanceof DataBufferInt)
+                || !(raster.getSampleModel() instanceof SinglePixelPackedSampleModel)) {
+            return false;
+        }
+        final DataBufferInt dataBuffer = (DataBufferInt) raster.getDataBuffer();
+        final SinglePixelPackedSampleModel sampleModel = (SinglePixelPackedSampleModel) raster.getSampleModel();
+        final int scanlineStride = sampleModel.getScanlineStride();
+        final SinglePixelPackedSampleModel sourceSampleModel =
+                (SinglePixelPackedSampleModel) bufferedImage.getRaster().getSampleModel();
+        if ((dataBuffer.getNumBanks() != 1) || (scanlineStride != imageWidth)
+                || !Arrays.equals(sampleModel.getBitMasks(), sourceSampleModel.getBitMasks())) {
+            return false;
+        }
+        final int[] pixels = dataBuffer.getData();
+        final long firstPixel = (long) dataBuffer.getOffset() + (long) dy * scanlineStride + dx;
+        final long lastPixel = firstPixel + (long) (TILE_SIZE - 1) * scanlineStride + TILE_SIZE;
+        if ((firstPixel < 0) || (lastPixel > pixels.length)) {
+            return false;
+        }
+        for (int row = 0; row < TILE_SIZE; row++) {
+            System.arraycopy(renderBuffer, row * TILE_SIZE, pixels,
+                    (int) firstPixel + row * scanlineStride, TILE_SIZE);
+        }
+        return true;
     }
 
     /**
