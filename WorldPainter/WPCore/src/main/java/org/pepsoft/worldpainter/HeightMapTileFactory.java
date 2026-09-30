@@ -28,6 +28,7 @@ import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import org.pepsoft.worldpainter.themes.SimpleTheme;
+import org.pepsoft.worldpainter.themes.impl.fancy.FancyTheme;
 import org.pepsoft.worldpainter.themes.Theme;
 
 import java.awt.*;
@@ -163,6 +164,9 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 }
             }
             final boolean isSimpleTheme = theme.getClass() == SimpleTheme.class;
+            final FancyTheme freshFancyTheme = (theme.getClass() == FancyTheme.class)
+                    && !floodWithLava && ((FancyTheme) theme).supportsFreshTileBatch()
+                    ? (FancyTheme) theme : null;
             final boolean freshSimpleTheme = isSimpleTheme && !floodWithLava;
             final Map<?, ?> simpleThemeLayerMap = isSimpleTheme
                     ? ((SimpleTheme) theme).getLayerMap() : null;
@@ -331,6 +335,25 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                     nativeHeights = nativeNoiseMap.getNativeHeights(
                             worldTileX, worldTileY, TILE_SIZE, TILE_SIZE);
                 }
+            }
+            if (freshFancyTheme != null) {
+                for (int x = 0; x < TILE_SIZE; x++) {
+                    for (int y = 0; y < TILE_SIZE; y++) {
+                        final int blockX = worldTileX + x, blockY = worldTileY + y;
+                        final double rawHeight;
+                        if (nativeHeights != null) {
+                            final double noise = nativeHeights[y * TILE_SIZE + x];
+                            rawHeight = completeHeightMapValuesAvailable || (nativeNoiseMap == heightMap) ? noise
+                                    : (nativeConstantFirst ? nativeConstant + noise : noise + nativeConstant);
+                        } else {
+                            rawHeight = heightMap.getHeight(blockX, blockY);
+                        }
+                        tile.setHeight(x, y, clamp(minHeight, (float) rawHeight, maxZ));
+                        tile.setWaterLevel(x, y, myWaterHeight);
+                    }
+                }
+                freshFancyTheme.applyFreshTile(tile, worldTileX, worldTileY);
+                return tile;
             }
             if (batchFreshSimpleTheme) {
                 final float[] heights = buffers.heights;

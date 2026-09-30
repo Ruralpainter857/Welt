@@ -6,9 +6,7 @@
 package org.pepsoft.worldpainter.themes.impl.fancy;
 
 import org.pepsoft.worldpainter.*;
-import org.pepsoft.worldpainter.heightMaps.ConstantHeightMap;
-import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
-import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
+import org.pepsoft.worldpainter.heightMaps.*;
 import org.pepsoft.worldpainter.layers.*;
 import org.pepsoft.worldpainter.layers.groundcover.GroundCoverLayer;
 import org.pepsoft.worldpainter.themes.Theme;
@@ -17,12 +15,18 @@ import java.util.Random;
 
 import static java.awt.Color.WHITE;
 import static org.pepsoft.minecraft.Material.SNOW_BLOCK;
+import static org.pepsoft.worldpainter.Constants.TILE_SIZE;
 
 /**
  *
  * @author SchmitzP
  */
 public class FancyTheme implements Theme, Cloneable {
+    private static final int WATER_SEARCH_RADIUS = 5;
+    private static final String FRESH_TILE_BATCH_PROPERTY = "wp.fancyTheme.freshTileBatch";
+    private static final ThreadLocal<FancyThemeHeightContext> FRESH_TILE_HEIGHT_CONTEXTS =
+            ThreadLocal.withInitial(FancyThemeHeightContext::new);
+
     public FancyTheme(int minHeight, int maxHeight, int waterHeight, HeightMap heightMap, Terrain baseTerrain) {
         this.minHeight = minHeight;
         this.maxHeight = maxHeight;
@@ -41,15 +45,39 @@ public class FancyTheme implements Theme, Cloneable {
 
     @Override
     public void apply(Tile tile, int x, int y) {
+        apply(tile, x, y, null);
+    }
+
+    /** Returns whether this built-in theme can use the pure-map fresh-tile path. */
+    public final boolean supportsFreshTileBatch() {
+        return Boolean.parseBoolean(System.getProperty(FRESH_TILE_BATCH_PROPERTY, "true"))
+                && supportsFreshTileMaps();
+    }
+
+    /** Applies this theme to a complete fresh tile using one reusable neighbourhood cache. */
+    public final void applyFreshTile(Tile tile, int worldTileX, int worldTileY) {
+        if (!supportsFreshTileMaps()) {
+            throw new IllegalStateException("Fresh-tile batching is not supported for this FancyTheme");
+        }
+        final FancyThemeHeightContext context = FRESH_TILE_HEIGHT_CONTEXTS.get();
+        context.prepare(this, worldTileX, worldTileY);
+        for (int x = 0; x < TILE_SIZE; x++) {
+            for (int y = 0; y < TILE_SIZE; y++) {
+                apply(tile, x, y, context);
+            }
+        }
+    }
+
+    private void apply(Tile tile, int x, int y, FancyThemeHeightContext context) {
         final int worldX = (tile.getX() << 7) | x, worldY = (tile.getY() << 7) | y;
         double temperature = temperatureMap.getHeight(worldX, worldY);
         float height = tile.getHeight(x, y);
         temperature = temperature - Math.max(height - waterHeight, 0) / 2 + randomNoiseMap.getHeight(worldX, worldY);
         double humidity = humidityMap.getHeight(worldX, worldY) + randomNoiseMap.getHeight(worldX, worldY);
-        final float slopeNOSO = Math.abs(getHeight(    worldX, worldY - 1) - getHeight(    worldX, worldY + 1));
-        final float slopeNWSE = Math.abs(getHeight(worldX + 1, worldY - 1) - getHeight(worldX - 1, worldY + 1));
-        final float slopeEAWE = Math.abs(getHeight(worldX + 1,     worldY) - getHeight(worldX - 1,     worldY));
-        final float slopeSENW = Math.abs(getHeight(worldX + 1, worldY + 1) - getHeight(worldX - 1, worldY - 1));
+        final float slopeNOSO = Math.abs(getHeight(worldX, worldY - 1, context) - getHeight(worldX, worldY + 1, context));
+        final float slopeNWSE = Math.abs(getHeight(worldX + 1, worldY - 1, context) - getHeight(worldX - 1, worldY + 1, context));
+        final float slopeEAWE = Math.abs(getHeight(worldX + 1, worldY, context) - getHeight(worldX - 1, worldY, context));
+        final float slopeSENW = Math.abs(getHeight(worldX + 1, worldY + 1, context) - getHeight(worldX - 1, worldY - 1, context));
         final float slope = Math.max(Math.max(slopeNOSO, slopeNWSE), Math.max(slopeEAWE, slopeSENW));
         if (slope > 2f) {
             tile.setTerrain(x, y, terrainStoneAndGravel);
@@ -58,7 +86,7 @@ public class FancyTheme implements Theme, Cloneable {
                 tile.setTerrain(x, y, terrainDirtAndGravel);
             } else if (height < (waterHeight - 4)) {
                 tile.setTerrain(x, y, Terrain.BEACHES);
-            } else if ((height < (waterHeight + 2)) && isWaterNear(worldX, worldY)) {
+            } else if ((height < (waterHeight + 2)) && isWaterNear(worldX, worldY, context)) {
                 tile.setTerrain(x, y, Terrain.BEACHES);
                 if ((temperature > 20) && (humidity > 55) && (slope < 0.75f) && (height < desertMaxHeight) && (forestMap.getHeight(worldX, worldY) > 0.35f)) {
                     tile.setLayerValue(Jungle.INSTANCE, x, y, 8);
@@ -217,6 +245,10 @@ public class FancyTheme implements Theme, Cloneable {
         return (float) heightMap.getHeight(x, y);
     }
 
+    private float getHeight(int x, int y, FancyThemeHeightContext context) {
+        return (context == null) ? getHeight(x, y) : context.getHeight(x, y);
+    }
+
     private boolean isWaterNear(int x, int y) {
         if (getHeight(x, y) < waterHeight) {
             return true;
@@ -229,6 +261,107 @@ public class FancyTheme implements Theme, Cloneable {
             }
         }
         return false;
+    }
+
+    private boolean isWaterNear(int x, int y, FancyThemeHeightContext context) {
+        return (context == null) ? isWaterNear(x, y) : context.isWaterNear(x, y);
+    }
+
+    private boolean supportsFreshTileMaps() {
+        return (getClass() == FancyTheme.class)
+                && isPureHeightMap(heightMap)
+                && isPureHeightMap(temperatureMap)
+                && isPureHeightMap(humidityMap)
+                && isPureHeightMap(forestMap)
+                && isPureHeightMap(randomNoiseMap);
+    }
+
+    private static boolean isPureHeightMap(HeightMap map) {
+        if (map == null) {
+            return false;
+        }
+        final Class<?> type = map.getClass();
+        if ((type == ConstantHeightMap.class)
+                || (type == NoiseHeightMap.class)
+                || (type == FastNoiseLiteHeightMap.class)
+                || (type == MandelbrotHeightMap.class)
+                || (type == BandedHeightMap.class)
+                || (type == NinePatchHeightMap.class)
+                || (type == BitmapHeightMap.class)
+                || (type == BicubicHeightMap.class)) {
+            return true;
+        }
+        if ((type == SumHeightMap.class) || (type == DifferenceHeightMap.class)
+                || (type == ProductHeightMap.class) || (type == MinimisingHeightMap.class)
+                || (type == MaximisingHeightMap.class)) {
+            final CombiningHeightMap combining = (CombiningHeightMap) map;
+            return isPureHeightMap(combining.getHeightMap1())
+                    && isPureHeightMap(combining.getHeightMap2());
+        }
+        if (type == TransformingHeightMap.class) {
+            return isPureHeightMap(((TransformingHeightMap) map).getBaseHeightMap());
+        }
+        if (type == DisplacementHeightMap.class) {
+            final DisplacementHeightMap displacement = (DisplacementHeightMap) map;
+            return isPureHeightMap(displacement.getBaseHeightMap())
+                    && isPureHeightMap(displacement.getAngleMap())
+                    && isPureHeightMap(displacement.getDistanceMap());
+        }
+        if (type == SlopeHeightMap.class) {
+            return isPureHeightMap(((SlopeHeightMap) map).getBaseHeightMap());
+        }
+        if (type == ShelvingHeightMap.class) {
+            return isPureHeightMap(((ShelvingHeightMap) map).getHeightMap(0));
+        }
+        return false;
+    }
+
+    private static final class FancyThemeHeightContext {
+        private final float[] heights = new float[HEIGHT_SIZE * HEIGHT_SIZE];
+        private final short[] waterPrefix = new short[PREFIX_SIZE * PREFIX_SIZE];
+        private int originX, originY;
+
+        void prepare(FancyTheme theme, int worldTileX, int worldTileY) {
+            originX = worldTileX - WATER_SEARCH_RADIUS;
+            originY = worldTileY - WATER_SEARCH_RADIUS;
+            java.util.Arrays.fill(waterPrefix, (short) 0);
+            for (int y = 0; y < HEIGHT_SIZE; y++) {
+                int rowWaterCount = 0;
+                final int heightRow = y * HEIGHT_SIZE;
+                final int prefixRow = (y + 1) * PREFIX_SIZE;
+                final int prefixAbove = y * PREFIX_SIZE;
+                final int worldY = originY + y;
+                for (int x = 0; x < HEIGHT_SIZE; x++) {
+                    final float value = theme.getHeight(originX + x, worldY);
+                    heights[heightRow + x] = value;
+                    if (value < theme.waterHeight) {
+                        rowWaterCount++;
+                    }
+                    waterPrefix[prefixRow + x + 1] = (short)
+                            (waterPrefix[prefixAbove + x + 1] + rowWaterCount);
+                }
+            }
+        }
+
+        float getHeight(int worldX, int worldY) {
+            return heights[(worldY - originY) * HEIGHT_SIZE + (worldX - originX)];
+        }
+
+        boolean isWaterNear(int worldX, int worldY) {
+            final int left = worldX - originX - WATER_SEARCH_RADIUS;
+            final int top = worldY - originY - WATER_SEARCH_RADIUS;
+            final int right = left + WATER_WINDOW_SIZE;
+            final int bottom = top + WATER_WINDOW_SIZE;
+            final int count = waterPrefix[bottom * PREFIX_SIZE + right]
+                    - waterPrefix[top * PREFIX_SIZE + right]
+                    - waterPrefix[bottom * PREFIX_SIZE + left]
+                    + waterPrefix[top * PREFIX_SIZE + left];
+            return count > 0;
+        }
+
+        private static final int HEIGHT_SIZE = TILE_SIZE + WATER_SEARCH_RADIUS * 2;
+        private static final int PREFIX_SIZE = HEIGHT_SIZE + 1;
+        private static final int WATER_WINDOW_SIZE = WATER_SEARCH_RADIUS * 2 + 1;
     }
 
     protected GroundCoverLayer snowLayer = new GroundCoverLayer("Mountain Snow", MixedMaterial.create("Deep Snow", SNOW_BLOCK), WHITE);
