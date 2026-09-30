@@ -1,8 +1,68 @@
 use crate::error::WeltError;
 
 pub const MAX_BYTES: usize = 2 * 1024 * 1024;
+pub const MASKED_MAX_BYTES: usize = 48 + 16384 + 16384;
 fn word(data: &[u8], offset: usize) -> usize {
     u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize
+}
+
+pub fn edit_masked(data: &mut [u8]) -> Result<(), WeltError> {
+    if data.len() < 48
+        || data.len() > MASKED_MAX_BYTES
+        || word(data, 0) != 0x4d424c57
+        || word(data, 4) != 1
+        || word(data, 40) != 0
+        || word(data, 44) != 0
+    {
+        return Err(WeltError::IllegalArgument);
+    }
+    let (x, y, width, height, bits, side, value) = (
+        word(data, 8),
+        word(data, 12),
+        word(data, 16),
+        word(data, 20),
+        word(data, 24),
+        word(data, 28),
+        word(data, 32),
+    );
+    if width == 0
+        || height == 0
+        || width > 128
+        || height > 128
+        || x > 128 - width
+        || y > 128 - height
+        || !matches!(bits, 1 | 4 | 8)
+        || !matches!(side, 8 | 128)
+        || (side == 8 && bits != 1)
+        || value >= 1 << bits
+    {
+        return Err(WeltError::IllegalArgument);
+    }
+    let mask = 48 + side * side * bits / 8;
+    if data.len() != mask + width * height {
+        return Err(WeltError::IllegalArgument);
+    }
+    let mut writes = 0u32;
+    for dy in 0..height {
+        for dx in 0..width {
+            if data[mask + dy * width + dx] == 0 {
+                continue;
+            }
+            let cell = if side == 8 {
+                ((x + dx) >> 4) + ((y + dy) >> 4) * 8
+            } else {
+                x + dx + (y + dy) * 128
+            };
+            let offset = 48 + cell * bits / 8;
+            let shift = cell * bits % 8;
+            let packed_mask = ((1u16 << bits) - 1) as u8;
+            data[offset] = (data[offset] & !(packed_mask << shift)) | ((value as u8) << shift);
+            writes += 1;
+        }
+    }
+    // Compter les setters demandés, même si la valeur stockée ne change pas.
+    data[36..40].copy_from_slice(&writes.to_le_bytes());
+    Ok(())
 }
 
 pub fn edit(data: &mut [u8]) -> Result<(), WeltError> {
@@ -97,6 +157,61 @@ pub fn edit(data: &mut [u8]) -> Result<(), WeltError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn invalid_masked_headers_are_rejected_before_writing() {
+        let mut valid = vec![0; 48 + 16384 + 1];
+        for (o, v) in [
+            (0, 0x4d424c57u32),
+            (4, 1),
+            (16, 1),
+            (20, 1),
+            (24, 8),
+            (28, 128),
+            (32, 42),
+        ] {
+            valid[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        valid[48 + 16384] = 1;
+        for offset in [0, 4, 8, 12, 16, 20, 24, 28, 32, 40, 44] {
+            let mut data = valid.clone();
+            data[offset..offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+            let before = data.clone();
+            assert!(edit_masked(&mut data).is_err());
+            assert_eq!(data, before);
+        }
+    }
+    #[test]
+    fn masked_planes_keep_unselected_values_and_chunk_bit_addressing() {
+        for (bits, side, value) in [(1, 8, 0u32), (1, 128, 0), (4, 128, 7), (8, 128, 42)] {
+            let mask = 48 + side * side * bits / 8;
+            let mut data = vec![255; mask + 2];
+            for (o, v) in [
+                (0, 0x4d424c57),
+                (4, 1),
+                (8, 127),
+                (12, 126),
+                (16, 1),
+                (20, 2),
+                (24, bits as u32),
+                (28, side as u32),
+                (32, value),
+                (40, 0),
+                (44, 0),
+            ] {
+                data[o..o + 4].copy_from_slice(&v.to_le_bytes());
+            }
+            data[mask] = 1;
+            data[mask + 1] = 0;
+            edit_masked(&mut data).unwrap();
+            assert_eq!(word(&data, 36), 1);
+            assert_eq!(data[48], 255);
+            let cell = if side == 8 { 63 } else { 127 + 126 * 128 };
+            assert_eq!(
+                (data[48 + cell * bits / 8] >> (cell * bits % 8)) & ((1u16 << bits) - 1) as u8,
+                value as u8
+            );
+        }
+    }
     fn fixture() -> Vec<u8> {
         let mut data = vec![0; 16 + 48 + 8 + 8192];
         for (offset, value) in [

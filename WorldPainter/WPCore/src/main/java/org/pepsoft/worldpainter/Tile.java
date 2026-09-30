@@ -2489,6 +2489,48 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    synchronized void editMaskedRegion(Layer layer, Terrain terrainValue, int value, int x, int y, int width, int height,
+                                       byte[] mask, int offset, int stride) {
+        checkHeightRegion(y, x, height, width, mask.length, offset, stride);
+        if (editMaskedRegionNative(layer, terrainValue, value, x, y, width, height, mask, offset, stride)) return;
+        boolean bit = layer != null && (layer.dataSize == DataSize.BIT || layer.dataSize == DataSize.BIT_PER_CHUNK);
+        for (int dy = 0; dy < height; dy++) for (int dx = 0; dx < width; dx++) if (mask[offset + dy * stride + dx] != 0) {
+            if (layer == null) setTerrain(x + dx, y + dy, terrainValue);
+            else if (bit) setBitLayerValue(layer, x + dx, y + dy, value != 0);
+            else setLayerValue(layer, x + dx, y + dy, value);
+        }
+    }
+
+    synchronized boolean editMaskedRegionNative(Layer layer, Terrain terrainValue, int value, int x, int y, int width, int height,
+                                                byte[] mask, int offset, int stride) {
+        if (getClass() != Tile.class || eventInhibitionCounter == 0
+                || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return false;
+        checkHeightRegion(y, x, height, width, mask.length, offset, stride);
+        boolean bit = layer != null && (layer.dataSize == DataSize.BIT || layer.dataSize == DataSize.BIT_PER_CHUNK);
+        int bits = layer == null || layer.dataSize == BYTE ? 8 : bit ? 1 : layer.dataSize == NIBBLE ? 4 : 0;
+        if (bits == 0 || layer != null && (value < 0 || value > layer.dataSize.maxValue
+                || !bit && (layer.getDefaultValue() < 0 || layer.getDefaultValue() > layer.dataSize.maxValue))) return false;
+        ensureReadable(layer == null ? TERRAIN : bit ? BIT_LAYER_DATA : LAYER_DATA);
+        if (layer != null && (bit ? !bitLayerData.containsKey(layer) && value == 0
+                : !layerData.containsKey(layer) && value == layer.getDefaultValue())) return true;
+        int side = layer != null && layer.dataSize == DataSize.BIT_PER_CHUNK ? 8 : 128;
+        ByteBuffer buffer = MaskedPlaneAccess.edit(x, y, width, height, bits, side,
+                layer == null ? terrainValue.ordinal() : value,
+                layer == null ? terrain : bit ? null : layerData.get(layer), bit ? bitLayerData.get(layer) : null,
+                layer == null || bit ? 0 : layer.getDefaultValue(), mask, offset, stride);
+        if (buffer == null) return false;
+        if (buffer.getInt(36) == 0) return true;
+        ensureWriteable(layer == null ? TERRAIN : bit ? BIT_LAYER_DATA : LAYER_DATA);
+        if (layer == null) {
+            buffer.position(48); buffer.get(terrain); terrainChanged();
+        } else {
+            if (bit) bitLayerData.put(layer, SelectionTileAccess.applyBits(buffer, 48, side * side / 8, bitLayerData.get(layer)));
+            else applyNumericLayerPlane(layer, buffer, 48, 16384 * bits / 8);
+            cachedLayers = null; layerDataChanged(layer);
+        }
+        return true;
+    }
+
     synchronized boolean assignLayerNative(Layer layer, int value) {
         if (getClass() != Tile.class || eventInhibitionCounter == 0
                 || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return false;

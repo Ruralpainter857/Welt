@@ -19,11 +19,11 @@
 package org.pepsoft.worldpainter.painting;
 
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.MaskedPlaneAccess;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.layers.Layer;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
-import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
 import java.awt.*;
 
@@ -275,55 +275,30 @@ public final class BitLayerPaint extends LayerPaint {
         final long width = (long) x2 - x1 + 1L;
         final long height = (long) y2 - y1 + 1L;
         if (dither || filter != null || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || dimension.getClass() != Dimension.class || !dimension.isEventsInhibited()
                 || width <= 0 || height <= 0 || width > 65_536L || height > 65_536L
                 || width * height > 65_536L) {
             return false;
         }
         final int area = (int) (width * height);
-        final Tile tile;
-        if (oneTile) {
-            tile = dimension.getTileForEditing(x1 >> TILE_SIZE_BITS, y1 >> TILE_SIZE_BITS);
-            if (tile == null) {
-                return true;
-            }
-        } else {
-            tile = null;
-        }
+        if (oneTile && dimension.getTile(x1 >> TILE_SIZE_BITS, y1 >> TILE_SIZE_BITS) == null) return true;
         ensureNativeBuffers(area);
 
         int index = 0;
         for (int y = y1; y <= y2; y++) {
             for (int x = x1; x <= x2; x++) {
-                nativeStrengths[index++] = dynamicLevel * getFullStrength(centreX, centreY, x, y);
+                nativeModified[index++] = (byte) (dynamicLevel * getFullStrength(centreX, centreY, x, y) > 0.75f ? 1 : 0);
             }
         }
-        if (!NativeSlices.paintThresholdMask(nativeStrengths, nativeModified)) {
-            return false;
-        }
-
-        index = 0;
-        for (int y = y1; y <= y2; y++) {
-            for (int x = x1; x <= x2; x++) {
-                if (nativeModified[index] != 0) {
-                    if (oneTile) {
-                        tile.setBitLayerValue(layer, x & TILE_SIZE_MASK, y & TILE_SIZE_MASK, value);
-                    } else {
-                        dimension.setBitLayerValueAt(layer, x, y, value);
-                    }
-                }
-                index++;
-            }
-        }
+        MaskedPlaneAccess.applyLayer(dimension, layer, value ? 1 : 0, x1, y1, (int) width, (int) height, nativeModified);
         return true;
     }
 
     private void ensureNativeBuffers(int area) {
-        if (nativeStrengths == null || nativeStrengths.length != area) {
-            nativeStrengths = new float[area];
+        if (nativeModified == null || nativeModified.length != area) {
             nativeModified = new byte[area];
         }
     }
 
-    private float[] nativeStrengths;
     private byte[] nativeModified;
 }

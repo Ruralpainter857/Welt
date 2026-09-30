@@ -65,7 +65,7 @@ public class NibbleLayerPaintParityTest {
                 assertEquals(tile.getLayerValue(Resources.INSTANCE, x, y), match.getLayerValue(Resources.INSTANCE, x, y));
         }
     }
-    static final class Brush extends AbstractBrush {
+    static class Brush extends AbstractBrush {
         private int radius = 3; private float level = 1f;
         Brush() { super("Parity"); }
         @Override public float getStrength(int x, int y) { return level * getFullStrength(x, y); }
