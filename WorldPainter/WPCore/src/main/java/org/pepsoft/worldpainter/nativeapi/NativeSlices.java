@@ -156,6 +156,36 @@ public final class NativeSlices {
         }
     }
 
+    /** Processes one erosion brush area in Rust and returns Java-ordered setter calls. */
+    public static boolean erodeRawHeightRegion(final int radius, final int[] heights,
+                                               final byte[] controls, final int[] writeLog,
+                                               final int[] writeCount) {
+        if (radius < 0 || (2L * radius + 1L) > 512L) {
+            return false;
+        }
+        final long diameter = 2L * radius + 1L;
+        final long windowWidth = diameter + 2L;
+        final long operationArea = diameter * diameter;
+        final long windowArea = windowWidth * windowWidth;
+        final long controlLength = operationArea * 3L;
+        final long writeLogLength = operationArea * 4L;
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || windowArea > 1_048_576L
+                || controlLength > 1_048_576L || writeLogLength > 1_048_576L
+                || heights == null || controls == null || writeLog == null
+                || writeCount == null || heights.length != windowArea
+                || controls.length != controlLength || writeLog.length != writeLogLength
+                || writeCount.length != 1) {
+            return false;
+        }
+        try {
+            return nativeErodeRawHeightRegion(radius, heights, controls,
+                    writeLog, writeCount) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     /** Fills two height-map trees in one JNI call into separate caller-owned buffers. */
     public static boolean fillHeightMapTreePair(final int originX, final int originY,
                                                 final int width, final int height,
@@ -784,6 +814,10 @@ public final class NativeSlices {
     private static native int nativeFillSlopeSamples(int inputWidth, int inputHeight,
                                                       float verticalScaling,
                                                       double[] baseSamples, double[] output);
+
+    private static native int nativeErodeRawHeightRegion(int radius, int[] heights,
+                                                          byte[] controls, int[] writeLog,
+                                                          int[] writeCount);
 
     private static native int nativeShadeColours(int[] colours, long[] packedAmounts);
     private static native int nativeShadeColoursCompact(int[] colours, int[] packedAmounts);

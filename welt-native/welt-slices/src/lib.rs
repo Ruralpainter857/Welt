@@ -4,6 +4,7 @@
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::slice;
+use welt_core::erosion::erode_raw_height_region;
 use welt_core::error::WeltError;
 use welt_core::jni::{jclass, jint, jlong, jni_catch, jobject, JNIEnv};
 use welt_export::edge_distance::bake_edge_distances;
@@ -88,6 +89,121 @@ const SET_BYTE_ARRAY_REGION: usize = 208;
 const SET_FLOAT_ARRAY_REGION: usize = 213;
 
 const SLICES_ABI_VERSION: jint = 1;
+
+/// Applies one erosion round to a brush-sized height window and returns Java's
+/// ordered setter calls as index/value pairs.
+///
+/// # Safety
+/// `env`, arrays, and their lengths must be valid references from the JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeErodeRawHeightRegion(
+    env: *mut JNIEnv,
+    _class: jclass,
+    radius: jint,
+    heights: jobject,
+    controls: jobject,
+    write_log: jobject,
+    write_count_array: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if radius < 0
+                || heights.is_null()
+                || controls.is_null()
+                || write_log.is_null()
+                || write_count_array.is_null()
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            let diameter = match (radius as usize)
+                .checked_mul(2)
+                .and_then(|value| value.checked_add(1))
+            {
+                Some(value) => value,
+                None => return WeltError::IllegalArgument as jint,
+            };
+            let window_width = diameter + 2;
+            let window_area = match window_width.checked_mul(window_width) {
+                Some(value) if value <= 1_048_576 => value,
+                _ => return WeltError::IllegalArgument as jint,
+            };
+            let operation_area = match diameter.checked_mul(diameter) {
+                Some(value) => value,
+                None => return WeltError::IllegalArgument as jint,
+            };
+            let control_length = match operation_area.checked_mul(3) {
+                Some(value) if value <= 1_048_576 => value,
+                _ => return WeltError::IllegalArgument as jint,
+            };
+            let write_log_length = match operation_area.checked_mul(4) {
+                Some(value) if value <= 1_048_576 => value,
+                _ => return WeltError::IllegalArgument as jint,
+            };
+
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            if get_array_length(env, heights) != window_area as jint
+                || get_array_length(env, controls) != control_length as jint
+                || get_array_length(env, write_log) != write_log_length as jint
+                || get_array_length(env, write_count_array) != 1
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+
+            type GetIntArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i32);
+            type GetByteArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i8);
+            let get_int: GetIntArrayRegion =
+                std::mem::transmute(function(env, GET_INT_ARRAY_REGION));
+            let get_byte: GetByteArrayRegion =
+                std::mem::transmute(function(env, GET_BYTE_ARRAY_REGION));
+            let mut height_values = vec![0_i32; window_area];
+            let mut control_values = vec![0_i8; control_length];
+            let mut ordered_writes = vec![0_i32; write_log_length];
+            get_int(
+                env,
+                heights,
+                0,
+                window_area as jint,
+                height_values.as_mut_ptr(),
+            );
+            get_byte(
+                env,
+                controls,
+                0,
+                control_length as jint,
+                control_values.as_mut_ptr(),
+            );
+
+            let write_count = match erode_raw_height_region(
+                radius,
+                &mut height_values,
+                &control_values,
+                &mut ordered_writes,
+            ) {
+                Ok(count) => count,
+                Err(_) => return WeltError::IllegalArgument as jint,
+            };
+
+            type SetIntArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i32);
+            let set_int: SetIntArrayRegion =
+                std::mem::transmute(function(env, SET_INT_ARRAY_REGION));
+            set_int(
+                env,
+                write_log,
+                0,
+                write_count as jint,
+                ordered_writes.as_ptr(),
+            );
+            let count = write_count as i32;
+            set_int(env, write_count_array, 0, 1, &count);
+            WeltError::Ok as jint
+        })
+    }
+}
 
 fn unpack_fast_noise_lite_settings(packed: i32) -> (i32, i32, i32) {
     if packed & 0x4000_0000 == 0 {

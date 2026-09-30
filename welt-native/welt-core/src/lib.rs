@@ -3,6 +3,7 @@
 //! Voir docs/welt/CHARTE-ORCHESTRATION.md (charte) et docs/plan-decoupage-java-rust.md.
 
 pub mod abi;
+pub mod erosion;
 pub mod error;
 pub mod jni;
 pub mod jni_export;
