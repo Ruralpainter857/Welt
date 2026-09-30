@@ -39,6 +39,7 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
         this.minHeight = minHeight;
         this.maxHeight = terrainRangesTable.length;
         this.terrainRangesTable = terrainRangesTable;
+        terrainRangesTableExternallyMutable = true;
         fixTerrainRangesTable();
         setMinMaxHeight(minHeight, maxHeight, HeightTransform.IDENTITY);
         setRandomise(randomise);
@@ -269,6 +270,13 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
     }
 
     private void apply(Tile tile, int x, int y, boolean freshTile) {
+        if ((getClass() == SimpleTheme.class) && (uniformTerrain != null) && (! beaches)
+                && (layerCache == null) && (bitLayerCache == null)) {
+            if (freshTile ? uniformTerrain.ordinal() != 0 : tile.getTerrain(x, y) != uniformTerrain) {
+                tile.setTerrain(x, y, uniformTerrain);
+            }
+            return;
+        }
         // height has been observed to be far out of bounds in the wild, so restrict it to min- and maxHeight:
         // TODO: determine why this happens and fix the root cause
         final int height = clamp(minHeight, tile.getIntHeight(x, y), maxHeight - 1);
@@ -409,6 +417,7 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
             waterHeight = clamp(minHeight, transform.transformHeight(waterHeight), maxHeight - 1);
             final Terrain[] oldTerrainRangesTable = terrainRangesTable;
             terrainRangesTable = new Terrain[maxHeight - minHeight];
+            terrainRangesTableExternallyMutable = false;
             if (terrainRanges != null) {
                 SortedMap<Integer, Terrain> oldTerrainRanges = this.terrainRanges;
                 terrainRanges = new TreeMap<>();
@@ -436,6 +445,7 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
                         terrainRangesTable[i] = oldTerrainRangesTable[oldIndex];
                     }
                 }
+                updateUniformTerrainCache();
             }
             if (layerMap != null) {
                 final Map<Filter, Layer> newLayerMap = new HashMap<>();
@@ -485,6 +495,8 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
                 clone.terrainRanges = new TreeMap<>(terrainRanges);
             }
             clone.terrainRangesTable = terrainRangesTable.clone();
+            clone.terrainRangesTableExternallyMutable = false;
+            clone.updateUniformTerrainCache();
             if (layerMap != null) {
                 clone.setLayerMap(new HashMap<>(layerMap));
             }
@@ -514,6 +526,8 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
     public Terrain getTerrain(int x, int y, int height) {
         if (beaches && (height >= (waterHeight - 2)) && (height <= (waterHeight + 1))) {
             return Terrain.BEACHES;
+        } else if (uniformTerrain != null) {
+            return uniformTerrain;
         } else {
             if (isRandomise()) {
                 height += perlinNoise.getPerlinNoise(x / SMALL_BLOBS, y / SMALL_BLOBS, height / SMALL_BLOBS) * 5;
@@ -543,6 +557,24 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
         for (int i = minHeight; i < maxHeight; i++) {
             terrainRangesTable[i - minHeight] = terrainRanges.get(terrainRanges.headMap(i).lastKey());
         }
+        updateUniformTerrainCache();
+    }
+
+    private void updateUniformTerrainCache() {
+        uniformTerrain = null;
+        if (terrainRangesTableExternallyMutable || (terrainRangesTable.length == 0)) {
+            return;
+        }
+        final Terrain firstTerrain = terrainRangesTable[0];
+        if (firstTerrain == null) {
+            return;
+        }
+        for (int i = 1; i < terrainRangesTable.length; i++) {
+            if (terrainRangesTable[i] != firstTerrain) {
+                return;
+            }
+        }
+        uniformTerrain = firstTerrain;
     }
 
     private void initCaches() {
@@ -648,6 +680,7 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
                 terrainRangesTable[i] = Terrain.BARE_GRASS;
             }
         }
+        updateUniformTerrainCache();
     }
 
     public static SimpleTheme createSingleTerrain(Terrain terrain, int minHeight, int maxHeight, int waterHeight) {
@@ -678,6 +711,8 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
     private SortedMap<Integer, Terrain> terrainRanges;
     private boolean randomise, beaches;
     private Terrain[] terrainRangesTable;
+    private transient Terrain uniformTerrain;
+    private transient boolean terrainRangesTableExternallyMutable;
     private Map<Filter, Layer> layerMap;
     private transient PerlinNoise perlinNoise = new PerlinNoise(0);
     private Layer[] layerCache, bitLayerCache;

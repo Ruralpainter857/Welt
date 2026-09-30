@@ -90,6 +90,46 @@ public final class HeightMapImporterBitmapParityTest {
     }
 
     @Test
+    public void benchmarkUniformTerrainThemePathWhenRequested() throws Exception {
+        org.junit.Assume.assumeTrue(Boolean.getBoolean("welt.import.uniformTheme.benchmark"));
+        final HeightMap bitmap = BitmapHeightMap.build().withImage(
+                createImage(BufferedImage.TYPE_USHORT_GRAY, 512, 512)).now();
+        final SimpleTheme referenceTheme = SimpleTheme.createSingleTerrain(
+                Terrain.GRASS, TestData.MIN_HEIGHT, TestData.MAX_HEIGHT, 62);
+        final java.lang.reflect.Field uniformTerrain = SimpleTheme.class.getDeclaredField("uniformTerrain");
+        uniformTerrain.setAccessible(true);
+        uniformTerrain.set(referenceTheme, null);
+        final SimpleTheme fastTheme = SimpleTheme.createSingleTerrain(
+                Terrain.GRASS, TestData.MIN_HEIGHT, TestData.MAX_HEIGHT, 62);
+        final int rounds = 9;
+        final double[] referenceMillis = new double[rounds];
+        final double[] fastMillis = new double[rounds];
+        for (int warmup = 0; warmup < 3; warmup++) {
+            timeThemeImport(bitmap, referenceTheme);
+            timeThemeImport(bitmap, fastTheme);
+        }
+        for (int round = 0; round < rounds; round++) {
+            if ((round & 1) == 0) {
+                referenceMillis[round] = timeThemeImport(bitmap, referenceTheme);
+                fastMillis[round] = timeThemeImport(bitmap, fastTheme);
+            } else {
+                fastMillis[round] = timeThemeImport(bitmap, fastTheme);
+                referenceMillis[round] = timeThemeImport(bitmap, referenceTheme);
+            }
+        }
+        Arrays.sort(referenceMillis);
+        Arrays.sort(fastMillis);
+        final BenchmarkMemorySupport.Snapshot referenceMemory = BenchmarkMemorySupport.measure(
+                () -> importMap(bitmap, true, referenceTheme));
+        final BenchmarkMemorySupport.Snapshot fastMemory = BenchmarkMemorySupport.measure(
+                () -> importMap(bitmap, true, fastTheme));
+        System.out.printf("Heightmap import 512x512, uniform SimpleTheme cache off %.3f ms, on %.3f ms, "
+                        + "speedup %.3fx; cache_off_memory=[%s], cache_on_memory=[%s]%n",
+                referenceMillis[rounds / 2], fastMillis[rounds / 2],
+                referenceMillis[rounds / 2] / fastMillis[rounds / 2], referenceMemory, fastMemory);
+    }
+
+    @Test
     public void batchedFullTileImportMatchesPerCellPathAtNegativeCoordinates() throws Exception {
         final HeightMap bitmap = BitmapHeightMap.build().withImage(
                 createImage(BufferedImage.TYPE_USHORT_GRAY, 256, 256)).now();
@@ -124,6 +164,12 @@ public final class HeightMapImporterBitmapParityTest {
     private static double timeImport(HeightMap map, boolean batchTileInitialisation) throws Exception {
         final long start = System.nanoTime();
         importMap(map, batchTileInitialisation);
+        return (System.nanoTime() - start) / 1_000_000.0;
+    }
+
+    private static double timeThemeImport(HeightMap map, SimpleTheme theme) throws Exception {
+        final long start = System.nanoTime();
+        importMap(map, true, theme);
         return (System.nanoTime() - start) / 1_000_000.0;
     }
 
@@ -163,6 +209,13 @@ public final class HeightMapImporterBitmapParityTest {
     }
 
     private static Dimension importMap(HeightMap map, boolean batchTileInitialisation) throws Exception {
+        final SimpleTheme theme = SimpleTheme.createSingleTerrain(
+                Terrain.GRASS, TestData.MIN_HEIGHT, TestData.MAX_HEIGHT, 62);
+        return importMap(map, batchTileInitialisation, theme);
+    }
+
+    private static Dimension importMap(HeightMap map, boolean batchTileInitialisation,
+                                       SimpleTheme theme) throws Exception {
         final String previous = System.getProperty(DISABLE_BATCH_TILE_INITIALISATION_PROPERTY);
         if (batchTileInitialisation) {
             System.clearProperty(DISABLE_BATCH_TILE_INITIALISATION_PROPERTY);
@@ -171,8 +224,6 @@ public final class HeightMapImporterBitmapParityTest {
         }
         try {
             final World2 world = new World2(TestData.PLATFORM, TestData.MIN_HEIGHT, TestData.MAX_HEIGHT);
-            final SimpleTheme theme = SimpleTheme.createSingleTerrain(
-                    Terrain.GRASS, TestData.MIN_HEIGHT, TestData.MAX_HEIGHT, 62);
             final HeightMapTileFactory tileFactory = new HeightMapTileFactory(19L,
                     new ConstantHeightMap(62.0), TestData.MIN_HEIGHT, TestData.MAX_HEIGHT, false, theme);
             final Dimension dimension = new Dimension(world, "Import parity", 19L,

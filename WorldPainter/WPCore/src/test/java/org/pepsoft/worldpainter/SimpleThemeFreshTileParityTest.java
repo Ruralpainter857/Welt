@@ -44,6 +44,50 @@ import static org.junit.Assume.assumeTrue;
 /** Verifies the optimized initialization path against ordinary theme application. */
 public final class SimpleThemeFreshTileParityTest {
     @Test
+    public void uniformTerrainFastPathPreservesBeachAndExtensionBehavior() {
+        final SortedMap<Integer, Terrain> ranges = new TreeMap<>();
+        ranges.put(-1, Terrain.GRASS);
+        final SimpleTheme uniformTheme = new SimpleTheme(1L, 62, ranges, null,
+                0, 256, true, false);
+        for (int height = 0; height < 256; height++) {
+            assertEquals("uniform terrain at height " + height,
+                    Terrain.GRASS, uniformTheme.getTerrain(237, -319, height));
+        }
+
+        final SimpleTheme beachTheme = new SimpleTheme(1L, 62, ranges, null,
+                0, 256, true, true);
+        for (int height = 0; height < 256; height++) {
+            final Terrain expected = (height >= 60) && (height <= 63)
+                    ? Terrain.BEACHES : Terrain.GRASS;
+            assertEquals("beach terrain at height " + height,
+                    expected, beachTheme.getTerrain(-45, 91, height));
+        }
+
+        final Terrain[] mutableRanges = {Terrain.GRASS, Terrain.PERMADIRT};
+        final SimpleTheme legacyTheme = new SimpleTheme(1L, 1, mutableRanges,
+                0, 2, false, false);
+        mutableRanges[1] = Terrain.STONE;
+        assertEquals("legacy array constructor must continue observing its shared table",
+                Terrain.STONE, legacyTheme.getTerrain(0, 0, 1));
+
+        final SimpleTheme overridingTheme = new SimpleTheme(1L, 62, ranges, null,
+                0, 256, false, false) {
+            @Override
+            public Terrain getTerrain(int x, int y, int height) {
+                return Terrain.STONE;
+            }
+        };
+        final Tile tile = new Tile(0, 0, 0, 256);
+        tile.inhibitEvents();
+        try {
+            overridingTheme.apply(tile, 0, 0);
+            assertEquals("subclass getTerrain override", Terrain.STONE, tile.getTerrain(0, 0));
+        } finally {
+            tile.releaseEvents();
+        }
+    }
+
+    @Test
     public void javaNoiseHeightMapSimpleThemeBatchMatchesPerCellFallback() {
         final String previousFlag = System.getProperty(Native.GEN_KEY);
         try {
