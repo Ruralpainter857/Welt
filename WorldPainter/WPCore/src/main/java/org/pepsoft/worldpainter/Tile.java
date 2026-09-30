@@ -2515,6 +2515,43 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    synchronized void editFluidRegion(int x, int y, int width, int height, float[] strengths,
+                                      int offset, int stride, boolean reset, int level) {
+        checkHeightRegion(x, y, width, height, strengths.length, offset, stride);
+        if (!editFluidRegionNative(x, y, width, height, strengths, offset, stride, reset, level)) {
+            for (int dx = 0; dx < width; dx++) for (int dy = 0; dy < height; dy++) {
+                if (strengths[offset + dx * stride + dy] == 0f) continue;
+                setWaterLevel(x + dx, y + dy, level);
+                if (reset) setBitLayerValue(FloodWithLava.INSTANCE, x + dx, y + dy, false);
+            }
+        }
+    }
+
+    synchronized boolean editFluidRegionNative(int x, int y, int width, int height, float[] strengths,
+                                               int offset, int stride, boolean reset, int level) {
+        if (getClass() != Tile.class || eventInhibitionCounter == 0
+                || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return false;
+        checkHeightRegion(x, y, width, height, strengths.length, offset, stride);
+        ensureReadable(tall ? TALL_WATERLEVEL : WATERLEVEL);
+        if (reset) ensureReadable(BIT_LAYER_DATA);
+        boolean hasLava = reset && bitLayerData.containsKey(FloodWithLava.INSTANCE);
+        FluidBrushAccess.Scratch result = FluidBrushAccess.edit(x, y, width, height, strengths, offset, stride,
+                level - minHeight, reset, tall ? null : waterLevel, tall ? tallWaterLevel : null,
+                hasLava ? bitLayerData.get(FloodWithLava.INSTANCE) : null);
+        if (result == null) return false;
+        if (result.buffer.getInt(36) == 0) return true;
+        ensureWriteable(tall ? TALL_WATERLEVEL : WATERLEVEL);
+        result.copyWater(x, y, width, height, tall ? null : waterLevel, tall ? tallWaterLevel : null);
+        waterLevelChanged();
+        if (hasLava) {
+            ensureWriteable(BIT_LAYER_DATA);
+            bitLayerData.put(FloodWithLava.INSTANCE, SelectionTileAccess.applyBits(result.buffer,
+                    result.buffer.getInt(48), 2048, bitLayerData.get(FloodWithLava.INSTANCE)));
+            layerDataChanged(FloodWithLava.INSTANCE);
+        }
+        return true;
+    }
+
     public void editTerrainHeight(TerrainHeightOperation operation, float value, int minClamp, int maxClamp) {
         Objects.requireNonNull(operation);
         if (editTerrainHeightNative(operation, value, minClamp, maxClamp)) return;

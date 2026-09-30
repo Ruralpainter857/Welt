@@ -103,6 +103,16 @@ public final class NativeSlices {
 
     private static native int nativeEditHeightPlane(ByteBuffer buffer, int length);
 
+    public static boolean editFluidBrush(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || buffer == null || !buffer.isDirect() || buffer.isReadOnly()
+                || buffer.position() != 0 || buffer.limit() < 64 || buffer.limit() > 100416) return false;
+        try { return nativeEditFluidBrush(buffer, buffer.limit()) == 0; }
+        catch (UnsatisfiedLinkError e) { return false; }
+    }
+
+    private static native int nativeEditFluidBrush(ByteBuffer buffer, int length);
+
     /**
      * Returns whether native tunnel edge caches are enabled. This specialised path is enabled by
      * default when its kernel is available; the dedicated property can disable it without changing
