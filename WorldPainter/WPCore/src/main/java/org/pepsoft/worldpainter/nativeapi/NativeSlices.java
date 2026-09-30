@@ -156,6 +156,41 @@ public final class NativeSlices {
         }
     }
 
+    /** Fills two height-map trees in one JNI call into separate caller-owned buffers. */
+    public static boolean fillHeightMapTreePair(final int originX, final int originY,
+                                                final int width, final int height,
+                                                final int firstNodeCount,
+                                                final int secondNodeCount,
+                                                final int[] opcodes, final double[] values,
+                                                final double[] scales, final int[] octaves,
+                                                final long[] seeds,
+                                                final double[] firstOutput,
+                                                final double[] secondOutput) {
+        final long area = (long) width * height;
+        final long nodeCount = (long) firstNodeCount + secondNodeCount;
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || width <= 0 || height <= 0 || area > 1_048_576L
+                || firstNodeCount <= 0 || firstNodeCount > 64
+                || secondNodeCount <= 0 || secondNodeCount > 64
+                || opcodes == null || values == null || scales == null
+                || octaves == null || seeds == null
+                || opcodes.length < nodeCount || values.length < nodeCount
+                || scales.length < nodeCount || octaves.length < nodeCount
+                || seeds.length < nodeCount
+                || firstOutput == null || secondOutput == null
+                || firstOutput == secondOutput
+                || firstOutput.length != area || secondOutput.length != area) {
+            return false;
+        }
+        try {
+            return nativeFillHeightMapTreePair(originX, originY, width, height,
+                    firstNodeCount, secondNodeCount, opcodes, values, scales,
+                    octaves, seeds, firstOutput, secondOutput) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     /** Fills a height-map expression at explicit float coordinates. */
     public static boolean fillHeightMapTreePoints(final int nodeCount,
                                                   final int[] opcodes, final double[] values,
@@ -624,6 +659,16 @@ public final class NativeSlices {
                                                        int[] opcodes, double[] values,
                                                        double[] scales, int[] octaves,
                                                        long[] seeds, double[] output);
+
+    private static native int nativeFillHeightMapTreePair(int originX, int originY,
+                                                           int width, int height,
+                                                           int firstNodeCount,
+                                                           int secondNodeCount,
+                                                           int[] opcodes, double[] values,
+                                                           double[] scales, int[] octaves,
+                                                           long[] seeds,
+                                                           double[] firstOutput,
+                                                           double[] secondOutput);
 
     private static native int nativeFillHeightMapTreePoints(int nodeCount,
                                                             int[] opcodes, double[] values,
