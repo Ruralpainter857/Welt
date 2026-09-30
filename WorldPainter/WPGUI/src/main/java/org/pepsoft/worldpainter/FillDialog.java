@@ -307,6 +307,10 @@ public class FillDialog extends WPDialogWithPaintSelection implements Listener, 
 
     private void fillWithTerrain(ProgressReceiver progressReceiver) throws OperationCancelled {
         final Terrain terrain = (Terrain) comboBoxTerrain.getSelectedItem();
+        if (filter == null) {
+            dimension.visitTilesForEditing().andDo(tile -> tile.fillTerrain(terrain), progressReceiver);
+            return;
+        }
         dimension.visitTilesForEditing().forFilter(filter).andDo(tile -> {
             final int worldTileX = tile.getX() << TILE_SIZE_BITS;
             final int worldTileY = tile.getY() << TILE_SIZE_BITS;
@@ -536,6 +540,10 @@ public class FillDialog extends WPDialogWithPaintSelection implements Listener, 
 
     private void fillWithBiome(ProgressReceiver progressReceiver) throws OperationCancelled {
         int biome = (Integer) comboBoxBiome.getSelectedItem();
+        if (filter == null) {
+            dimension.visitTilesForEditing().andDo(tile -> tile.assignLayerValue(Biome.INSTANCE, biome), progressReceiver);
+            return;
+        }
         dimension.visitTilesForEditing().forFilter(filter).andDo(tile -> {
             final int worldTileX = tile.getX() << TILE_SIZE_BITS;
             final int worldTileY = tile.getY() << TILE_SIZE_BITS;

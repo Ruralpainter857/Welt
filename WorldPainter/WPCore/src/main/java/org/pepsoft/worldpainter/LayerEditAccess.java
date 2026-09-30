@@ -13,6 +13,18 @@ final class LayerEditAccess {
             () -> ByteBuffer.allocateDirect(40 + 16384).order(ByteOrder.LITTLE_ENDIAN));
     private static final ThreadLocal<FluidScratch> FLUID_BUFFER = ThreadLocal.withInitial(FluidScratch::new);
 
+    static ByteBuffer constant(int side, int width, int value) {
+        if ((side != 8 && side != 128) || (width != 1 && width != 4 && width != 8)
+                || (side == 8 && width != 1) || value < 0 || value >= (1 << width)) return null;
+        ByteBuffer buffer = BUFFER.get();
+        buffer.clear().limit(40 + side * side * width / 8);
+        buffer.putInt(0, 0x44454c57).putInt(4, 1).putInt(8, 1).putInt(12, 0);
+        buffer.putInt(16, side).putInt(20, width).putInt(24, 2)
+                .putInt(28, value).putInt(32, 40).putInt(36, 0);
+        // Une affectation remplace tout le plan : aucun ancien contenu à transférer.
+        return NativeSlices.editLayerPlanes(buffer) ? buffer : null;
+    }
+
     static ByteBuffer resetFluids(boolean tall, int rawLevel, boolean lava) {
         int waterBytes = 16384 * (tall ? 2 : 1);
         ByteBuffer buffer = FLUID_BUFFER.get().buffer;

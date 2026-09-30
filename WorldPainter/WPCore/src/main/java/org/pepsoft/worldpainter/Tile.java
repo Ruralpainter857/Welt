@@ -2452,6 +2452,60 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
 
     public void invertLayer(Layer layer) { editWholeLayer(layer, true, 0); }
 
+    public void fillTerrain(Terrain value) {
+        Objects.requireNonNull(value);
+        if (fillTerrainNative(value)) return;
+        for (int x = 0; x < TILE_SIZE; x++) for (int y = 0; y < TILE_SIZE; y++) {
+            if (getTerrain(x, y) != value) setTerrain(x, y, value);
+        }
+    }
+
+    synchronized boolean fillTerrainNative(Terrain value) {
+        if (getClass() != Tile.class || eventInhibitionCounter == 0
+                || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return false;
+        ensureReadable(TERRAIN);
+        byte ordinal = (byte) value.ordinal();
+        boolean changed = false;
+        for (byte cell : terrain) if (cell != ordinal) { changed = true; break; }
+        if (!changed) return true;
+        ByteBuffer buffer = LayerEditAccess.constant(128, 8, value.ordinal());
+        if (buffer == null) return false;
+        ensureWriteable(TERRAIN);
+        buffer.position(40); buffer.get(terrain);
+        terrainChanged();
+        return true;
+    }
+
+    public void assignLayerValue(Layer layer, int value) {
+        DataSize size = layer.dataSize;
+        if (size != DataSize.BIT && size != DataSize.BIT_PER_CHUNK && size != NIBBLE && size != BYTE)
+            throw new UnsupportedOperationException("Unsupported layer storage: " + size);
+        if (value < 0 || value > size.maxValue) throw new IllegalArgumentException("Invalid layer value");
+        if (assignLayerNative(layer, value)) return;
+        int step = size == DataSize.BIT_PER_CHUNK ? 16 : 1;
+        for (int x = 0; x < TILE_SIZE; x += step) for (int y = 0; y < TILE_SIZE; y += step) {
+            if (size == DataSize.BIT || size == DataSize.BIT_PER_CHUNK) setBitLayerValue(layer, x, y, value != 0);
+            else setLayerValue(layer, x, y, value);
+        }
+    }
+
+    synchronized boolean assignLayerNative(Layer layer, int value) {
+        if (getClass() != Tile.class || eventInhibitionCounter == 0
+                || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return false;
+        DataSize size = layer.dataSize;
+        boolean bit = size == DataSize.BIT || size == DataSize.BIT_PER_CHUNK;
+        if ((!bit && size != NIBBLE && size != BYTE) || value < 0 || value > size.maxValue) return false;
+        ensureReadable(bit ? BIT_LAYER_DATA : LAYER_DATA);
+        // Les setters ne créent pas de couche absente quand la valeur est celle par défaut.
+        if (bit ? !bitLayerData.containsKey(layer) && value == 0
+                : !layerData.containsKey(layer) && value == layer.getDefaultValue()) return true;
+        ByteBuffer buffer = LayerEditAccess.constant(size == DataSize.BIT_PER_CHUNK ? 8 : 128,
+                bit ? 1 : size == NIBBLE ? 4 : 8, value);
+        if (buffer == null) return false;
+        applyLayerEdit(layer, bit, buffer);
+        return true;
+    }
+
     public void resetFluids(int level, boolean lava) {
         if (resetFluidsNative(level, lava)) return;
         if (!lava) clearLayerData(FloodWithLava.INSTANCE);
@@ -2547,6 +2601,11 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                 bit ? null : layerData.get(layer), bit ? bitLayerData.get(layer) : null);
         if (buffer == null) return false;
         if (buffer.getInt(36) == 0) return true;
+        applyLayerEdit(layer, bit, buffer);
+        return true;
+    }
+
+    private void applyLayerEdit(Layer layer, boolean bit, ByteBuffer buffer) {
         ensureWriteable(bit ? BIT_LAYER_DATA : LAYER_DATA);
         int bytes = buffer.limit() - 40;
         if (bit) {
@@ -2559,7 +2618,6 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
         cachedLayers = null;
         layerDataChanged(layer);
-        return true;
     }
 
     private boolean isSharedBuffer(TileBuffer buffer) {
