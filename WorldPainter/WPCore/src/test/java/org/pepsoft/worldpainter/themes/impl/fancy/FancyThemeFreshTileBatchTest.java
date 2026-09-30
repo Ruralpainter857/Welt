@@ -7,12 +7,14 @@ import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.TileFactoryFactory;
 import org.pepsoft.worldpainter.layers.Layer;
 import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assume.assumeTrue;
 
 public final class FancyThemeFreshTileBatchTest {
     @Test
@@ -35,6 +37,33 @@ public final class FancyThemeFreshTileBatchTest {
         } finally {
             restoreProperty(batchProperty, previousBatch);
             restoreProperty(Native.GEN_KEY, previousNative);
+        }
+    }
+
+    @Test
+    public void nativeHeightNeighborhoodMatchesJavaForFancyTiles() {
+        assumeTrue("welt_slices is only built by the native Maven profile", NativeLoader.areSlicesAvailable());
+        final String batchProperty = "wp.fancyTheme.freshTileBatch";
+        final String previousBatch = System.getProperty(batchProperty);
+        final String previousNative = System.getProperty(Native.GEN_KEY);
+        final String previousNinePatch = System.getProperty(Native.NINE_PATCH_GEN_KEY);
+        final HeightMapTileFactory factory = TileFactoryFactory.createFancyTileFactory(
+                42L, Terrain.GRASS, 0, 256, 58, 62, false, 20.0f, 1.0);
+        final int[][] tileCoordinates = {{-2, 1}, {0, 0}, {3, -4}};
+        try {
+            System.setProperty(batchProperty, "true");
+            Native.setNinePatchGenEnabled(true);
+            for (int[] coordinates : tileCoordinates) {
+                Native.setGenEnabled(false);
+                final Tile expected = factory.createTile(coordinates[0], coordinates[1]);
+                Native.setGenEnabled(true);
+                final Tile actual = factory.createTile(coordinates[0], coordinates[1]);
+                assertTileEquals(expected, actual);
+            }
+        } finally {
+            restoreProperty(batchProperty, previousBatch);
+            restoreProperty(Native.GEN_KEY, previousNative);
+            restoreProperty(Native.NINE_PATCH_GEN_KEY, previousNinePatch);
         }
     }
 

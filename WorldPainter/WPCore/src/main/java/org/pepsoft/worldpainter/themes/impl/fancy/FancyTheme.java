@@ -16,13 +16,14 @@ import java.util.Random;
 import static java.awt.Color.WHITE;
 import static org.pepsoft.minecraft.Material.SNOW_BLOCK;
 import static org.pepsoft.worldpainter.Constants.TILE_SIZE;
+import static org.pepsoft.util.MathUtils.clamp;
 
 /**
  *
  * @author SchmitzP
  */
 public class FancyTheme implements Theme, Cloneable {
-    private static final int WATER_SEARCH_RADIUS = 5;
+    public static final int HEIGHT_NEIGHBORHOOD_RADIUS = 5;
     private static final String FRESH_TILE_BATCH_PROPERTY = "wp.fancyTheme.freshTileBatch";
     private static final ThreadLocal<FancyThemeHeightContext> FRESH_TILE_HEIGHT_CONTEXTS =
             ThreadLocal.withInitial(FancyThemeHeightContext::new);
@@ -56,11 +57,28 @@ public class FancyTheme implements Theme, Cloneable {
 
     /** Applies this theme to a complete fresh tile using one reusable neighbourhood cache. */
     public final void applyFreshTile(Tile tile, int worldTileX, int worldTileY) {
+        applyFreshTile(tile, worldTileX, worldTileY, 0, 0, waterHeight, null);
+    }
+
+    /** Applies a precomputed height neighbourhood and initializes terrain heights before theming. */
+    public final void applyFreshTile(Tile tile, int worldTileX, int worldTileY,
+                                     int minHeight, int maxHeight, int tileWaterLevel,
+                                     double[] rawHeightNeighborhood) {
         if (!supportsFreshTileMaps()) {
             throw new IllegalStateException("Fresh-tile batching is not supported for this FancyTheme");
         }
         final FancyThemeHeightContext context = FRESH_TILE_HEIGHT_CONTEXTS.get();
-        context.prepare(this, worldTileX, worldTileY);
+        context.prepare(this, worldTileX, worldTileY, rawHeightNeighborhood);
+        if (rawHeightNeighborhood != null) {
+            for (int x = 0; x < TILE_SIZE; x++) {
+                for (int y = 0; y < TILE_SIZE; y++) {
+                    final int worldX = worldTileX + x;
+                    final int worldY = worldTileY + y;
+                    tile.setHeight(x, y, clamp(minHeight, context.getHeight(worldX, worldY), maxHeight - 1));
+                    tile.setWaterLevel(x, y, tileWaterLevel);
+                }
+            }
+        }
         for (int x = 0; x < TILE_SIZE; x++) {
             for (int y = 0; y < TILE_SIZE; y++) {
                 apply(tile, x, y, context);
@@ -317,13 +335,24 @@ public class FancyTheme implements Theme, Cloneable {
     }
 
     private static final class FancyThemeHeightContext {
-        private final float[] heights = new float[HEIGHT_SIZE * HEIGHT_SIZE];
+        private float[] javaHeights;
+        private double[] nativeHeights;
         private final short[] waterPrefix = new short[PREFIX_SIZE * PREFIX_SIZE];
         private int originX, originY;
 
-        void prepare(FancyTheme theme, int worldTileX, int worldTileY) {
-            originX = worldTileX - WATER_SEARCH_RADIUS;
-            originY = worldTileY - WATER_SEARCH_RADIUS;
+        void prepare(FancyTheme theme, int worldTileX, int worldTileY, double[] rawHeightNeighborhood) {
+            if ((rawHeightNeighborhood != null)
+                    && (rawHeightNeighborhood.length != HEIGHT_SIZE * HEIGHT_SIZE)) {
+                throw new IllegalArgumentException("Expected the complete height neighbourhood");
+            }
+            originX = worldTileX - HEIGHT_NEIGHBORHOOD_RADIUS;
+            originY = worldTileY - HEIGHT_NEIGHBORHOOD_RADIUS;
+            nativeHeights = rawHeightNeighborhood;
+            if (rawHeightNeighborhood == null) {
+                if ((javaHeights == null) || (javaHeights.length != HEIGHT_SIZE * HEIGHT_SIZE)) {
+                    javaHeights = new float[HEIGHT_SIZE * HEIGHT_SIZE];
+                }
+            }
             java.util.Arrays.fill(waterPrefix, (short) 0);
             for (int y = 0; y < HEIGHT_SIZE; y++) {
                 int rowWaterCount = 0;
@@ -332,8 +361,14 @@ public class FancyTheme implements Theme, Cloneable {
                 final int prefixAbove = y * PREFIX_SIZE;
                 final int worldY = originY + y;
                 for (int x = 0; x < HEIGHT_SIZE; x++) {
-                    final float value = theme.getHeight(originX + x, worldY);
-                    heights[heightRow + x] = value;
+                    final int index = heightRow + x;
+                    final float value;
+                    if (nativeHeights != null) {
+                        value = (float) nativeHeights[index];
+                    } else {
+                        value = theme.getHeight(originX + x, worldY);
+                        javaHeights[index] = value;
+                    }
                     if (value < theme.waterHeight) {
                         rowWaterCount++;
                     }
@@ -344,12 +379,13 @@ public class FancyTheme implements Theme, Cloneable {
         }
 
         float getHeight(int worldX, int worldY) {
-            return heights[(worldY - originY) * HEIGHT_SIZE + (worldX - originX)];
+            final int index = (worldY - originY) * HEIGHT_SIZE + (worldX - originX);
+            return (nativeHeights != null) ? (float) nativeHeights[index] : javaHeights[index];
         }
 
         boolean isWaterNear(int worldX, int worldY) {
-            final int left = worldX - originX - WATER_SEARCH_RADIUS;
-            final int top = worldY - originY - WATER_SEARCH_RADIUS;
+            final int left = worldX - originX - HEIGHT_NEIGHBORHOOD_RADIUS;
+            final int top = worldY - originY - HEIGHT_NEIGHBORHOOD_RADIUS;
             final int right = left + WATER_WINDOW_SIZE;
             final int bottom = top + WATER_WINDOW_SIZE;
             final int count = waterPrefix[bottom * PREFIX_SIZE + right]
@@ -359,9 +395,9 @@ public class FancyTheme implements Theme, Cloneable {
             return count > 0;
         }
 
-        private static final int HEIGHT_SIZE = TILE_SIZE + WATER_SEARCH_RADIUS * 2;
+        private static final int HEIGHT_SIZE = TILE_SIZE + HEIGHT_NEIGHBORHOOD_RADIUS * 2;
         private static final int PREFIX_SIZE = HEIGHT_SIZE + 1;
-        private static final int WATER_WINDOW_SIZE = WATER_SEARCH_RADIUS * 2 + 1;
+        private static final int WATER_WINDOW_SIZE = HEIGHT_NEIGHBORHOOD_RADIUS * 2 + 1;
     }
 
     protected GroundCoverLayer snowLayer = new GroundCoverLayer("Mountain Snow", MixedMaterial.create("Deep Snow", SNOW_BLOCK), WHITE);
