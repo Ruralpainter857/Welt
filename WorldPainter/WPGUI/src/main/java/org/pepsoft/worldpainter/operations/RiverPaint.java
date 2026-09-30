@@ -4,6 +4,9 @@ import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.Terrain;
 import org.pepsoft.worldpainter.WorldPainterView;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
 /**
  * A tool for creating rivers. It floods an area defined by where the brush
@@ -37,6 +40,9 @@ public class RiverPaint extends AbstractBrushOperation {
             return;
         }
         int r = getEffectiveRadius();
+        if (applyNativeRiverPaint(dim, centreX, centreY, r)) {
+            return;
+        }
 
         // Step 1: determine the water level by finding the lowest block along the edge of the part which should be
         // flooded (the part where the brush is at 25% intensity or higher)
@@ -101,9 +107,105 @@ public class RiverPaint extends AbstractBrushOperation {
         return (dx <= r) && (dy <= r) && (getFullStrength(centreX, centreY, x, y) > 0.25f);
     }
 
+    private boolean applyNativeRiverPaint(Dimension dimension, int centreX, int centreY, int radius) {
+        final long diameterLong = 2L * radius + 1L;
+        if (radius < 0 || diameterLong > 255L || getFilter() != null
+                || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) {
+            return false;
+        }
+        final int diameter = (int) diameterLong;
+        final int area = diameter * diameter;
+        ensureNativeBuffers(area);
+        ensureNativeWaterLevelOutput();
+
+        int index = 0;
+        for (int x = centreX - radius; x <= centreX + radius; x++) {
+            for (int y = centreY - radius; y <= centreY + radius; y++) {
+                final float strength = getFullStrength(centreX, centreY, x, y);
+                nativeHeights[index] = dimension.getHeightAt(x, y);
+                nativeTerrainHeights[index] = dimension.getIntHeightAt(x, y);
+                nativeWaterLevels[index] = dimension.getWaterLevelAt(x, y);
+                nativeStrengths[index] = strength;
+                if (strength > 0.0f && strength <= 0.25f) {
+                    nativeSlopeOffsets[index] = (float) (Math.tan(-strength * DOUBLE_PI + HALF_PI) / DOUBLE_PI);
+                } else {
+                    nativeSlopeOffsets[index] = 0.0f;
+                }
+                index++;
+            }
+        }
+
+        if (!NativeSlices.applyRiverPaint(radius, previousWaterLevel, depth, lava,
+                nativeHeights, nativeTerrainHeights, nativeWaterLevels, nativeStrengths,
+                nativeSlopeOffsets, nativeHeightModified, nativeFlooded, nativeBeaches,
+                nativeWaterLevelOutput)) {
+            return false;
+        }
+
+        final int waterLevel = nativeWaterLevelOutput[0];
+        previousWaterLevel = waterLevel;
+        dimension.setEventsInhibited(true);
+        try {
+            index = 0;
+            for (int x = centreX - radius; x <= centreX + radius; x++) {
+                for (int y = centreY - radius; y <= centreY + radius; y++) {
+                    if (nativeFlooded[index] != 0) {
+                        if (nativeHeightModified[index] != 0) {
+                            dimension.setHeightAt(x, y, nativeHeights[index]);
+                        }
+                        dimension.setWaterLevelAt(x, y, waterLevel);
+                        dimension.setBitLayerValueAt(FloodWithLava.INSTANCE, x, y, lava);
+                        if (!lava) {
+                            dimension.setTerrainAt(x, y, Terrain.BEACHES);
+                        }
+                    } else {
+                        if (nativeHeightModified[index] != 0) {
+                            dimension.setHeightAt(x, y, nativeHeights[index]);
+                        }
+                        if (nativeBeaches[index] != 0) {
+                            dimension.setTerrainAt(x, y, Terrain.BEACHES);
+                        }
+                    }
+                    index++;
+                }
+            }
+        } finally {
+            dimension.setEventsInhibited(false);
+        }
+        return true;
+    }
+
+    private void ensureNativeBuffers(int area) {
+        if (nativeHeights == null || nativeHeights.length != area) {
+            nativeHeights = new float[area];
+            nativeTerrainHeights = new int[area];
+            nativeWaterLevels = new int[area];
+            nativeStrengths = new float[area];
+            nativeSlopeOffsets = new float[area];
+            nativeHeightModified = new byte[area];
+            nativeFlooded = new byte[area];
+            nativeBeaches = new byte[area];
+        }
+    }
+
     private float depth;
     private int previousWaterLevel;
     private boolean lava;
+    private float[] nativeHeights;
+    private int[] nativeTerrainHeights;
+    private int[] nativeWaterLevels;
+    private float[] nativeStrengths;
+    private float[] nativeSlopeOffsets;
+    private byte[] nativeHeightModified;
+    private byte[] nativeFlooded;
+    private byte[] nativeBeaches;
+    private int[] nativeWaterLevelOutput;
+
+    private void ensureNativeWaterLevelOutput() {
+        if (nativeWaterLevelOutput == null) {
+            nativeWaterLevelOutput = new int[1];
+        }
+    }
 
     private static final double DOUBLE_PI = Math.PI * 2;
     private static final double HALF_PI = Math.PI / 2;

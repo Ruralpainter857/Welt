@@ -12,6 +12,7 @@ pub mod jni_gen;
 pub mod mountain;
 pub mod noise;
 pub mod raise_pyramid;
+pub mod river_paint;
 pub mod rng;
 pub mod smooth_height;
 pub mod sponge;

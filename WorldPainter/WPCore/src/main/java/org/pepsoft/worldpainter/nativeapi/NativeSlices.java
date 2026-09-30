@@ -264,6 +264,40 @@ public final class NativeSlices {
         }
     }
 
+    /** Calculates the safe fluid level and terrain edits for one River Paint stroke. */
+    public static boolean applyRiverPaint(final int radius, final int previousWaterLevel,
+                                          final float depth, final boolean lava,
+                                          final float[] heights, final int[] terrainHeights,
+                                          final int[] waterLevels, final float[] strengths,
+                                          final float[] slopeOffsets,
+                                          final byte[] heightModified, final byte[] flooded,
+                                          final byte[] beaches, final int[] waterLevelOutput) {
+        final long diameter = 2L * radius + 1L;
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || radius < 0 || diameter > 255L) {
+            return false;
+        }
+        final long area = diameter * diameter;
+        if (heights == null || terrainHeights == null || waterLevels == null
+                || strengths == null || slopeOffsets == null || heightModified == null
+                || flooded == null || beaches == null || waterLevelOutput == null
+                || area <= 0 || area > 65_536L
+                || heights.length != area || terrainHeights.length != area
+                || waterLevels.length != area || strengths.length != area
+                || slopeOffsets.length != area || heightModified.length != area
+                || flooded.length != area || beaches.length != area
+                || waterLevelOutput.length != 1) {
+            return false;
+        }
+        try {
+            return nativeApplyRiverPaint(radius, previousWaterLevel, depth, lava ? 1 : 0,
+                    heights, terrainHeights, waterLevels, strengths, slopeOffsets,
+                    heightModified, flooded, beaches, waterLevelOutput) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     /** Smooths a brush area using caller-owned input, strength and output buffers. */
     public static boolean smoothHeightRegion(final int inputWidth, final int inputHeight,
                                              final float[] heights, final float[] strengths,
@@ -982,6 +1016,13 @@ public final class NativeSlices {
 
     private static native int nativeApplySpongeBrush(int inverse, int waterHeight,
                                                       float[] strengths, byte[] actions);
+
+    private static native int nativeApplyRiverPaint(int radius, int previousWaterLevel,
+                                                     float depth, int lava, float[] heights,
+                                                     int[] terrainHeights, int[] waterLevels,
+                                                     float[] strengths, float[] slopeOffsets,
+                                                     byte[] heightModified, byte[] flooded,
+                                                     byte[] beaches, int[] waterLevelOutput);
 
     private static native int nativeSmoothHeightRegion(int inputWidth, int inputHeight,
                                                         float[] heights, float[] strengths,

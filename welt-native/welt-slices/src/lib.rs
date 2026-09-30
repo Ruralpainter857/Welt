@@ -10,6 +10,7 @@ use welt_core::height_edit::{apply_flatten_brush, apply_height_brush, FlattenMod
 use welt_core::jni::{jclass, jint, jlong, jni_catch, jobject, JNIEnv};
 use welt_core::mountain::raise_mountain;
 use welt_core::raise_pyramid::{raise_rotated_pyramid, raise_square_pyramid};
+use welt_core::river_paint::apply_river_paint;
 use welt_core::smooth_height::smooth_height_region;
 use welt_core::sponge::apply_sponge_brush;
 use welt_export::edge_distance::bake_edge_distances;
@@ -495,6 +496,160 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 return WeltError::IllegalArgument as jint;
             }
             set_byte(env, actions, 0, length, action_values.as_ptr());
+            WeltError::Ok as jint
+        })
+    }
+}
+
+/// Computes one River Paint level and the ordered per-cell edits for a brush area.
+///
+/// # Safety
+/// `env`, arrays, and their lengths must be valid references from the JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeApplyRiverPaint(
+    env: *mut JNIEnv,
+    _class: jclass,
+    radius: jint,
+    previous_water_level: jint,
+    depth: f32,
+    lava: jint,
+    heights: jobject,
+    terrain_heights: jobject,
+    water_levels: jobject,
+    strengths: jobject,
+    slope_offsets: jobject,
+    height_modified: jobject,
+    flooded: jobject,
+    beaches: jobject,
+    water_level_output: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if radius < 0
+                || heights.is_null()
+                || terrain_heights.is_null()
+                || water_levels.is_null()
+                || strengths.is_null()
+                || slope_offsets.is_null()
+                || height_modified.is_null()
+                || flooded.is_null()
+                || beaches.is_null()
+                || water_level_output.is_null()
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            let side = match (radius as usize)
+                .checked_mul(2)
+                .and_then(|value| value.checked_add(1))
+            {
+                Some(value) => value,
+                None => return WeltError::IllegalArgument as jint,
+            };
+            let area = match side.checked_mul(side) {
+                Some(value) if value <= 65_536 => value,
+                _ => return WeltError::IllegalArgument as jint,
+            };
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            if get_array_length(env, heights) != area as jint
+                || get_array_length(env, terrain_heights) != area as jint
+                || get_array_length(env, water_levels) != area as jint
+                || get_array_length(env, strengths) != area as jint
+                || get_array_length(env, slope_offsets) != area as jint
+                || get_array_length(env, height_modified) != area as jint
+                || get_array_length(env, flooded) != area as jint
+                || get_array_length(env, beaches) != area as jint
+                || get_array_length(env, water_level_output) != 1
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+
+            type GetFloatArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut f32);
+            type GetIntArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i32);
+            type SetFloatArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const f32);
+            type SetIntArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i32);
+            type SetByteArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i8);
+            let get_float: GetFloatArrayRegion =
+                std::mem::transmute(function(env, GET_FLOAT_ARRAY_REGION));
+            let get_int: GetIntArrayRegion =
+                std::mem::transmute(function(env, GET_INT_ARRAY_REGION));
+            let set_float: SetFloatArrayRegion =
+                std::mem::transmute(function(env, SET_FLOAT_ARRAY_REGION));
+            let set_int: SetIntArrayRegion =
+                std::mem::transmute(function(env, SET_INT_ARRAY_REGION));
+            let set_byte: SetByteArrayRegion =
+                std::mem::transmute(function(env, SET_BYTE_ARRAY_REGION));
+            let mut height_values = vec![0.0_f32; area];
+            let mut terrain_height_values = vec![0_i32; area];
+            let mut water_level_values = vec![0_i32; area];
+            let mut strength_values = vec![0.0_f32; area];
+            let mut slope_offset_values = vec![0.0_f32; area];
+            let mut height_modified_values = vec![0_i8; area];
+            let mut flooded_values = vec![0_i8; area];
+            let mut beach_values = vec![0_i8; area];
+            get_float(env, heights, 0, area as jint, height_values.as_mut_ptr());
+            get_int(
+                env,
+                terrain_heights,
+                0,
+                area as jint,
+                terrain_height_values.as_mut_ptr(),
+            );
+            get_int(
+                env,
+                water_levels,
+                0,
+                area as jint,
+                water_level_values.as_mut_ptr(),
+            );
+            get_float(
+                env,
+                strengths,
+                0,
+                area as jint,
+                strength_values.as_mut_ptr(),
+            );
+            get_float(
+                env,
+                slope_offsets,
+                0,
+                area as jint,
+                slope_offset_values.as_mut_ptr(),
+            );
+            let water_level = match apply_river_paint(
+                radius as usize,
+                previous_water_level,
+                depth,
+                lava != 0,
+                &mut height_values,
+                &terrain_height_values,
+                &water_level_values,
+                &strength_values,
+                &slope_offset_values,
+                &mut height_modified_values,
+                &mut flooded_values,
+                &mut beach_values,
+            ) {
+                Ok(value) => value,
+                Err(_) => return WeltError::IllegalArgument as jint,
+            };
+            set_float(env, heights, 0, area as jint, height_values.as_ptr());
+            set_byte(
+                env,
+                height_modified,
+                0,
+                area as jint,
+                height_modified_values.as_ptr(),
+            );
+            set_byte(env, flooded, 0, area as jint, flooded_values.as_ptr());
+            set_byte(env, beaches, 0, area as jint, beach_values.as_ptr());
+            set_int(env, water_level_output, 0, 1, &water_level);
             WeltError::Ok as jint
         })
     }
