@@ -52,6 +52,17 @@ public final class NativeSlices {
 
     private static native int nativeEditSelection(ByteBuffer buffer);
 
+    /** Resamples all height and layer planes using the versioned compact scaling ABI. */
+    public static boolean resampleTile(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || buffer == null || !buffer.isDirect() || buffer.isReadOnly()
+                || buffer.position() != 0 || buffer.limit() < 2104 || buffer.limit() > 8 * 1024 * 1024) return false;
+        try { return nativeResampleTile(buffer, buffer.limit()) == 0; }
+        catch (UnsatisfiedLinkError e) { return false; }
+    }
+
+    private static native int nativeResampleTile(ByteBuffer buffer, int length);
+
     /**
      * Returns whether native tunnel edge caches are enabled. This specialised path is enabled by
      * default when its kernel is available; the dedicated property can disable it without changing

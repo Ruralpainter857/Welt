@@ -333,6 +333,69 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         heightMapChanged();
     }
 
+    /** Only freshly generated, ordinary tiles with no observers use grouped scaling writes. */
+    synchronized boolean canApplyScaledData() {
+        return getClass() == Tile.class && undoManager == null && listeners.isEmpty() && eventInhibitionCounter == 0;
+    }
+
+    /** Applies complete resampling output to normal COW buffers; no backing array escapes. */
+    synchronized void applyScaledData(ByteBuffer buffer, List<Layer> layers, byte[] active,
+                                      int[] water, byte[] terrains, int[] missing) {
+        if (!canApplyScaledData()) throw new IllegalStateException("Scaling target is no longer fresh");
+        final int heightOutput = buffer.getInt(ScalingTileAccess.TABLE + 20);
+        ensureWriteable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+        ensureWriteable(tall ? TALL_WATERLEVEL : WATERLEVEL);
+        ensureWriteable(TERRAIN);
+        for (int i = 0; i < TILE_SIZE * TILE_SIZE; i++) {
+            if (active[i] == 0) continue;
+            final int raw = (int) ((buffer.getFloat(heightOutput + i * 4) - minHeight) * 256);
+            if (tall) { tallHeightMap[i] = raw; tallWaterLevel[i] = (short) (water[i] - minHeight); }
+            else { heightMap[i] = (short) raw; waterLevel[i] = (byte) (water[i] - minHeight); }
+            terrain[i] = terrains[i];
+        }
+        for (int p = 0; p < layers.size(); p++) {
+            final Layer layer = layers.get(p);
+            final int start = buffer.getInt(ScalingTileAccess.TABLE + (p + 1) * 32 + 20);
+            final boolean bit = layer.dataSize == DataSize.BIT || layer.dataSize == DataSize.BIT_PER_CHUNK;
+            byte[] values = null; BitSet bits = null; boolean touched = false;
+            for (int i = 0; i < TILE_SIZE * TILE_SIZE; i++) {
+                if (active[i] == 0) continue;
+                final int value = buffer.get(start + i) & 255;
+                if (bit && layer.discrete ? value == 0 : value == layer.getDefaultValue()) continue;
+                if (!touched) {
+                    ensureWriteable(bit ? BIT_LAYER_DATA : LAYER_DATA);
+                    if (bit) {
+                        bits = bitLayerData.get(layer);
+                        if (bits == null) { bits = new BitSet(layer.dataSize == DataSize.BIT ? 16384 : 64); bitLayerData.put(layer, bits); }
+                    } else {
+                        values = layerData.get(layer);
+                        if (values == null) {
+                            values = new byte[layer.dataSize == DataSize.NIBBLE ? 8192 : 16384];
+                            Arrays.fill(values, (byte) (layer.dataSize == DataSize.NIBBLE
+                                    ? layer.getDefaultValue() | layer.getDefaultValue() << 4 : layer.getDefaultValue()));
+                            layerData.put(layer, values);
+                        }
+                        values = detachSharedLayerDataBuffer(layer, values);
+                    }
+                    touched = true;
+                }
+                if (bit) bits.set(layer.dataSize == DataSize.BIT ? i : (i % 128) / 16 + (i / 128) / 16 * 8);
+                else if (layer.dataSize == DataSize.BYTE) values[i] = (byte) value;
+                else {
+                    final int shift = (i % 2) * 4;
+                    values[i / 2] = (byte) ((values[i / 2] & ~(15 << shift)) | value << shift);
+                }
+            }
+            if (touched) cachedLayers = null;
+        }
+        markScaledMissingChunks(missing);
+    }
+
+    void markScaledMissingChunks(int[] missing) {
+        for (int i = 0; i < 64; i++) if (missing[i] == 256)
+            setBitLayerValue(org.pepsoft.worldpainter.layers.NotPresent.INSTANCE, (i >> 3) << 4, (i & 7) << 4, true);
+    }
+
     /**
      * Initialise all heights and water levels in one write transaction while
      * a newly generated tile has its events inhibited. This preserves the

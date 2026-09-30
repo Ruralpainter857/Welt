@@ -19,6 +19,7 @@ pub mod pencil_snap;
 pub mod raise_pyramid;
 pub mod river_paint;
 pub mod rng;
+pub mod scaling;
 pub mod selection;
 pub mod smooth_height;
 pub mod sponge;

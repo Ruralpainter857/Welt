@@ -40,6 +40,33 @@ mod chunk_buffer;
 mod fluid_flow;
 mod resource_palette;
 
+/// Resamples all compact height/layer planes with one direct-buffer call.
+///
+/// # Safety
+/// Java owns a writable direct buffer for the call and must exclude concurrent access.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeResampleTile(
+    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if buffer.is_null() || length < 2104 || length as usize > welt_core::scaling::MAX_BYTES {
+                return WeltError::IllegalArgument as jint;
+            }
+            type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
+            type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
+            let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
+            let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
+            let pointer = address(env, buffer);
+            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            let data = std::slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
+            match welt_core::scaling::resample(data) {
+                Ok(()) => WeltError::Ok as jint, Err(_) => WeltError::IllegalArgument as jint,
+            }
+        })
+    }
+}
+
 /// Edits both compact selection levels using one direct buffer.
 ///
 /// # Safety
