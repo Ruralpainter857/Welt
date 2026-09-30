@@ -427,10 +427,15 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                         lowestThemeHeight, highestThemeHeight, terrainOrdinals, nativeLayerValues)) {
                     if (simpleTheme.applyDeterministicValueLayersToFreshTile(tile, intHeights,
                             lowestThemeHeight, highestThemeHeight, terrainOrdinals, nativeLayerValues)) {
-                        for (int x = 0; x < TILE_SIZE; x++) {
-                            for (int y = 0; y < TILE_SIZE; y++) {
-                                simpleTheme.applyBitLayersToFreshTile(tile, x, y,
-                                        intHeights[x | (y << TILE_SIZE_BITS)]);
+                        final byte[] bitLayerValues = (nativeLayerValues != null)
+                                ? nativeLayerValues
+                                : buffers.randomBitLayerValues(simpleTheme.getFreshTileBitLayerCount());
+                        if (!simpleTheme.applyRandomBitLayersToFreshTile(tile, intHeights, bitLayerValues)) {
+                            for (int x = 0; x < TILE_SIZE; x++) {
+                                for (int y = 0; y < TILE_SIZE; y++) {
+                                    simpleTheme.applyBitLayersToFreshTile(tile, x, y,
+                                            intHeights[x | (y << TILE_SIZE_BITS)]);
+                                }
                             }
                         }
                     } else {
@@ -770,6 +775,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         private int[] nativeTerrainOrdinals;
         private int[] terrainRangeOrdinals;
         private byte[] nativeThemeLayerValues;
+        private byte[] randomBitLayerValues;
 
         private float[] generationHeights() {
             if (heights == null) {
@@ -815,6 +821,17 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 nativeThemeLayerValues = new byte[(int) requestedLength];
             }
             return nativeThemeLayerValues;
+        }
+
+        private byte[] randomBitLayerValues(final int layerCount) {
+            final long requestedLength = (long) TILE_SIZE * TILE_SIZE * layerCount;
+            if ((layerCount <= 0) || (layerCount > 64) || (requestedLength > 1_048_576L)) {
+                return null;
+            }
+            if ((randomBitLayerValues == null) || (randomBitLayerValues.length < requestedLength)) {
+                randomBitLayerValues = new byte[(int) requestedLength];
+            }
+            return randomBitLayerValues;
         }
 
         private boolean prepareHeightMapProgram(HeightMap heightMap) {

@@ -10,6 +10,7 @@ pub enum SimpleThemeLayersError {
     OutputLength { expected: usize, actual: usize },
     InvalidLayerValue,
     RandomBitLayer,
+    InvalidRandomRoll,
     AreaOverflow,
 }
 
@@ -135,9 +136,96 @@ pub fn fill_simple_theme_layers(
     Ok(())
 }
 
+/// Converts Java-generated `Random.nextInt(15)` draws into packed bit-layer planes.
+/// Draws are supplied in layer-major order; `u8::MAX` marks deterministic levels (0 or 15).
+/// The same buffer is rewritten to 0/1 planes so callers can apply each plane in one tile batch.
+pub fn fill_simple_theme_random_bit_layers(
+    min_height: i32,
+    max_height: i32,
+    width: usize,
+    height: usize,
+    quantised_heights: &[i32],
+    bit_layer_count: usize,
+    bit_layer_tables: &[i32],
+    rolls_and_output: &mut [u8],
+) -> Result<(), SimpleThemeLayersError> {
+    if min_height >= max_height {
+        return Err(SimpleThemeLayersError::InvalidHeightRange);
+    }
+    let height_range = usize::try_from(i64::from(max_height) - i64::from(min_height))
+        .map_err(|_| SimpleThemeLayersError::HeightRangeTooLarge)?;
+    if height_range > 1_048_576 {
+        return Err(SimpleThemeLayersError::HeightRangeTooLarge);
+    }
+    let area = width
+        .checked_mul(height)
+        .ok_or(SimpleThemeLayersError::AreaOverflow)?;
+    if quantised_heights.len() != area {
+        return Err(SimpleThemeLayersError::HeightLength {
+            expected: area,
+            actual: quantised_heights.len(),
+        });
+    }
+    let expected_tables = bit_layer_count
+        .checked_mul(height_range)
+        .ok_or(SimpleThemeLayersError::AreaOverflow)?;
+    if bit_layer_tables.len() != expected_tables {
+        return Err(SimpleThemeLayersError::BitLayerTableLength {
+            expected: expected_tables,
+            actual: bit_layer_tables.len(),
+        });
+    }
+    let expected_output = area
+        .checked_mul(bit_layer_count)
+        .ok_or(SimpleThemeLayersError::AreaOverflow)?;
+    if rolls_and_output.len() != expected_output {
+        return Err(SimpleThemeLayersError::OutputLength {
+            expected: expected_output,
+            actual: rolls_and_output.len(),
+        });
+    }
+
+    for table in bit_layer_tables.chunks_exact(height_range) {
+        if table.iter().any(|value| !(0..=15).contains(value)) {
+            return Err(SimpleThemeLayersError::InvalidLayerValue);
+        }
+    }
+    for layer in 0..bit_layer_count {
+        let table_start = layer * height_range;
+        let table = &bit_layer_tables[table_start..table_start + height_range];
+        let output_start = layer * area;
+        for (index, quantised_height) in quantised_heights.iter().copied().enumerate() {
+            let clamped = quantised_height.clamp(min_height, max_height - 1);
+            let level = table[(clamped - min_height) as usize];
+            if (level > 0) && (level < 15) && (rolls_and_output[output_start + index] > 14) {
+                return Err(SimpleThemeLayersError::InvalidRandomRoll);
+            }
+        }
+    }
+
+    for layer in 0..bit_layer_count {
+        let table_start = layer * height_range;
+        let table = &bit_layer_tables[table_start..table_start + height_range];
+        let output_start = layer * area;
+        for (index, quantised_height) in quantised_heights.iter().copied().enumerate() {
+            let clamped = quantised_height.clamp(min_height, max_height - 1);
+            let level = table[(clamped - min_height) as usize];
+            let value = match level {
+                0 => false,
+                15 => true,
+                _ => i32::from(rolls_and_output[output_start + index]) < level,
+            };
+            rolls_and_output[output_start + index] = u8::from(value);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{fill_simple_theme_layers, SimpleThemeLayersError};
+    use super::{
+        fill_simple_theme_layers, fill_simple_theme_random_bit_layers, SimpleThemeLayersError,
+    };
 
     #[test]
     fn fills_value_and_deterministic_bit_layers_for_clamped_heights() {
@@ -190,5 +278,38 @@ mod tests {
             Err(SimpleThemeLayersError::InvalidLayerValue)
         );
         assert_eq!(output, [0xaa; 2]);
+    }
+
+    #[test]
+    fn converts_java_random_draws_in_layer_major_order() {
+        let heights = [0, 1, 2, 3, 4, 5];
+        let tables = [0, 1, 7, 14, 15, 15, 0, 0, 0, 0];
+        let mut draws = [
+            u8::MAX,
+            0,
+            6,
+            13,
+            u8::MAX,
+            u8::MAX,
+            u8::MAX,
+            13,
+            6,
+            0,
+            u8::MAX,
+            u8::MAX,
+        ];
+        fill_simple_theme_random_bit_layers(0, 5, 6, 1, &heights, 2, &tables, &mut draws).unwrap();
+        assert_eq!(draws, [0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn rejects_invalid_draws_before_mutating_planes() {
+        let heights = [1, 1];
+        let mut draws = [4, 15];
+        assert_eq!(
+            fill_simple_theme_random_bit_layers(0, 3, 2, 1, &heights, 1, &[0, 7, 15], &mut draws),
+            Err(SimpleThemeLayersError::InvalidRandomRoll)
+        );
+        assert_eq!(draws, [4, 15]);
     }
 }

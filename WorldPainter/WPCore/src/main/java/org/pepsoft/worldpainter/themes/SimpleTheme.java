@@ -25,6 +25,7 @@ import java.util.*;
 import static org.pepsoft.util.MathUtils.clamp;
 import static org.pepsoft.worldpainter.Constants.SMALL_BLOBS;
 import static org.pepsoft.worldpainter.Constants.TILE_SIZE;
+import static org.pepsoft.worldpainter.Constants.TILE_SIZE_BITS;
 import static org.pepsoft.worldpainter.Constants.TINY_BLOBS;
 
 /**
@@ -267,6 +268,61 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
                 tile.setBitLayerValue(bitLayerCache[layerIndex], x, y, true);
             }
         }
+    }
+
+    /** Number of cached bit-layer planes on this theme. */
+    public final int getFreshTileBitLayerCount() {
+        return (bitLayerCache != null) ? bitLayerCache.length : 0;
+    }
+
+    /**
+     * Applies random bit layers from a fresh tile in bulk. Java owns the shared
+     * random stream and records draws in the original x/y/layer order; Rust
+     * maps those draws to bit planes when available. The fallback uses the
+     * same recorded draws and Tile's normal copy-on-write initializer.
+     */
+    public final boolean applyRandomBitLayersToFreshTile(Tile tile, int[] quantisedHeights,
+                                                          byte[] drawsAndOutput) {
+        if (bitLayerCache == null) {
+            return true;
+        }
+        final int area = TILE_SIZE * TILE_SIZE;
+        final long requiredLength = (long) area * bitLayerCache.length;
+        if ((quantisedHeights == null) || (quantisedHeights.length != area)
+                || (drawsAndOutput == null) || (requiredLength > drawsAndOutput.length)) {
+            return false;
+        }
+
+        for (int x = 0; x < TILE_SIZE; x++) {
+            for (int y = 0; y < TILE_SIZE; y++) {
+                final int index = x | (y << TILE_SIZE_BITS);
+                final int height = clamp(minHeight, quantisedHeights[index], maxHeight - 1);
+                for (int layerIndex = 0; layerIndex < bitLayerCache.length; layerIndex++) {
+                    final int level = bitLayerLevelCache[layerIndex][height - minHeight];
+                    drawsAndOutput[layerIndex * area + index] =
+                            (byte) (((level > 0) && (level < 15)) ? random.nextInt(15) : 0xFF);
+                }
+            }
+        }
+
+        if (!NativeSlices.fillSimpleThemeRandomBitLayers(TILE_SIZE, TILE_SIZE,
+                minHeight, maxHeight, quantisedHeights, bitLayerLevelCache, drawsAndOutput)) {
+            for (int layerIndex = 0; layerIndex < bitLayerCache.length; layerIndex++) {
+                final int[] levels = bitLayerLevelCache[layerIndex];
+                final int outputStart = layerIndex * area;
+                for (int index = 0; index < area; index++) {
+                    final int height = clamp(minHeight, quantisedHeights[index], maxHeight - 1);
+                    final int level = levels[height - minHeight];
+                    final int draw = drawsAndOutput[outputStart + index] & 0xFF;
+                    drawsAndOutput[outputStart + index] = (byte) ((level > 0)
+                            && ((level == 15) || (draw < level)) ? 1 : 0);
+                }
+            }
+        }
+        for (int layerIndex = 0; layerIndex < bitLayerCache.length; layerIndex++) {
+            tile.initializeLayerValues(bitLayerCache[layerIndex], drawsAndOutput, layerIndex * area);
+        }
+        return true;
     }
 
     private void apply(Tile tile, int x, int y, boolean freshTile) {

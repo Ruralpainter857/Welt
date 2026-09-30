@@ -311,6 +311,37 @@ public final class NativeSlices {
         }
     }
 
+    /** Converts Java-generated random draws into layer-major SimpleTheme bit planes in place. */
+    public static boolean fillSimpleThemeRandomBitLayers(final int width, final int height,
+                                                          final int minHeight, final int maxHeight,
+                                                          final int[] quantisedHeights,
+                                                          final int[][] bitLayerTables,
+                                                          final byte[] rollsAndOutput) {
+        final long area = (long) width * height;
+        final long heightRange = (long) maxHeight - minHeight;
+        final long outputLength = area * ((bitLayerTables != null) ? bitLayerTables.length : 0);
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || width <= 0 || height <= 0 || area > 1_048_576L
+                || heightRange <= 0 || heightRange > 1_048_576L
+                || quantisedHeights == null || bitLayerTables == null
+                || bitLayerTables.length == 0 || bitLayerTables.length > 64
+                || outputLength > 1_048_576L || rollsAndOutput == null
+                || quantisedHeights.length != area || rollsAndOutput.length < outputLength) {
+            return false;
+        }
+        for (final int[] levels : bitLayerTables) {
+            if ((levels == null) || (levels.length != heightRange)) {
+                return false;
+            }
+        }
+        try {
+            return nativeFillSimpleThemeRandomBitLayers(width, height, minHeight, maxHeight,
+                    quantisedHeights, bitLayerTables, rollsAndOutput) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     /** Returns row-major capped Euclidean distances for a packed bit-layer mask. */
     public static float[] edgeDistances(final int width, final int height,
                                         final float maxDistance, final byte[] mask) {
@@ -697,8 +728,14 @@ public final class NativeSlices {
                                                                 int firstHeight, int lastHeight,
                                                                 int[] quantisedHeights,
                                                                 int[][] layerTables,
-                                                                int[][] bitLayerTables,
-                                                                byte[] output);
+                                                                 int[][] bitLayerTables,
+                                                                 byte[] output);
+
+    private static native int nativeFillSimpleThemeRandomBitLayers(int width, int height,
+                                                                    int minHeight, int maxHeight,
+                                                                    int[] quantisedHeights,
+                                                                    int[][] bitLayerTables,
+                                                                    byte[] rollsAndOutput);
 
     private static native int nativeBakeEdgeDistances(int width, int height,
                                                        float maxDistance, byte[] mask,

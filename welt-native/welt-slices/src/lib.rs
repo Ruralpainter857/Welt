@@ -18,7 +18,7 @@ use welt_gen::height_map_tree::{
 };
 use welt_gen::noise_height_map::NoiseHeightMapBulk;
 use welt_gen::resource_noise::fill_resource_materials_into;
-use welt_gen::theme_layers::fill_simple_theme_layers;
+use welt_gen::theme_layers::{fill_simple_theme_layers, fill_simple_theme_random_bit_layers};
 use welt_gen::theme_terrain::SimpleThemeTerrainBulk;
 use welt_nbt::packed_array::{pack_indices, unpack_indices};
 use welt_render::shade::{shade_pixels, shade_pixels_compact};
@@ -2027,6 +2027,151 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                     &inputs.quantised_heights,
                     layer_count as usize,
                     &inputs.layer_tables,
+                    bit_layer_count as usize,
+                    &inputs.bit_layer_tables,
+                    output_slice,
+                )
+            });
+            if result.is_err() {
+                return WeltError::IllegalArgument as jint;
+            }
+            WeltError::Ok as jint
+        })
+    }
+}
+
+/// Convert precomputed Java random draws into SimpleTheme bit-layer planes in place.
+///
+/// # Safety
+/// `env` and all arrays must be valid references supplied by the current JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFillSimpleThemeRandomBitLayers(
+    env: *mut JNIEnv,
+    _class: jclass,
+    width: jint,
+    height: jint,
+    min_height: jint,
+    max_height: jint,
+    quantised_heights: jobject,
+    bit_layer_tables: jobject,
+    rolls_and_output: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if quantised_heights.is_null()
+                || bit_layer_tables.is_null()
+                || rolls_and_output.is_null()
+                || width <= 0
+                || height <= 0
+                || min_height >= max_height
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            let Some(area) = (width as usize).checked_mul(height as usize) else {
+                return WeltError::IllegalArgument as jint;
+            };
+            let height_range_i64 = i64::from(max_height) - i64::from(min_height);
+            if area > 1_048_576 || height_range_i64 <= 0 || height_range_i64 > 1_048_576 {
+                return WeltError::IllegalArgument as jint;
+            }
+            let height_range = height_range_i64 as usize;
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            type GetObjectArrayElement =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint) -> jobject;
+            type GetIntArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i32);
+            type DeleteLocalRef = unsafe extern "system" fn(*mut JNIEnv, jobject);
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            let get_object_array_element: GetObjectArrayElement =
+                std::mem::transmute(function(env, GET_OBJECT_ARRAY_ELEMENT));
+            let get_int_array_region: GetIntArrayRegion =
+                std::mem::transmute(function(env, GET_INT_ARRAY_REGION));
+            let delete_local_ref: DeleteLocalRef = std::mem::transmute(function(env, 23));
+
+            let bit_layer_count = get_array_length(env, bit_layer_tables);
+            if !(1..=64).contains(&bit_layer_count) {
+                return WeltError::IllegalArgument as jint;
+            }
+            let Some(expected_output) = area.checked_mul(bit_layer_count as usize) else {
+                return WeltError::IllegalArgument as jint;
+            };
+            let Some(expected_tables) = (bit_layer_count as usize).checked_mul(height_range) else {
+                return WeltError::IllegalArgument as jint;
+            };
+            if expected_output > 1_048_576
+                || get_array_length(env, quantised_heights) != area as jint
+                || get_array_length(env, rolls_and_output) < expected_output as jint
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+
+            let inputs_valid = SIMPLE_THEME_LAYER_INPUTS.with(|workspace| {
+                let mut inputs = workspace.borrow_mut();
+                inputs.quantised_heights.resize(area, 0);
+                inputs.layer_tables.clear();
+                inputs.bit_layer_tables.resize(expected_tables, 0);
+                get_int_array_region(
+                    env,
+                    quantised_heights,
+                    0,
+                    area as jint,
+                    inputs.quantised_heights.as_mut_ptr(),
+                );
+                for layer in 0..bit_layer_count {
+                    let row = get_object_array_element(env, bit_layer_tables, layer);
+                    if row.is_null() {
+                        return false;
+                    }
+                    let valid_length = get_array_length(env, row) == height_range as jint;
+                    if valid_length {
+                        let offset = layer as usize * height_range;
+                        get_int_array_region(
+                            env,
+                            row,
+                            0,
+                            height_range as jint,
+                            inputs.bit_layer_tables.as_mut_ptr().add(offset),
+                        );
+                    }
+                    delete_local_ref(env, row);
+                    if !valid_length {
+                        return false;
+                    }
+                }
+                true
+            });
+            if !inputs_valid {
+                return WeltError::IllegalArgument as jint;
+            }
+
+            type GetByteArrayElements =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, *mut u8) -> *mut i8;
+            let get_byte_array_elements: GetByteArrayElements =
+                std::mem::transmute(function(env, GET_BYTE_ARRAY_ELEMENTS));
+            let output_pointer =
+                get_byte_array_elements(env, rolls_and_output, std::ptr::null_mut());
+            if output_pointer.is_null() {
+                return WeltError::Internal as jint;
+            }
+            let output_values = ByteArrayOutput {
+                env,
+                array: rolls_and_output,
+                values: output_pointer,
+                length: expected_output,
+            };
+            let result = SIMPLE_THEME_LAYER_INPUTS.with(|workspace| {
+                let inputs = workspace.borrow();
+                let output_slice = slice::from_raw_parts_mut(
+                    output_values.values.cast::<u8>(),
+                    output_values.length,
+                );
+                fill_simple_theme_random_bit_layers(
+                    min_height,
+                    max_height,
+                    width as usize,
+                    height as usize,
+                    &inputs.quantised_heights,
                     bit_layer_count as usize,
                     &inputs.bit_layer_tables,
                     output_slice,
