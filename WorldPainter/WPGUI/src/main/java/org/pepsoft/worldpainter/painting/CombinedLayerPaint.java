@@ -5,6 +5,9 @@ import org.pepsoft.worldpainter.Terrain;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.layers.Biome;
 import org.pepsoft.worldpainter.layers.CombinedLayer;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
 import java.awt.*;
 
@@ -31,6 +34,10 @@ public final class CombinedLayerPaint extends NibbleLayerPaint {
         final boolean terrainConfigured = terrain != null;
         final boolean biomeConfigured = biome != -1;
         if ((! terrainConfigured) && (! biomeConfigured)) {
+            return;
+        }
+        if (applyNativeAuxiliaryBrush(dimension, centreX, centreY, dynamicLevel,
+                terrain, biome, false)) {
             return;
         }
         final Rectangle boundingBox = brush.getBoundingBox();
@@ -115,6 +122,11 @@ public final class CombinedLayerPaint extends NibbleLayerPaint {
         final boolean terrainConfigured = combinedLayer.getTerrain() != null;
         final boolean biomeConfigured = combinedLayer.getBiome() != -1;
         if ((! terrainConfigured) && (! biomeConfigured)) {
+            return;
+        }
+        final Terrain terrain = combinedLayer.getTerrain();
+        if (applyNativeAuxiliaryBrush(dimension, centreX, centreY, dynamicLevel,
+                terrain, combinedLayer.getBiome(), true)) {
             return;
         }
         final Rectangle boundingBox = brush.getBoundingBox();
@@ -222,4 +234,93 @@ public final class CombinedLayerPaint extends NibbleLayerPaint {
             }
         }
     }
+
+    private boolean applyNativeAuxiliaryBrush(Dimension dimension, int centreX, int centreY,
+                                              float dynamicLevel, Terrain terrain, int biome,
+                                              boolean remove) {
+        final boolean terrainConfigured = terrain != null;
+        final boolean biomeConfigured = biome != -1;
+        final Rectangle boundingBox = brush.getBoundingBox();
+        final int x1 = centreX + boundingBox.x, y1 = centreY + boundingBox.y;
+        final int x2 = x1 + boundingBox.width - 1, y2 = y1 + boundingBox.height - 1;
+        final long width = (long) x2 - x1 + 1L;
+        final long height = (long) y2 - y1 + 1L;
+        if (dither || filter != null || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || width <= 0 || height <= 0 || width > 65_536L || height > 65_536L
+                || width * height > 65_536L) {
+            return false;
+        }
+        final int area = (int) (width * height);
+        final int tileX1 = x1 >> TILE_SIZE_BITS, tileY1 = y1 >> TILE_SIZE_BITS;
+        final int tileX2 = x2 >> TILE_SIZE_BITS, tileY2 = y2 >> TILE_SIZE_BITS;
+        final boolean oneTile = (tileX1 == tileX2) && (tileY1 == tileY2);
+        final Tile tile;
+        if (oneTile && (!remove || !terrainConfigured)) {
+            tile = dimension.getTileForEditing(tileX1, tileY1);
+            if (tile == null) {
+                return true;
+            }
+        } else {
+            tile = null;
+        }
+        ensureNativeBuffers(area);
+
+        int index = 0;
+        for (int y = y1; y <= y2; y++) {
+            for (int x = x1; x <= x2; x++) {
+                nativeStrengths[index++] = dynamicLevel * getFullStrength(centreX, centreY, x, y);
+            }
+        }
+        if (!NativeSlices.paintThresholdMask(nativeStrengths, nativeModified)) {
+            return false;
+        }
+
+        index = 0;
+        for (int y = y1; y <= y2; y++) {
+            for (int x = x1; x <= x2; x++) {
+                if (nativeModified[index] != 0) {
+                    final int xInTile = x & TILE_SIZE_MASK, yInTile = y & TILE_SIZE_MASK;
+                    if (remove) {
+                        if (terrainConfigured) {
+                            dimension.applyTheme(x, y);
+                        }
+                        if (biomeConfigured) {
+                            if (oneTile && !terrainConfigured) {
+                                tile.setLayerValue(Biome.INSTANCE, xInTile, yInTile, 255);
+                            } else {
+                                dimension.setLayerValueAt(Biome.INSTANCE, x, y, 255);
+                            }
+                        }
+                    } else {
+                        if (terrainConfigured) {
+                            if (oneTile) {
+                                tile.setTerrain(xInTile, yInTile, terrain);
+                            } else {
+                                dimension.setTerrainAt(x, y, terrain);
+                            }
+                        }
+                        if (biomeConfigured) {
+                            if (oneTile) {
+                                tile.setLayerValue(Biome.INSTANCE, xInTile, yInTile, biome);
+                            } else {
+                                dimension.setLayerValueAt(Biome.INSTANCE, x, y, biome);
+                            }
+                        }
+                    }
+                }
+                index++;
+            }
+        }
+        return true;
+    }
+
+    private void ensureNativeBuffers(int area) {
+        if (nativeStrengths == null || nativeStrengths.length != area) {
+            nativeStrengths = new float[area];
+            nativeModified = new byte[area];
+        }
+    }
+
+    private float[] nativeStrengths;
+    private byte[] nativeModified;
 }

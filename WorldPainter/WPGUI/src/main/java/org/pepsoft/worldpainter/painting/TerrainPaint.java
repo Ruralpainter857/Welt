@@ -217,7 +217,7 @@ public final class TerrainPaint extends AbstractPaint {
                                             boolean oneTile, boolean remove) {
         final long width = (long) x2 - x1 + 1L;
         final long height = (long) y2 - y1 + 1L;
-        if (dither || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+        if (dither || filter != null || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
                 || width <= 0 || height <= 0 || width > 65_536L || height > 65_536L
                 || width * height > 65_536L) {
             return false;

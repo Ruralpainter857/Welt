@@ -156,7 +156,7 @@ public class NibbleLayerPaint extends LayerPaint {
                                            boolean oneTile, int mode) {
         final long widthLong = (long) x2 - x1 + 1L;
         final long heightLong = (long) y2 - y1 + 1L;
-        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+        if (filter != null || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
                 || widthLong <= 0 || heightLong <= 0 || widthLong > 65_536L
                 || heightLong > 65_536L || widthLong * heightLong > 65_536L) {
             return false;
