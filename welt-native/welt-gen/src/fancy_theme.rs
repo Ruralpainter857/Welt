@@ -218,6 +218,7 @@ mod tests {
     const BASE: u8 = 1;
     const DESERT: u8 = 2;
     const SANDSTONE: u8 = 3;
+    const BARE_GRASS: u8 = 7;
     const BEACH: u8 = 4;
     const DIRT_GRAVEL: u8 = 5;
     const STONE_GRAVEL: u8 = 6;
@@ -238,7 +239,7 @@ mod tests {
             BASE,
             DESERT,
             SANDSTONE,
-            7,
+            BARE_GRASS,
             BEACH,
             DIRT_GRAVEL,
             STONE_GRAVEL,
@@ -262,7 +263,7 @@ mod tests {
         assert_eq!(output[5], 0); // Frost plane.
 
         let frozen = run_case(70.0, &neighborhood, -12.0, 60.0, 0.5);
-        assert_eq!(frozen[0], BASE);
+        assert_eq!(frozen[0], BARE_GRASS);
         assert_eq!(frozen[5], 1);
         assert_eq!(frozen[6], 1);
 
@@ -316,7 +317,7 @@ mod tests {
             BASE,
             DESERT,
             SANDSTONE,
-            7,
+            BARE_GRASS,
             BEACH,
             DIRT_GRAVEL,
             STONE_GRAVEL,
