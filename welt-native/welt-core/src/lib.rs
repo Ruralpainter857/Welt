@@ -5,7 +5,6 @@
 pub mod abi;
 pub mod erosion;
 pub mod error;
-pub mod discrete_paint;
 pub mod flood_fill;
 pub mod height_edit;
 pub mod jni;
@@ -14,6 +13,7 @@ pub mod jni_gen;
 pub mod mountain;
 pub mod nibble_paint;
 pub mod noise;
+pub mod paint_mask;
 pub mod raise_pyramid;
 pub mod river_paint;
 pub mod rng;

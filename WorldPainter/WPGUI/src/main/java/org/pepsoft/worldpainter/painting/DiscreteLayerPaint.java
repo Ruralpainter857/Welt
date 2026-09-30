@@ -226,7 +226,7 @@ public final class DiscreteLayerPaint extends LayerPaint {
                 nativeStrengths[index++] = dynamicLevel * getFullStrength(centreX, centreY, x, y);
             }
         }
-        if (!NativeSlices.discreteLayerPaintMask(nativeStrengths, nativeModified)) {
+        if (!NativeSlices.paintThresholdMask(nativeStrengths, nativeModified)) {
             return false;
         }
 

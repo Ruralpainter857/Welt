@@ -338,15 +338,15 @@ public final class NativeSlices {
         }
     }
 
-    /** Selects cells for a non-dithered discrete-layer brush. */
-    public static boolean discreteLayerPaintMask(final float[] strengths, final byte[] modified) {
+    /** Selects cells above the non-dithered layer-brush strength threshold. */
+    public static boolean paintThresholdMask(final float[] strengths, final byte[] modified) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
                 || strengths == null || modified == null || strengths.length == 0
                 || strengths.length > 65_536 || modified.length != strengths.length) {
             return false;
         }
         try {
-            return nativeDiscreteLayerPaintMask(strengths, modified) == 0;
+            return nativePaintThresholdMask(strengths, modified) == 0;
         } catch (final UnsatisfiedLinkError e) {
             return false;
         }
@@ -1085,7 +1085,7 @@ public final class NativeSlices {
     private static native int nativeApplyNibbleLayerBrush(int mode, int[] values,
                                                            float[] strengths, byte[] modified);
 
-    private static native int nativeDiscreteLayerPaintMask(float[] strengths, byte[] modified);
+    private static native int nativePaintThresholdMask(float[] strengths, byte[] modified);
 
     private static native int nativeSmoothHeightRegion(int inputWidth, int inputHeight,
                                                         float[] heights, float[] strengths,

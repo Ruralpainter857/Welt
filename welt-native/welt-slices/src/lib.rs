@@ -6,12 +6,12 @@ use std::ffi::c_void;
 use std::slice;
 use welt_core::erosion::erode_raw_height_region;
 use welt_core::error::WeltError;
-use welt_core::discrete_paint::discrete_layer_paint_mask;
 use welt_core::flood_fill::linear_flood_fill;
 use welt_core::height_edit::{apply_flatten_brush, apply_height_brush, FlattenMode};
 use welt_core::jni::{jclass, jint, jlong, jni_catch, jobject, JNIEnv};
 use welt_core::mountain::raise_mountain;
 use welt_core::nibble_paint::{apply_nibble_layer_brush, NibblePaintMode};
+use welt_core::paint_mask::paint_threshold_mask;
 use welt_core::raise_pyramid::{raise_rotated_pyramid, raise_square_pyramid};
 use welt_core::river_paint::apply_river_paint;
 use welt_core::smooth_height::smooth_height_region;
@@ -816,12 +816,12 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
     }
 }
 
-/// Computes the non-dithered discrete-layer brush mask.
+/// Computes the non-dithered layer-brush threshold mask.
 ///
 /// # Safety
 /// `env`, arrays, and their lengths must be valid references from the JVM frame.
 #[no_mangle]
-pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeDiscreteLayerPaintMask(
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativePaintThresholdMask(
     env: *mut JNIEnv,
     _class: jclass,
     strengths: jobject,
@@ -851,7 +851,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let mut strength_buffer = vec![0.0_f32; length as usize];
             let mut modified_buffer = vec![0_i8; length as usize];
             get_float(env, strengths, 0, length, strength_buffer.as_mut_ptr());
-            if discrete_layer_paint_mask(&strength_buffer, &mut modified_buffer).is_err() {
+            if paint_threshold_mask(&strength_buffer, &mut modified_buffer).is_err() {
                 return WeltError::IllegalArgument as jint;
             }
             set_byte(env, modified, 0, length, modified_buffer.as_ptr());
