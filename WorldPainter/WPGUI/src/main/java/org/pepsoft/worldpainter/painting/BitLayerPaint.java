@@ -81,8 +81,49 @@ public final class BitLayerPaint extends LayerPaint {
                 }
             }
         } else {
-            // The bounding box of the brush straddles more than one tile; paint to the dimension
-            if (dither) {
+            // When events are already inhibited for this edit, reuse each tile lookup across the
+            // row's horizontal segment. Tile.setBitLayerValue retains its normal COW and event path.
+            if (dimension.isEventsInhibited()) {
+                if (dither) {
+                    for (int y = y1; y <= y2; y++) {
+                        final int tileY = y >> TILE_SIZE_BITS;
+                        int cachedTileX = Integer.MIN_VALUE;
+                        Tile tile = null;
+                        for (int x = x1; x <= x2; x++) {
+                            final float strength = dynamicLevel * getStrength(centreX, centreY, x, y);
+                            if ((strength > 0.95f) || (Math.random() < strength)) {
+                                final int tileX = x >> TILE_SIZE_BITS;
+                                if (tileX != cachedTileX) {
+                                    cachedTileX = tileX;
+                                    tile = dimension.getTileForEditing(tileX, tileY);
+                                }
+                                if (tile != null) {
+                                    tile.setBitLayerValue(layer, x & TILE_SIZE_MASK, y & TILE_SIZE_MASK, true);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    for (int y = y1; y <= y2; y++) {
+                        final int tileY = y >> TILE_SIZE_BITS;
+                        int cachedTileX = Integer.MIN_VALUE;
+                        Tile tile = null;
+                        for (int x = x1; x <= x2; x++) {
+                            final float strength = dynamicLevel * getFullStrength(centreX, centreY, x, y);
+                            if (strength > 0.75f) {
+                                final int tileX = x >> TILE_SIZE_BITS;
+                                if (tileX != cachedTileX) {
+                                    cachedTileX = tileX;
+                                    tile = dimension.getTileForEditing(tileX, tileY);
+                                }
+                                if (tile != null) {
+                                    tile.setBitLayerValue(layer, x & TILE_SIZE_MASK, y & TILE_SIZE_MASK, true);
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (dither) {
                 for (int y = y1; y <= y2; y++) {
                     for (int x = x1; x <= x2; x++) {
                         final float strength = dynamicLevel * getStrength(centreX, centreY, x, y);
@@ -143,8 +184,47 @@ public final class BitLayerPaint extends LayerPaint {
                 }
             }
         } else {
-            // The bounding box of the brush straddles more than one tile; paint to the dimension
-            if (dither) {
+            if (dimension.isEventsInhibited()) {
+                if (dither) {
+                    for (int y = y1; y <= y2; y++) {
+                        final int tileY = y >> TILE_SIZE_BITS;
+                        int cachedTileX = Integer.MIN_VALUE;
+                        Tile tile = null;
+                        for (int x = x1; x <= x2; x++) {
+                            final float strength = dynamicLevel * getFullStrength(centreX, centreY, x, y);
+                            if ((strength > 0.95f) || (Math.random() < strength)) {
+                                final int tileX = x >> TILE_SIZE_BITS;
+                                if (tileX != cachedTileX) {
+                                    cachedTileX = tileX;
+                                    tile = dimension.getTileForEditing(tileX, tileY);
+                                }
+                                if (tile != null) {
+                                    tile.setBitLayerValue(layer, x & TILE_SIZE_MASK, y & TILE_SIZE_MASK, false);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    for (int y = y1; y <= y2; y++) {
+                        final int tileY = y >> TILE_SIZE_BITS;
+                        int cachedTileX = Integer.MIN_VALUE;
+                        Tile tile = null;
+                        for (int x = x1; x <= x2; x++) {
+                            final float strength = dynamicLevel * getFullStrength(centreX, centreY, x, y);
+                            if (strength > 0.75f) {
+                                final int tileX = x >> TILE_SIZE_BITS;
+                                if (tileX != cachedTileX) {
+                                    cachedTileX = tileX;
+                                    tile = dimension.getTileForEditing(tileX, tileY);
+                                }
+                                if (tile != null) {
+                                    tile.setBitLayerValue(layer, x & TILE_SIZE_MASK, y & TILE_SIZE_MASK, false);
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (dither) {
                 for (int y = y1; y <= y2; y++) {
                     for (int x = x1; x <= x2; x++) {
                         final float strength = dynamicLevel * getFullStrength(centreX, centreY, x, y);
