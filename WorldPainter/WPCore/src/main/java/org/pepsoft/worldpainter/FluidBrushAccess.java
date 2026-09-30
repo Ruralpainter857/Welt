@@ -6,8 +6,6 @@ import java.nio.FloatBuffer;
 import java.nio.ShortBuffer;
 import java.util.BitSet;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
-import org.pepsoft.worldpainter.nativeapi.Native;
-import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import static org.pepsoft.worldpainter.Constants.*;
 
@@ -20,19 +18,7 @@ public final class FluidBrushAccess {
         if (width <= 0 || height <= 0 || (long) width * height != strengths.length)
             throw new IllegalArgumentException("Expected one strength per region cell");
         if (reset && waterHeight == -1) return;
-        boolean batch = dimension.getClass() == Dimension.class && dimension.isEventsInhibited()
-                && Native.isGenEnabled() && NativeLoader.areSlicesAvailable();
-        // Les sous-classes peuvent observer l'ordre global des setters : conserver ce chemin intégralement.
-        if (batch) for (int x = 0; x < width && batch;) {
-            int wx = ox + x, rw = Math.min(width - x, TILE_SIZE - (wx & TILE_SIZE_MASK));
-            for (int y = 0; y < height;) {
-                int wy = oy + y, rh = Math.min(height - y, TILE_SIZE - (wy & TILE_SIZE_MASK));
-                Tile tile = dimension.getTile(wx >> TILE_SIZE_BITS, wy >> TILE_SIZE_BITS);
-                if (tile != null && tile.getClass() != Tile.class) { batch = false; break; }
-                y += rh;
-            }
-            x += rw;
-        }
+        boolean batch = TileRegionAccess.canBatch(dimension, ox, oy, width, height);
         int level = reset ? waterHeight : dimension.getMinHeight();
         if (!batch) {
             for (int x = 0; x < width; x++) for (int y = 0; y < height; y++) if (strengths[x * height + y] != 0f) {

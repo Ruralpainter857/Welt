@@ -19,11 +19,11 @@
 package org.pepsoft.worldpainter.painting;
 
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.NibbleBrushAccess;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.layers.Layer;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
-import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
 import java.awt.*;
 
@@ -157,28 +157,18 @@ public class NibbleLayerPaint extends LayerPaint {
         final long widthLong = (long) x2 - x1 + 1L;
         final long heightLong = (long) y2 - y1 + 1L;
         if (filter != null || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || dimension.getClass() != Dimension.class || !dimension.isEventsInhibited()
                 || widthLong <= 0 || heightLong <= 0 || widthLong > 65_536L
                 || heightLong > 65_536L || widthLong * heightLong > 65_536L) {
             return false;
         }
         final int area = (int) (widthLong * heightLong);
-        final Tile tile;
-        if (oneTile) {
-            tile = dimension.getTileForEditing(x1 >> TILE_SIZE_BITS, y1 >> TILE_SIZE_BITS);
-            if (tile == null) {
-                return true;
-            }
-        } else {
-            tile = null;
-        }
+        if (oneTile && dimension.getTile(x1 >> TILE_SIZE_BITS, y1 >> TILE_SIZE_BITS) == null) return true;
         ensureNativeBuffers(area);
 
         int index = 0;
         for (int y = y1; y <= y2; y++) {
             for (int x = x1; x <= x2; x++) {
-                nativeValues[index] = oneTile
-                        ? tile.getLayerValue(layer, x & TILE_SIZE_MASK, y & TILE_SIZE_MASK)
-                        : dimension.getLayerValueAt(layer, x, y);
                 final float strength = (mode == 0
                         ? getStrength(centreX, centreY, x, y)
                         : getFullStrength(centreX, centreY, x, y));
@@ -187,33 +177,14 @@ public class NibbleLayerPaint extends LayerPaint {
             }
         }
 
-        if (!NativeSlices.applyNibbleLayerBrush(mode,
-                nativeValues, nativeStrengths, nativeModified)) {
-            return false;
-        }
-
-        index = 0;
-        for (int y = y1; y <= y2; y++) {
-            for (int x = x1; x <= x2; x++) {
-                if (nativeModified[index] != 0) {
-                    if (oneTile) {
-                        tile.setLayerValue(layer, x & TILE_SIZE_MASK, y & TILE_SIZE_MASK,
-                                nativeValues[index]);
-                    } else {
-                        dimension.setLayerValueAt(layer, x, y, nativeValues[index]);
-                    }
-                }
-                index++;
-            }
-        }
+        NibbleBrushAccess.apply(dimension, layer, x1, y1, (int) widthLong,
+                (int) heightLong, nativeStrengths, mode);
         return true;
     }
 
     private void ensureNativeBuffers(int area) {
-        if (nativeValues == null || nativeValues.length != area) {
-            nativeValues = new int[area];
+        if (nativeStrengths == null || nativeStrengths.length != area) {
             nativeStrengths = new float[area];
-            nativeModified = new byte[area];
         }
     }
 
@@ -234,7 +205,5 @@ public class NibbleLayerPaint extends LayerPaint {
         dimension.setLayerValueAt(layer, x, y, 0);
     }
 
-    private int[] nativeValues;
     private float[] nativeStrengths;
-    private byte[] nativeModified;
 }

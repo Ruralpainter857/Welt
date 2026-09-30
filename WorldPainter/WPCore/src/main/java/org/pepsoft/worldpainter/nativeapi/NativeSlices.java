@@ -113,6 +113,16 @@ public final class NativeSlices {
 
     private static native int nativeEditFluidBrush(ByteBuffer buffer, int length);
 
+    public static boolean editNibbleBrush(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || buffer == null || !buffer.isDirect() || buffer.isReadOnly()
+                || buffer.position() != 0 || buffer.limit() < 8240 || buffer.limit() > 73776) return false;
+        try { return nativeEditNibbleBrush(buffer, buffer.limit()) == 0; }
+        catch (UnsatisfiedLinkError e) { return false; }
+    }
+
+    private static native int nativeEditNibbleBrush(ByteBuffer buffer, int length);
+
     /**
      * Returns whether native tunnel edge caches are enabled. This specialised path is enabled by
      * default when its kernel is available; the dedicated property can disable it without changing

@@ -2527,6 +2527,37 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    synchronized void editNibbleRegion(Layer layer, int x, int y, int width, int height,
+                                       float[] strengths, int offset, int stride, int mode) {
+        checkHeightRegion(y, x, height, width, strengths.length, offset, stride);
+        if (editNibbleRegionNative(layer, x, y, width, height, strengths, offset, stride, mode)) return;
+        for (int dy = 0; dy < height; dy++) for (int dx = 0; dx < width; dx++) {
+            int current = getLayerValue(layer, x + dx, y + dy);
+            float strength = strengths[offset + dy * stride + dx];
+            if (strength == 0f) continue;
+            int target = NibbleBrushAccess.target(mode, strength);
+            if (mode == 0 ? target > current : target < current) setLayerValue(layer, x + dx, y + dy, target);
+        }
+    }
+
+    synchronized boolean editNibbleRegionNative(Layer layer, int x, int y, int width, int height,
+                                                float[] strengths, int offset, int stride, int mode) {
+        if (getClass() != Tile.class || eventInhibitionCounter == 0 || layer.dataSize != NIBBLE
+                || layer.getDefaultValue() < 0 || layer.getDefaultValue() > 15
+                || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return false;
+        checkHeightRegion(y, x, height, width, strengths.length, offset, stride);
+        ensureReadable(LAYER_DATA);
+        ByteBuffer buffer = NibbleBrushAccess.edit(x, y, width, height, strengths, offset, stride,
+                mode, layerData.get(layer), layer.getDefaultValue());
+        if (buffer == null) return false;
+        if (buffer.getInt(28) == 0) return true;
+        ensureWriteable(LAYER_DATA);
+        applyNumericLayerPlane(layer, buffer, 48, 8192);
+        cachedLayers = null;
+        layerDataChanged(layer);
+        return true;
+    }
+
     synchronized boolean editFluidRegionNative(int x, int y, int width, int height, float[] strengths,
                                                int offset, int stride, boolean reset, int level) {
         if (getClass() != Tile.class || eventInhibitionCounter == 0
@@ -2648,13 +2679,17 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         if (bit) {
             bitLayerData.put(layer, SelectionTileAccess.applyBits(buffer, 40, bytes, bitLayerData.get(layer)));
         } else {
-            byte[] values = layerData.get(layer);
-            if (values == null) { values = new byte[bytes]; layerData.put(layer, values); }
-            else { values = detachSharedLayerDataBuffer(layer, values); }
-            buffer.position(40); buffer.get(values);
+            applyNumericLayerPlane(layer, buffer, 40, bytes);
         }
         cachedLayers = null;
         layerDataChanged(layer);
+    }
+
+    private void applyNumericLayerPlane(Layer layer, ByteBuffer buffer, int offset, int bytes) {
+        byte[] values = layerData.get(layer);
+        if (values == null) { values = new byte[bytes]; layerData.put(layer, values); }
+        else { values = detachSharedLayerDataBuffer(layer, values); }
+        buffer.position(offset); buffer.get(values);
     }
 
     private boolean isSharedBuffer(TileBuffer buffer) {
