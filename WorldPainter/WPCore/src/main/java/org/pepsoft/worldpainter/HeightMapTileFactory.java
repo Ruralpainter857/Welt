@@ -397,21 +397,15 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 }
                 boolean nativeTerrainComputed = false;
                 if (Native.isGenEnabled() && NativeLoader.areSlicesAvailable()) {
-                    final int[] nativeTerrainOrdinals = buffers.nativeTerrainOrdinals();
                     final int[] terrainRangeOrdinals = buffers.terrainRangeOrdinals(maxHeight - minHeight);
                     simpleTheme.copyTerrainRangeOrdinals(terrainRangeOrdinals);
-                    nativeTerrainComputed = NativeSlices.fillSimpleThemeTerrainOrdinals(
+                    nativeTerrainComputed = NativeSlices.fillSimpleThemeTerrainOrdinalsCompact(
                             0, 0, TILE_SIZE, TILE_SIZE, minHeight, maxHeight,
                             simpleTheme.getWaterHeight(), simpleTheme.isRandomise(),
                             simpleTheme.isBeaches(), Terrain.BEACHES.ordinal(), simpleTheme.getSeed(),
-                            intHeights, terrainRangeOrdinals, nativeTerrainOrdinals);
+                            intHeights, terrainRangeOrdinals, terrainOrdinals);
                 }
-                if (nativeTerrainComputed) {
-                    final int[] nativeTerrainOrdinals = buffers.nativeTerrainOrdinals;
-                    for (int index = 0; index < terrainOrdinals.length; index++) {
-                        terrainOrdinals[index] = (byte) nativeTerrainOrdinals[index];
-                    }
-                } else {
+                if (!nativeTerrainComputed) {
                     for (int x = 0; x < TILE_SIZE; x++) {
                         for (int y = 0; y < TILE_SIZE; y++) {
                             final int index = x | (y << TILE_SIZE_BITS);
@@ -772,7 +766,6 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         private double[] freshFancyDisplacementDistanceValues;
         private float[] freshFancyDisplacementXCoordinateValues;
         private float[] freshFancyDisplacementYCoordinateValues;
-        private int[] nativeTerrainOrdinals;
         private int[] terrainRangeOrdinals;
         private byte[] nativeThemeLayerValues;
         private byte[] randomBitLayerValues;
@@ -796,13 +789,6 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 terrainOrdinals = new byte[TILE_SIZE * TILE_SIZE];
             }
             return terrainOrdinals;
-        }
-
-        private int[] nativeTerrainOrdinals() {
-            if (nativeTerrainOrdinals == null) {
-                nativeTerrainOrdinals = new int[TILE_SIZE * TILE_SIZE];
-            }
-            return nativeTerrainOrdinals;
         }
 
         private int[] terrainRangeOrdinals(final int length) {

@@ -15,6 +15,7 @@ pub enum SimpleThemeTerrainError {
     TerrainRangeLength { expected: usize, actual: usize },
     HeightLength { expected: usize, actual: usize },
     OutputLength { expected: usize, actual: usize },
+    TerrainOrdinalOutOfRange { value: i32 },
     AreaOverflow,
 }
 
@@ -31,6 +32,15 @@ pub struct SimpleThemeTerrainBulk {
     terrain_range_ordinals: Vec<i32>,
 }
 
+/// Reusable axis preparation buffers for repeated tile evaluations on one worker.
+#[derive(Default)]
+pub struct SimpleThemeTerrainScratch {
+    small_x: Vec<PerlinAxis3D>,
+    tiny_x: Vec<PerlinAxis3D>,
+    small_y: Vec<PerlinAxis3D>,
+    tiny_y: Vec<PerlinAxis3D>,
+}
+
 impl SimpleThemeTerrainBulk {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -43,6 +53,42 @@ impl SimpleThemeTerrainBulk {
         seed: i64,
         terrain_range_ordinals: &[i32],
     ) -> Result<Self, SimpleThemeTerrainError> {
+        let mut terrain = Self {
+            perlin: PerlinNoise::new(seed),
+            min_height,
+            max_height,
+            water_height,
+            randomise,
+            beaches,
+            beach_ordinal,
+            terrain_range_ordinals: Vec::new(),
+        };
+        terrain.configure(
+            min_height,
+            max_height,
+            water_height,
+            randomise,
+            beaches,
+            beach_ordinal,
+            seed,
+            terrain_range_ordinals,
+        )?;
+        Ok(terrain)
+    }
+
+    /// Updates a worker's cached theme without rebuilding its Perlin permutation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn configure(
+        &mut self,
+        min_height: i32,
+        max_height: i32,
+        water_height: i32,
+        randomise: bool,
+        beaches: bool,
+        beach_ordinal: i32,
+        seed: i64,
+        terrain_range_ordinals: &[i32],
+    ) -> Result<(), SimpleThemeTerrainError> {
         let range = i64::from(max_height) - i64::from(min_height);
         if range <= 0 {
             return Err(SimpleThemeTerrainError::InvalidHeightRange {
@@ -57,16 +103,17 @@ impl SimpleThemeTerrainBulk {
                 actual: terrain_range_ordinals.len(),
             });
         }
-        Ok(Self {
-            perlin: PerlinNoise::new(seed),
-            min_height,
-            max_height,
-            water_height,
-            randomise,
-            beaches,
-            beach_ordinal,
-            terrain_range_ordinals: terrain_range_ordinals.to_vec(),
-        })
+        self.perlin.set_seed(seed);
+        self.min_height = min_height;
+        self.max_height = max_height;
+        self.water_height = water_height;
+        self.randomise = randomise;
+        self.beaches = beaches;
+        self.beach_ordinal = beach_ordinal;
+        self.terrain_range_ordinals.resize(expected, 0);
+        self.terrain_range_ordinals
+            .copy_from_slice(terrain_range_ordinals);
+        Ok(())
     }
 
     #[inline]
@@ -119,6 +166,29 @@ impl SimpleThemeTerrainBulk {
         PerlinNoise::prepare_axis_3d(f64::from(coordinate as f32 / scale))
     }
 
+    fn prepare_axes(
+        origin_x: i32,
+        origin_y: i32,
+        width: usize,
+        height: usize,
+        scratch: &mut SimpleThemeTerrainScratch,
+    ) {
+        scratch.small_x.resize(width, PerlinAxis3D::default());
+        scratch.tiny_x.resize(width, PerlinAxis3D::default());
+        scratch.small_y.resize(height, PerlinAxis3D::default());
+        scratch.tiny_y.resize(height, PerlinAxis3D::default());
+        for col in 0..width {
+            let x = origin_x.wrapping_add(col as i32);
+            scratch.small_x[col] = Self::scaled_axis(x, SMALL_BLOBS);
+            scratch.tiny_x[col] = Self::scaled_axis(x, TINY_BLOBS);
+        }
+        for row in 0..height {
+            let y = origin_y.wrapping_add(row as i32);
+            scratch.small_y[row] = Self::scaled_axis(y, SMALL_BLOBS);
+            scratch.tiny_y[row] = Self::scaled_axis(y, TINY_BLOBS);
+        }
+    }
+
     pub fn fill_bulk(
         &self,
         origin_x: i32,
@@ -127,6 +197,29 @@ impl SimpleThemeTerrainBulk {
         height: usize,
         heights: &[i32],
         output: &mut [i32],
+    ) -> Result<(), SimpleThemeTerrainError> {
+        self.fill_bulk_with_scratch(
+            origin_x,
+            origin_y,
+            width,
+            height,
+            heights,
+            output,
+            &mut SimpleThemeTerrainScratch::default(),
+        )
+    }
+
+    /// Evaluates a region using caller-owned axis buffers retained by its worker.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fill_bulk_with_scratch(
+        &self,
+        origin_x: i32,
+        origin_y: i32,
+        width: usize,
+        height: usize,
+        heights: &[i32],
+        output: &mut [i32],
+        scratch: &mut SimpleThemeTerrainScratch,
     ) -> Result<(), SimpleThemeTerrainError> {
         let expected = width
             .checked_mul(height)
@@ -143,28 +236,74 @@ impl SimpleThemeTerrainBulk {
                 actual: output.len(),
             });
         }
-        let small_x: Vec<_> = (0..width)
-            .map(|col| Self::scaled_axis(origin_x.wrapping_add(col as i32), SMALL_BLOBS))
-            .collect();
-        let tiny_x: Vec<_> = (0..width)
-            .map(|col| Self::scaled_axis(origin_x.wrapping_add(col as i32), TINY_BLOBS))
-            .collect();
-        let small_y: Vec<_> = (0..height)
-            .map(|row| Self::scaled_axis(origin_y.wrapping_add(row as i32), SMALL_BLOBS))
-            .collect();
-        let tiny_y: Vec<_> = (0..height)
-            .map(|row| Self::scaled_axis(origin_y.wrapping_add(row as i32), TINY_BLOBS))
-            .collect();
+        Self::prepare_axes(origin_x, origin_y, width, height, scratch);
         for row in 0..height {
             for col in 0..width {
                 let index = row * width + col;
                 output[index] = self.get_terrain_ordinal_with_axes(
-                    small_x[col],
-                    small_y[row],
-                    tiny_x[col],
-                    tiny_y[row],
+                    scratch.small_x[col],
+                    scratch.small_y[row],
+                    scratch.tiny_x[col],
+                    scratch.tiny_y[row],
                     heights[index],
                 );
+            }
+        }
+        Ok(())
+    }
+
+    /// Fills compact Java terrain ordinals into a reused byte plane.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fill_bulk_compact_with_scratch(
+        &self,
+        origin_x: i32,
+        origin_y: i32,
+        width: usize,
+        height: usize,
+        heights: &[i32],
+        output: &mut [u8],
+        scratch: &mut SimpleThemeTerrainScratch,
+    ) -> Result<(), SimpleThemeTerrainError> {
+        let expected = width
+            .checked_mul(height)
+            .ok_or(SimpleThemeTerrainError::AreaOverflow)?;
+        if heights.len() != expected {
+            return Err(SimpleThemeTerrainError::HeightLength {
+                expected,
+                actual: heights.len(),
+            });
+        }
+        if output.len() != expected {
+            return Err(SimpleThemeTerrainError::OutputLength {
+                expected,
+                actual: output.len(),
+            });
+        }
+        if self.beaches && !(0..=u8::MAX as i32).contains(&self.beach_ordinal) {
+            return Err(SimpleThemeTerrainError::TerrainOrdinalOutOfRange {
+                value: self.beach_ordinal,
+            });
+        }
+        if let Some(value) = self
+            .terrain_range_ordinals
+            .iter()
+            .copied()
+            .find(|value| !(0..=u8::MAX as i32).contains(value))
+        {
+            return Err(SimpleThemeTerrainError::TerrainOrdinalOutOfRange { value });
+        }
+        Self::prepare_axes(origin_x, origin_y, width, height, scratch);
+        for row in 0..height {
+            for col in 0..width {
+                let index = row * width + col;
+                let ordinal = self.get_terrain_ordinal_with_axes(
+                    scratch.small_x[col],
+                    scratch.small_y[row],
+                    scratch.tiny_x[col],
+                    scratch.tiny_y[row],
+                    heights[index],
+                );
+                output[index] = ordinal as u8;
             }
         }
         Ok(())
@@ -217,6 +356,106 @@ mod tests {
         assert_eq!(terrain.get_terrain_ordinal(100, -40, -10), 4);
         assert_eq!(terrain.get_terrain_ordinal(100, -40, 0), 6);
         assert_eq!(terrain.get_terrain_ordinal(100, -40, 10), 7);
+    }
+
+    #[test]
+    fn reused_worker_theme_and_scratch_match_fresh_themes_after_reconfiguration() {
+        let first_ranges: Vec<_> = (0..64).map(|index| 100 + index).collect();
+        let second_ranges: Vec<_> = (0..64).map(|index| 300 - index).collect();
+        let first_heights: Vec<_> = (0..35).map(|index| (index * 7 % 80) - 8).collect();
+        let second_heights: Vec<_> = (0..12).map(|index| (index * 11 % 75) - 5).collect();
+        let mut reused =
+            SimpleThemeTerrainBulk::new(0, 64, 31, true, true, 99, -123, &first_ranges).unwrap();
+        let mut scratch = super::SimpleThemeTerrainScratch::default();
+
+        let mut first_actual = vec![0; first_heights.len()];
+        reused
+            .fill_bulk_with_scratch(
+                -19,
+                i32::MAX - 4,
+                7,
+                5,
+                &first_heights,
+                &mut first_actual,
+                &mut scratch,
+            )
+            .unwrap();
+        let first_fresh =
+            SimpleThemeTerrainBulk::new(0, 64, 31, true, true, 99, -123, &first_ranges).unwrap();
+        let mut first_expected = vec![0; first_heights.len()];
+        first_fresh
+            .fill_bulk(-19, i32::MAX - 4, 7, 5, &first_heights, &mut first_expected)
+            .unwrap();
+        assert_eq!(first_actual, first_expected);
+
+        reused
+            .configure(-8, 56, 18, true, false, 77, i64::MIN + 9, &second_ranges)
+            .unwrap();
+        let mut second_actual = vec![0; second_heights.len()];
+        reused
+            .fill_bulk_with_scratch(
+                i32::MIN + 3,
+                29,
+                3,
+                4,
+                &second_heights,
+                &mut second_actual,
+                &mut scratch,
+            )
+            .unwrap();
+        let second_fresh =
+            SimpleThemeTerrainBulk::new(-8, 56, 18, true, false, 77, i64::MIN + 9, &second_ranges)
+                .unwrap();
+        let mut second_expected = vec![0; second_heights.len()];
+        second_fresh
+            .fill_bulk(
+                i32::MIN + 3,
+                29,
+                3,
+                4,
+                &second_heights,
+                &mut second_expected,
+            )
+            .unwrap();
+        assert_eq!(second_actual, second_expected);
+    }
+
+    #[test]
+    fn compact_output_matches_full_ordinals_and_rejects_values_without_writing() {
+        let ranges: Vec<_> = (0..64).map(|index| 40 + index).collect();
+        let terrain =
+            SimpleThemeTerrainBulk::new(0, 64, 31, true, true, 7, 0x1020_3040, &ranges).unwrap();
+        let heights: Vec<_> = (0..35).map(|index| (index * 13 % 80) - 8).collect();
+        let mut full = vec![0; heights.len()];
+        let mut compact = vec![u8::MAX; heights.len()];
+        let mut scratch = super::SimpleThemeTerrainScratch::default();
+        terrain
+            .fill_bulk(-31, 67, 7, 5, &heights, &mut full)
+            .unwrap();
+        terrain
+            .fill_bulk_compact_with_scratch(-31, 67, 7, 5, &heights, &mut compact, &mut scratch)
+            .unwrap();
+        assert_eq!(
+            compact,
+            full.iter().map(|value| *value as u8).collect::<Vec<_>>()
+        );
+
+        let unrepresentable =
+            SimpleThemeTerrainBulk::new(0, 2, 0, false, false, 999, 4, &[1, 300]).unwrap();
+        let mut unchanged = [0xabu8; 2];
+        assert_eq!(
+            unrepresentable.fill_bulk_compact_with_scratch(
+                0,
+                0,
+                2,
+                1,
+                &[0, 1],
+                &mut unchanged,
+                &mut scratch,
+            ),
+            Err(SimpleThemeTerrainError::TerrainOrdinalOutOfRange { value: 300 })
+        );
+        assert_eq!(unchanged, [0xab; 2]);
     }
 
     #[test]

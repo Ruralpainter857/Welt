@@ -139,6 +139,7 @@ pub fn fill_simple_theme_layers(
 /// Converts Java-generated `Random.nextInt(15)` draws into packed bit-layer planes.
 /// Draws are supplied in layer-major order; `u8::MAX` marks deterministic levels (0 or 15).
 /// The same buffer is rewritten to 0/1 planes so callers can apply each plane in one tile batch.
+#[allow(clippy::too_many_arguments)]
 pub fn fill_simple_theme_random_bit_layers(
     min_height: i32,
     max_height: i32,

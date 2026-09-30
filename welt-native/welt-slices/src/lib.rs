@@ -19,7 +19,7 @@ use welt_gen::height_map_tree::{
 use welt_gen::noise_height_map::NoiseHeightMapBulk;
 use welt_gen::resource_noise::fill_resource_materials_into;
 use welt_gen::theme_layers::{fill_simple_theme_layers, fill_simple_theme_random_bit_layers};
-use welt_gen::theme_terrain::SimpleThemeTerrainBulk;
+use welt_gen::theme_terrain::{SimpleThemeTerrainBulk, SimpleThemeTerrainScratch};
 use welt_nbt::packed_array::{pack_indices, unpack_indices};
 use welt_render::shade::{shade_pixels, shade_pixels_compact};
 
@@ -173,11 +173,22 @@ struct SimpleThemeLayerInputs {
     bit_layer_tables: Vec<i32>,
 }
 
+#[derive(Default)]
+struct SimpleThemeTerrainInputs {
+    quantised_heights: Vec<i32>,
+    terrain_range_ordinals: Vec<i32>,
+    output_ordinals: Vec<i32>,
+    theme: Option<SimpleThemeTerrainBulk>,
+    scratch: SimpleThemeTerrainScratch,
+}
+
 thread_local! {
     static RESOURCE_NOISE_INPUTS: RefCell<ResourceNoiseInputs> =
         RefCell::new(ResourceNoiseInputs::default());
     static SIMPLE_THEME_LAYER_INPUTS: RefCell<SimpleThemeLayerInputs> =
         RefCell::new(SimpleThemeLayerInputs::default());
+    static SIMPLE_THEME_TERRAIN_INPUTS: RefCell<SimpleThemeTerrainInputs> =
+        RefCell::new(SimpleThemeTerrainInputs::default());
 }
 
 /// # Safety
@@ -1806,54 +1817,236 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i32);
             let get_int_array_region: GetIntArrayRegion =
                 std::mem::transmute(function(env, GET_INT_ARRAY_REGION));
-            let mut input_heights = vec![0_i32; expected];
-            let mut input_ranges = vec![0_i32; range_length as usize];
-            get_int_array_region(
-                env,
-                heights,
-                0,
-                expected as jint,
-                input_heights.as_mut_ptr(),
-            );
-            get_int_array_region(
-                env,
-                terrain_ranges,
-                0,
-                range_length as jint,
-                input_ranges.as_mut_ptr(),
-            );
-            let Ok(theme) = SimpleThemeTerrainBulk::new(
-                min_height,
-                max_height,
-                water_height,
-                randomise != 0,
-                beaches != 0,
-                beach_ordinal,
-                seed,
-                &input_ranges,
-            ) else {
-                return WeltError::IllegalArgument as jint;
-            };
-            let mut values = vec![0_i32; expected];
-            if theme
-                .fill_bulk(
-                    origin_x,
-                    origin_y,
-                    width as usize,
-                    height as usize,
-                    &input_heights,
-                    &mut values,
-                )
-                .is_err()
-            {
-                return WeltError::IllegalArgument as jint;
-            }
             type SetIntArrayRegion =
                 unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i32);
             let set_int_array_region: SetIntArrayRegion =
                 std::mem::transmute(function(env, SET_INT_ARRAY_REGION));
-            set_int_array_region(env, output, 0, expected as jint, values.as_ptr());
-            WeltError::Ok as jint
+            let filled = SIMPLE_THEME_TERRAIN_INPUTS.with(|workspace| {
+                let mut workspace = workspace.borrow_mut();
+                let SimpleThemeTerrainInputs {
+                    quantised_heights,
+                    terrain_range_ordinals,
+                    output_ordinals,
+                    theme,
+                    scratch,
+                } = &mut *workspace;
+                quantised_heights.resize(expected, 0);
+                terrain_range_ordinals.resize(range_length as usize, 0);
+                get_int_array_region(
+                    env,
+                    heights,
+                    0,
+                    expected as jint,
+                    quantised_heights.as_mut_ptr(),
+                );
+                get_int_array_region(
+                    env,
+                    terrain_ranges,
+                    0,
+                    range_length as jint,
+                    terrain_range_ordinals.as_mut_ptr(),
+                );
+                let configured = if let Some(theme) = theme.as_mut() {
+                    theme.configure(
+                        min_height,
+                        max_height,
+                        water_height,
+                        randomise != 0,
+                        beaches != 0,
+                        beach_ordinal,
+                        seed,
+                        terrain_range_ordinals,
+                    )
+                } else {
+                    SimpleThemeTerrainBulk::new(
+                        min_height,
+                        max_height,
+                        water_height,
+                        randomise != 0,
+                        beaches != 0,
+                        beach_ordinal,
+                        seed,
+                        terrain_range_ordinals,
+                    )
+                    .map(|terrain| *theme = Some(terrain))
+                };
+                if configured.is_err() {
+                    return false;
+                }
+                output_ordinals.resize(expected, 0);
+                let Some(theme) = theme.as_ref() else {
+                    return false;
+                };
+                if theme
+                    .fill_bulk_with_scratch(
+                        origin_x,
+                        origin_y,
+                        width as usize,
+                        height as usize,
+                        quantised_heights,
+                        output_ordinals,
+                        scratch,
+                    )
+                    .is_err()
+                {
+                    return false;
+                }
+                set_int_array_region(env, output, 0, expected as jint, output_ordinals.as_ptr());
+                true
+            });
+            if filled {
+                WeltError::Ok as jint
+            } else {
+                WeltError::IllegalArgument as jint
+            }
+        })
+    }
+}
+
+/// Fill compact SimpleTheme terrain ordinals directly into the tile's byte plane.
+///
+/// # Safety
+/// `env` and all arrays must be valid references supplied by the current JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFillThemeTerrainsCompact(
+    env: *mut JNIEnv,
+    _class: jclass,
+    origin_x: jint,
+    origin_y: jint,
+    width: jint,
+    height: jint,
+    min_height: jint,
+    max_height: jint,
+    water_height: jint,
+    randomise: jint,
+    beaches: jint,
+    beach_ordinal: jint,
+    seed: jlong,
+    heights: jobject,
+    terrain_ranges: jobject,
+    output: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if heights.is_null()
+                || terrain_ranges.is_null()
+                || output.is_null()
+                || width <= 0
+                || height <= 0
+                || min_height >= max_height
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            let Some(expected) = (width as usize).checked_mul(height as usize) else {
+                return WeltError::IllegalArgument as jint;
+            };
+            let range_length = i64::from(max_height) - i64::from(min_height);
+            if expected > 1_048_576 || range_length <= 0 || range_length > 1_048_576 {
+                return WeltError::IllegalArgument as jint;
+            }
+            type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            type GetIntArrayRegion =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i32);
+            type GetByteArrayElements =
+                unsafe extern "system" fn(*mut JNIEnv, jobject, *mut u8) -> *mut i8;
+            let get_array_length: GetArrayLength =
+                std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            if get_array_length(env, heights) != expected as jint
+                || get_array_length(env, terrain_ranges) != range_length as jint
+                || get_array_length(env, output) != expected as jint
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            let get_int_array_region: GetIntArrayRegion =
+                std::mem::transmute(function(env, GET_INT_ARRAY_REGION));
+            let get_byte_array_elements: GetByteArrayElements =
+                std::mem::transmute(function(env, GET_BYTE_ARRAY_ELEMENTS));
+            let filled = SIMPLE_THEME_TERRAIN_INPUTS.with(|workspace| {
+                let mut workspace = workspace.borrow_mut();
+                let SimpleThemeTerrainInputs {
+                    quantised_heights,
+                    terrain_range_ordinals,
+                    theme,
+                    scratch,
+                    ..
+                } = &mut *workspace;
+                quantised_heights.resize(expected, 0);
+                terrain_range_ordinals.resize(range_length as usize, 0);
+                get_int_array_region(
+                    env,
+                    heights,
+                    0,
+                    expected as jint,
+                    quantised_heights.as_mut_ptr(),
+                );
+                get_int_array_region(
+                    env,
+                    terrain_ranges,
+                    0,
+                    range_length as jint,
+                    terrain_range_ordinals.as_mut_ptr(),
+                );
+                let configured = if let Some(theme) = theme.as_mut() {
+                    theme.configure(
+                        min_height,
+                        max_height,
+                        water_height,
+                        randomise != 0,
+                        beaches != 0,
+                        beach_ordinal,
+                        seed,
+                        terrain_range_ordinals,
+                    )
+                } else {
+                    SimpleThemeTerrainBulk::new(
+                        min_height,
+                        max_height,
+                        water_height,
+                        randomise != 0,
+                        beaches != 0,
+                        beach_ordinal,
+                        seed,
+                        terrain_range_ordinals,
+                    )
+                    .map(|terrain| *theme = Some(terrain))
+                };
+                if configured.is_err() {
+                    return false;
+                }
+                let Some(theme) = theme.as_ref() else {
+                    return false;
+                };
+                let output_pointer = get_byte_array_elements(env, output, std::ptr::null_mut());
+                if output_pointer.is_null() {
+                    return false;
+                }
+                let output_values = ByteArrayOutput {
+                    env,
+                    array: output,
+                    values: output_pointer,
+                    length: expected,
+                };
+                let output_slice = slice::from_raw_parts_mut(
+                    output_values.values.cast::<u8>(),
+                    output_values.length,
+                );
+                theme
+                    .fill_bulk_compact_with_scratch(
+                        origin_x,
+                        origin_y,
+                        width as usize,
+                        height as usize,
+                        quantised_heights,
+                        output_slice,
+                        scratch,
+                    )
+                    .is_ok()
+            });
+            if filled {
+                WeltError::Ok as jint
+            } else {
+                WeltError::IllegalArgument as jint
+            }
         })
     }
 }

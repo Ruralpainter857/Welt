@@ -311,6 +311,35 @@ public final class NativeSlices {
         }
     }
 
+    /** Fills compact terrain ordinals into a caller-owned byte plane for a fresh tile. */
+    public static boolean fillSimpleThemeTerrainOrdinalsCompact(final int originX, final int originY,
+                                                                  final int width, final int height,
+                                                                  final int minHeight, final int maxHeight,
+                                                                  final int waterHeight, final boolean randomise,
+                                                                  final boolean beaches, final int beachOrdinal,
+                                                                  final long seed, final int[] heights,
+                                                                  final int[] terrainRangeOrdinals,
+                                                                  final byte[] output) {
+        final long area = (long) width * height;
+        final long rangeLength = (long) maxHeight - minHeight;
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || heights == null || terrainRangeOrdinals == null || output == null
+                || width <= 0 || height <= 0 || area > 1_048_576L
+                || rangeLength <= 0 || rangeLength > 1_048_576L
+                || heights.length != area || terrainRangeOrdinals.length != rangeLength
+                || output.length != area) {
+            return false;
+        }
+        try {
+            return nativeFillThemeTerrainsCompact(originX, originY, width, height,
+                    minHeight, maxHeight, waterHeight, randomise ? 1 : 0,
+                    beaches ? 1 : 0, beachOrdinal, seed, heights,
+                    terrainRangeOrdinals, output) == 0;
+        } catch (final UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     /** Converts Java-generated random draws into layer-major SimpleTheme bit planes in place. */
     public static boolean fillSimpleThemeRandomBitLayers(final int width, final int height,
                                                           final int minHeight, final int maxHeight,
@@ -722,6 +751,15 @@ public final class NativeSlices {
                                                        long seed, int[] heights,
                                                        int[] terrainRangeOrdinals,
                                                        int[] output);
+
+    private static native int nativeFillThemeTerrainsCompact(int originX, int originY,
+                                                              int width, int height,
+                                                              int minHeight, int maxHeight,
+                                                              int waterHeight, int randomise,
+                                                              int beaches, int beachOrdinal,
+                                                              long seed, int[] heights,
+                                                              int[] terrainRangeOrdinals,
+                                                              byte[] output);
 
     private static native int nativeFillSimpleThemeLayerValues(int width, int height,
                                                                 int minHeight, int maxHeight,
