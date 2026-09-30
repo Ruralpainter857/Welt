@@ -5,6 +5,7 @@
 pub mod abi;
 pub mod erosion;
 pub mod error;
+pub mod discrete_paint;
 pub mod flood_fill;
 pub mod height_edit;
 pub mod jni;

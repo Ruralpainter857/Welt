@@ -156,12 +156,12 @@ public class NibbleLayerPaint extends LayerPaint {
                                            boolean oneTile, int mode) {
         final long widthLong = (long) x2 - x1 + 1L;
         final long heightLong = (long) y2 - y1 + 1L;
-        final long areaLong = widthLong * heightLong;
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
-                || widthLong <= 0 || heightLong <= 0 || areaLong <= 0 || areaLong > 65_536L) {
+                || widthLong <= 0 || heightLong <= 0 || widthLong > 65_536L
+                || heightLong > 65_536L || widthLong * heightLong > 65_536L) {
             return false;
         }
-        final int area = (int) areaLong;
+        final int area = (int) (widthLong * heightLong);
         final Tile tile;
         if (oneTile) {
             tile = dimension.getTileForEditing(x1 >> TILE_SIZE_BITS, y1 >> TILE_SIZE_BITS);
