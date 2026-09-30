@@ -232,6 +232,11 @@ public class Flood extends MouseOrTabletOperation {
         }
 
         @Override
+        public final boolean isNativeSnapshotSafe() {
+            return true;
+        }
+
+        @Override
         public String getDescription() {
             return description;
         }

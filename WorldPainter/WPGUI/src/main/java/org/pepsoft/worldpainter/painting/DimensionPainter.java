@@ -641,6 +641,11 @@ public final class DimensionPainter {
         }
 
         @Override
+        public final boolean isNativeSnapshotSafe() {
+            return true;
+        }
+
+        @Override
         public final Rectangle getBounds() {
             return bounds;
         }

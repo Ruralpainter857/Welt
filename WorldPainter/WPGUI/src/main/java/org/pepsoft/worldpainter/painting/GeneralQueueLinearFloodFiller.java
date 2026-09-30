@@ -115,7 +115,8 @@ public class GeneralQueueLinearFloodFiller {
 
     private boolean tryNativeFill(int seedX, int seedY) {
         final long areaLong = (long) width * height;
-        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+        if (!fillMethod.isNativeSnapshotSafe() || !Native.isGenEnabled()
+                || !NativeLoader.areSlicesAvailable()
                 || width <= 0 || height <= 0 || areaLong <= 0 || areaLong > MAX_NATIVE_FLOOD_CELLS
                 || seedX < 0 || seedY < 0 || seedX >= width || seedY >= height) {
             return false;
@@ -260,6 +261,14 @@ public class GeneralQueueLinearFloodFiller {
     }
 
     public interface FillMethod {
+        /**
+         * Whether the boundary predicate depends only on each cell's current value, so the native path may
+         * snapshot the complete bounded area before applying any fill calls.
+         */
+        default boolean isNativeSnapshotSafe() {
+            return false;
+        }
+
         /**
          * Get a short human readable description of the operation. May be shown to the user if the operation takes a
          * long time.
