@@ -7,6 +7,7 @@ package org.pepsoft.worldpainter.operations;
 
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.TerrainHeightAccess;
+import org.pepsoft.worldpainter.HeightBrushAccess;
 import org.pepsoft.worldpainter.WorldPainter;
 import org.pepsoft.worldpainter.panels.DefaultFilter;
 import org.pepsoft.worldpainter.nativeapi.Native;
@@ -83,9 +84,7 @@ public class Height extends AbstractBrushOperation {
         if (area > MAX_NATIVE_CELLS) {
             return false;
         }
-        ensureNativeBuffers(area);
-        TerrainHeightAccess.copy(dimension, centreX - radius, centreY - radius,
-                diameter, diameter, nativeHeights);
+        if (nativeStrengths == null || nativeStrengths.length != area) nativeStrengths = new float[area];
 
         int index = 0;
         for (int x = centreX - radius; x <= centreX + radius; x++) {
@@ -94,6 +93,12 @@ public class Height extends AbstractBrushOperation {
                 index++;
             }
         }
+
+        if (!applyTheme && HeightBrushAccess.tryApply(dimension, centreX - radius, centreY - radius,
+                diameter, diameter, nativeStrengths, inverse ? HeightBrushAccess.LOWER : HeightBrushAccess.RAISE,
+                adjustment, minZ, maxZ)) return true;
+        ensureNativeBuffers(area);
+        TerrainHeightAccess.copy(dimension, centreX - radius, centreY - radius, diameter, diameter, nativeHeights);
 
         boolean nativeApplied = NativeSlices.applyHeightBrush(inverse, minZ, maxZ,
                 adjustment, nativeHeights, nativeStrengths, nativeModified);
@@ -125,7 +130,6 @@ public class Height extends AbstractBrushOperation {
     private void ensureNativeBuffers(int area) {
         if ((nativeHeights == null) || (nativeHeights.length != area)) {
             nativeHeights = new float[area];
-            nativeStrengths = new float[area];
             nativeModified = new byte[area];
         }
     }

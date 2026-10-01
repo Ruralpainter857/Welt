@@ -148,7 +148,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 40 || length > 40 + 65536 { return WeltError::IllegalArgument as jint; }
+            if buffer.is_null() || length < 40 || length as usize > welt_core::height_edit::COMPACT_MAX_BYTES { return WeltError::IllegalArgument as jint; }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
             type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));

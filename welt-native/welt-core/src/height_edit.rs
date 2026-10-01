@@ -1,8 +1,12 @@
 //! Brush-based height edits shared by the native WorldPainter adapters.
 
 const MAX_HEIGHT_CELLS: usize = 65_536;
+pub const COMPACT_MAX_BYTES: usize = 64 + 65536 + 65536;
 
 pub fn edit_compact_tile(data: &mut [u8]) -> Result<(), crate::error::WeltError> {
+    if data.len() >= 64 && i32::from_le_bytes(data[4..8].try_into().unwrap()) == 2 {
+        return edit_compact_brush(data);
+    }
     use crate::error::WeltError;
     fn read(data: &[u8], offset: usize) -> i32 {
         i32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
@@ -56,6 +60,87 @@ pub fn edit_compact_tile(data: &mut [u8]) -> Result<(), crate::error::WeltError>
     Ok(())
 }
 
+// WHED v2 : même plan compact que v1, suivi des forces X-major de la sous-zone.
+fn edit_compact_brush(data: &mut [u8]) -> Result<(), crate::error::WeltError> {
+    use crate::error::WeltError::IllegalArgument;
+    fn get(data: &[u8], offset: usize) -> i32 {
+        i32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
+    }
+    fn float(data: &[u8], offset: usize) -> f32 {
+        f32::from_bits(get(data, offset) as u32)
+    }
+    let bits = get(data, 20);
+    let mode = get(data, 24);
+    let x = get(data, 40);
+    let y = get(data, 44);
+    let width = get(data, 48);
+    let height = get(data, 52);
+    if get(data, 0) != 0x44454857
+        || !matches!(bits, 16 | 32)
+        || !(0..=4).contains(&mode)
+        || x < 0
+        || y < 0
+        || width <= 0
+        || height <= 0
+        || width > 128
+        || height > 128
+        || x > 128 - width
+        || y > 128 - height
+        || get(data, 36) != 0
+        || get(data, 60) != 0
+    {
+        return Err(IllegalArgument);
+    }
+    let bytes = bits as usize / 8;
+    let forces = 64 + 16384 * bytes;
+    if get(data, 56) != forces as i32 || data.len() != forces + width as usize * height as usize * 4
+    {
+        return Err(IllegalArgument);
+    }
+    let min = get(data, 8) as f32;
+    let min_clamp = float(data, 12);
+    let max_clamp = float(data, 16);
+    let value = float(data, 28);
+    let mut writes = 0u32;
+    for dx in 0..width as usize {
+        for dy in 0..height as usize {
+            let strength = float(data, forces + (dx * height as usize + dy) * 4);
+            if strength.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
+                continue;
+            }
+            let offset = 64 + ((x as usize + dx) + (y as usize + dy) * 128) * bytes;
+            let raw = if bits == 16 {
+                u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap()) as i32
+            } else {
+                get(data, offset)
+            };
+            let current = raw as f32 / 256.0 + min;
+            let target = match mode {
+                0 => java_min(current + value, max_clamp),
+                1 => java_max(current - value, min_clamp),
+                _ => value,
+            };
+            let edited = strength * target + (1.0 - strength) * current;
+            let write = match mode {
+                2 => true,
+                0 | 3 => edited > current,
+                _ => edited < current,
+            };
+            if write {
+                let raw = ((edited - min) * 256.0) as i32;
+                if bits == 16 {
+                    data[offset..offset + 2].copy_from_slice(&(raw as u16).to_le_bytes());
+                } else {
+                    data[offset..offset + 4].copy_from_slice(&raw.to_le_bytes());
+                }
+                writes += 1;
+            }
+        }
+    }
+    data[32..36].copy_from_slice(&writes.to_le_bytes());
+    Ok(())
+}
+
 #[cfg(test)]
 mod compact_tests {
     use super::edit_compact_tile;
@@ -92,6 +177,39 @@ mod compact_tests {
     fn invalid_header_does_not_change_the_height_plane() {
         let mut data = fixture();
         data[24..28].copy_from_slice(&99i32.to_le_bytes());
+        let before = data.clone();
+        assert!(edit_compact_tile(&mut data).is_err());
+        assert_eq!(data, before);
+    }
+
+    #[test]
+    fn brush_v2_interpolates_and_preserves_cells_outside_the_subregion() {
+        let mut data = vec![0; 64 + 32768 + 4];
+        for (offset, value) in [
+            (0, 0x44454857i32),
+            (4, 2),
+            (8, -64),
+            (20, 16),
+            (24, 2),
+            (28, 12.5f32.to_bits() as i32),
+            (40, 127),
+            (44, 127),
+            (48, 1),
+            (52, 1),
+            (56, 32832),
+        ] {
+            data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        data[32832..32836].copy_from_slice(&0.5f32.to_le_bytes());
+        let original = data.clone();
+        edit_compact_tile(&mut data).unwrap();
+        assert_eq!(&data[64..32830], &original[64..32830]);
+        assert_eq!(
+            u16::from_le_bytes(data[32830..32832].try_into().unwrap()),
+            38 * 256 + 64
+        );
+        assert_eq!(u32::from_le_bytes(data[32..36].try_into().unwrap()), 1);
+        data[48..52].copy_from_slice(&129i32.to_le_bytes());
         let before = data.clone();
         assert!(edit_compact_tile(&mut data).is_err());
         assert_eq!(data, before);

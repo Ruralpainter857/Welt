@@ -9,6 +9,7 @@ import org.pepsoft.util.DesktopUtils;
 import org.pepsoft.util.IconUtils;
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.TerrainHeightAccess;
+import org.pepsoft.worldpainter.HeightBrushAccess;
 import org.pepsoft.worldpainter.WorldPainter;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
@@ -124,10 +125,8 @@ public class Flatten extends AbstractBrushOperation {
             return false;
         }
         int area = (int) areaLong;
-        ensureNativeBuffers(radius, area);
+        if (nativeStrengths == null || nativeStrengths.length != area) nativeStrengths = new float[area];
         final int diameter = (int) diameterLong;
-        TerrainHeightAccess.copy(dimension, centreX - radius, centreY - radius,
-                diameter, diameter, nativeHeights);
 
         int index = 0;
         for (int x = centreX - radius; x <= centreX + radius; x++) {
@@ -138,6 +137,11 @@ public class Flatten extends AbstractBrushOperation {
         }
 
         int nativeMode = mode == Mode.FLATTEN ? 0 : mode == Mode.RAISE ? 1 : 2;
+        if (!applyTheme && HeightBrushAccess.tryApply(dimension, centreX - radius, centreY - radius,
+                diameter, diameter, nativeStrengths, nativeMode + HeightBrushAccess.FLATTEN,
+                targetHeight, dimension.getMinHeight(), dimension.getMaxHeight() - 1)) return true;
+        ensureNativeBuffers(radius, area);
+        TerrainHeightAccess.copy(dimension, centreX - radius, centreY - radius, diameter, diameter, nativeHeights);
         if (!NativeSlices.applyFlattenBrush(nativeMode, targetHeight,
                 nativeHeights, nativeStrengths, nativeModified)) {
             flattenHeightBufferInJava(nativeMode, targetHeight,
@@ -168,7 +172,6 @@ public class Flatten extends AbstractBrushOperation {
         if (nativeRadius != radius) {
             nativeRadius = radius;
             nativeHeights = new float[area];
-            nativeStrengths = new float[area];
             nativeModified = new byte[area];
         }
     }

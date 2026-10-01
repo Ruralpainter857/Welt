@@ -376,6 +376,32 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    synchronized void editHeightBrushRegion(int x, int y, int width, int height, float[] strengths, int offset, int stride,
+                                            int mode, float value, float minClamp, float maxClamp) {
+        checkHeightRegion(x, y, width, height, strengths.length, offset, stride);
+        if (eventInhibitionCounter == 0) throw new IllegalStateException("Bulk height brushing requires inhibited events");
+        ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+        HeightBrushAccess.Scratch result = HeightBrushAccess.edit(minHeight, x, y, width, height, strengths, offset, stride,
+                mode, value, minClamp, maxClamp, tall ? null : heightMap, tall ? tallHeightMap : null);
+        if (result != null) {
+            if (result.buffer.getInt(32) != 0) {
+                ensureWriteable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+                if (tall) result.copy(tallHeightMap); else result.copy(heightMap);
+                heightMapChanged();
+            }
+            return;
+        }
+        // Le repli utilise les mêmes paramètres et les setters habituels, sans reprendre le geste.
+        for (int dx = 0; dx < width; dx++) for (int dy = 0; dy < height; dy++) {
+            float strength = strengths[offset + dx * stride + dy];
+            if (!(strength > 0f)) continue;
+            float current = getHeight(x + dx, y + dy);
+            float target = mode == 0 ? Math.min(current + value, maxClamp) : mode == 1 ? Math.max(current - value, minClamp) : value;
+            float edited = strength * target + (1f - strength) * current;
+            if (mode == 2 || ((mode == 0 || mode == 3) ? edited > current : edited < current)) setHeight(x + dx, y + dy, edited);
+        }
+    }
+
     synchronized void copyErosionRegion(int x, int y, int width, int height, ByteBuffer buffer, int offset, int stride, int types) {
         checkHeightRegion(x, y, width, height, (types - 32) / 4, offset, stride);
         ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
