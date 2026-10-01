@@ -7,6 +7,7 @@ package org.pepsoft.worldpainter.operations;
 
 import org.pepsoft.util.PerlinNoise;
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.MountainAccess;
 import org.pepsoft.worldpainter.WorldPainter;
 import org.pepsoft.worldpainter.brushes.Brush;
 import org.pepsoft.worldpainter.nativeapi.Native;
@@ -78,6 +79,18 @@ public class RaiseMountain extends AbstractBrushOperation {
     private boolean applyNativeMountain(Dimension dimension, int centreX, int centreY,
                                         int radius, boolean inverse, int minZ, int maxRange,
                                         float peakHeight, boolean applyTheme) {
+        // Les thèmes peuvent observer les voisins après chaque édition ; leur parcours reste inchangé.
+        if (!applyTheme && radius >= 0 && radius <= 255 && dimension.getClass() == Dimension.class
+                && (getBrush() instanceof org.pepsoft.worldpainter.brushes.SymmetricBrush
+                    || getBrush() instanceof org.pepsoft.worldpainter.brushes.RotatedBrush)
+                && Native.isGenEnabled() && NativeLoader.areSlicesAvailable()) {
+            int side = radius * 2 + 1, area = side * side;
+            if (nativeStrengths == null || nativeStrengths.length != area) nativeStrengths = new float[area];
+            for (int dx = 0; dx < side; dx++) for (int dy = 0; dy < side; dy++)
+                nativeStrengths[dx * side + dy] = getBrush().getFullStrength(dx - radius, dy - radius);
+            if (MountainAccess.tryApply(dimension, centreX - radius, centreY - radius, side,
+                    nativeStrengths, peakHeight, peakFactor, inverse)) return true;
+        }
         final long diameterLong = 2L * radius + 1L;
         if (radius < 0 || diameterLong > 255L || !Native.isGenEnabled()
                 || !NativeLoader.areSlicesAvailable()) {

@@ -1,9 +1,12 @@
 //! Brush-based height edits shared by the native WorldPainter adapters.
 
 const MAX_HEIGHT_CELLS: usize = 65_536;
-pub const COMPACT_MAX_BYTES: usize = 64 + 65536 + 65536;
+pub const COMPACT_MAX_BYTES: usize = 80 + 65536 + 65536;
 
 pub fn edit_compact_tile(data: &mut [u8]) -> Result<(), crate::error::WeltError> {
+    if data.len() >= 80 && i32::from_le_bytes(data[4..8].try_into().unwrap()) == 3 {
+        return crate::mountain::edit_compact_tile(data);
+    }
     if data.len() >= 64 && i32::from_le_bytes(data[4..8].try_into().unwrap()) == 2 {
         return edit_compact_brush(data);
     }

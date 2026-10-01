@@ -107,7 +107,7 @@ public final class NativeSlices {
     public static boolean editHeightPlane(ByteBuffer buffer) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
                 || buffer == null || !buffer.isDirect() || buffer.isReadOnly()
-                || buffer.position() != 0 || buffer.limit() < 40 || buffer.limit() > 64 + 131072) return false;
+                || buffer.position() != 0 || buffer.limit() < 40 || buffer.limit() > 80 + 131072) return false;
         try { return nativeEditHeightPlane(buffer, buffer.limit()) == 0; }
         catch (UnsatisfiedLinkError e) { return false; }
     }

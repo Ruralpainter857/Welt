@@ -402,6 +402,29 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    synchronized void editMountainRegion(int x, int y, int width, int height, float[] forces, int offset, int stride,
+                                          float peak, float factor, boolean inverse, int min, int range) {
+        checkHeightRegion(x, y, width, height, forces.length, offset, stride);
+        if (eventInhibitionCounter == 0) throw new IllegalStateException("Mountain editing requires inhibited events");
+        ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+        MountainAccess.Scratch result = minHeight != min ? null : MountainAccess.edit(this.x, this.y, min, range, x, y, width, height,
+                forces, offset, stride, peak, factor, inverse, tall ? null : heightMap, tall ? tallHeightMap : null);
+        if (result != null) {
+            if (result.buffer.getInt(32) != 0) {
+                ensureWriteable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+                if (tall) result.copy(tallHeightMap); else result.copy(heightMap);
+                heightMapChanged();
+            }
+            return;
+        }
+        for (int dx = 0; dx < width; dx++) for (int dy = 0; dy < height; dy++) {
+            float current = getHeight(x + dx, y + dy);
+            float target = MountainAccess.target((this.x << TILE_SIZE_BITS) + x + dx, (this.y << TILE_SIZE_BITS) + y + dy,
+                    forces[offset + dx * stride + dy], min, range, peak, factor, inverse);
+            if (inverse ? target < current : target > current) setHeight(x + dx, y + dy, target);
+        }
+    }
+
     synchronized void copyErosionRegion(int x, int y, int width, int height, ByteBuffer buffer, int offset, int stride, int types) {
         checkHeightRegion(x, y, width, height, (types - 32) / 4, offset, stride);
         ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
