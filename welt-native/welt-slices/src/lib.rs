@@ -43,6 +43,31 @@ mod resource_palette;
 /// # Safety
 /// Le tampon direct doit rester accessible en écriture et exclusif pendant cet appel.
 #[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeSmoothCompactRegion(
+    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if buffer.is_null() || length < 541 || length as usize > welt_core::smooth_height::COMPACT_MAX_BYTES {
+                return WeltError::IllegalArgument as jint;
+            }
+            type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
+            type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
+            let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
+            let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
+            let pointer = address(env, buffer);
+            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
+            match welt_core::smooth_height::edit_compact(data) {
+                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+            }
+        })
+    }
+}
+
+/// # Safety
+/// Le tampon direct doit rester accessible en écriture et exclusif pendant cet appel.
+#[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeErodeCompactRegion(
     env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
 ) -> jint {

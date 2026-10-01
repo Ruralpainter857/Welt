@@ -414,8 +414,24 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
 
     void applyErosionRegion(int x, int y, int width, int height, ByteBuffer buffer, int offset, int stride, int mask) {
         int area = (mask - 32) / 5;
+        applyRawHeightRegion(x, y, width, height, buffer, offset, stride, 32, mask, area);
+    }
+
+    synchronized void copyHeightRegionDirect(int x, int y, int width, int height, java.nio.FloatBuffer output, int offset, int stride) {
+        checkHeightRegion(x, y, width, height, output.limit(), offset, stride);
+        ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+        for (int dx = 0; dx < width; dx++) for (int dy = 0; dy < height; dy++) {
+            int cell = (x + dx) | ((y + dy) << TILE_SIZE_BITS);
+            output.put(offset + dx * stride + dy, (tall ? tallHeightMap[cell] : heightMap[cell] & 0xffff) / 256f + minHeight);
+        }
+    }
+
+    // Application commune aux traitements avec voisins ; aucune lecture d'objet par cellule après le JNI.
+    void applyRawHeightRegion(int x, int y, int width, int height, ByteBuffer buffer, int offset, int stride,
+                              int dataOffset, int mask, int area) {
         checkHeightRegion(x, y, width, height, area, offset, stride);
-        if (mask + (long) area > buffer.limit()) throw new IndexOutOfBoundsException("Invalid erosion mask");
+        if (dataOffset < 0 || dataOffset + (long) area * 4 > buffer.limit() || mask < 0 || mask + (long) area > buffer.limit())
+            throw new IndexOutOfBoundsException("Invalid raw height region");
         boolean changed = false;
         synchronized (this) {
             if (eventInhibitionCounter == 0) throw new IllegalStateException("Bulk erosion requires inhibited events");
@@ -423,7 +439,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                 int i = offset + dx * stride + dy;
                 if (buffer.get(mask + i) == 0) continue;
                 if (!changed) { ensureWriteable(tall ? TALL_HEIGHTMAP : HEIGHTMAP); changed = true; }
-                int cell = (x + dx) | ((y + dy) << TILE_SIZE_BITS), value = buffer.getInt(32 + i * 4);
+                int cell = (x + dx) | ((y + dy) << TILE_SIZE_BITS), value = buffer.getInt(dataOffset + i * 4);
                 if (tall) tallHeightMap[cell] = value; else heightMap[cell] = (short) value;
             }
         }

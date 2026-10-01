@@ -7,6 +7,7 @@ package org.pepsoft.worldpainter.operations;
 
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.TerrainHeightAccess;
+import org.pepsoft.worldpainter.SmoothHeightAccess;
 import org.pepsoft.worldpainter.WorldPainter;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
@@ -66,10 +67,7 @@ public class Smooth extends AbstractBrushOperation {
         int inputSide = (int) inputSideLong;
         int inputArea = (int) inputAreaLong;
         int outputArea = (int) outputAreaLong;
-        ensureNativeBuffers(inputSide, inputArea, outputArea);
-
-        TerrainHeightAccess.copy(dimension, centreX - radius - 5, centreY - radius - 5,
-                inputSide, inputSide, nativeHeights);
+        if (nativeStrengths == null || nativeStrengths.length != outputArea) nativeStrengths = new float[outputArea];
         for (int x = 0; x < diameter; x++) {
             for (int y = 0; y < diameter; y++) {
                 nativeStrengths[x * diameter + y] = dynamicLevel * getStrength(
@@ -77,6 +75,10 @@ public class Smooth extends AbstractBrushOperation {
             }
         }
 
+        if (!applyTheme && SmoothHeightAccess.isEnabled() && SmoothHeightAccess.tryApply(dimension, centreX - radius, centreY - radius,
+                diameter, diameter, nativeStrengths)) return true;
+        ensureNativeBuffers(inputSide, inputArea, outputArea);
+        TerrainHeightAccess.copy(dimension, centreX - radius - 5, centreY - radius - 5, inputSide, inputSide, nativeHeights);
         if (!NativeSlices.smoothHeightRegion(inputSide, inputSide, nativeHeights,
                 nativeStrengths, nativeOutputHeights, nativeModified)) {
             smoothHeightBufferInJava(inputSide, diameter, nativeHeights,
@@ -109,7 +111,6 @@ public class Smooth extends AbstractBrushOperation {
         if (nativeSide != inputSide) {
             nativeSide = inputSide;
             nativeHeights = new float[inputArea];
-            nativeStrengths = new float[outputArea];
             nativeOutputHeights = new float[outputArea];
             nativeModified = new byte[outputArea];
         }

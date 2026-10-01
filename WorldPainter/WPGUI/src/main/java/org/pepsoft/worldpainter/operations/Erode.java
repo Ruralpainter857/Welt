@@ -39,7 +39,7 @@ public class Erode extends AbstractBrushOperation {
     }
 
     private boolean erodeNative(Dimension dimension, int centreX, int centreY, int radius) {
-        // Un filtre peut dépendre des mutations précédentes ; conserver alors le parcours Java.
+        // Un filtre peut dÃ©pendre des mutations prÃ©cÃ©dentes ; conserver alors le parcours Java.
         if (getFilter() != null || !ErosionAccess.canApply(dimension, centreX, centreY, radius)) return false;
         int diameter = radius * 2 + 1;
         if (nativeControls == null || nativeControls.length != diameter * diameter * 3)

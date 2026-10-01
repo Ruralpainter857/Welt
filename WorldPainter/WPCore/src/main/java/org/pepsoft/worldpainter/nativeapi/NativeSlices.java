@@ -131,6 +131,14 @@ public final class NativeSlices {
     }
     private static native int nativeErodeCompactRegion(ByteBuffer buffer, int length);
 
+    public static boolean smoothCompactRegion(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()
+                || buffer.isReadOnly() || buffer.position() != 0 || buffer.limit() < 541 || buffer.limit() > 806836) return false;
+        try { return nativeSmoothCompactRegion(buffer, buffer.limit()) == 0; }
+        catch (UnsatisfiedLinkError e) { return false; }
+    }
+    private static native int nativeSmoothCompactRegion(ByteBuffer buffer, int length);
+
     public static boolean editMaskedPlane(ByteBuffer buffer) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
                 || buffer == null || !buffer.isDirect() || buffer.isReadOnly()
