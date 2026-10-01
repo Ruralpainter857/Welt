@@ -1,6 +1,7 @@
 package org.pepsoft.worldpainter.painting;
 
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.NibbleBrushAccess;
 import org.pepsoft.worldpainter.Terrain;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.layers.Biome;
@@ -24,6 +25,7 @@ public final class CombinedLayerPaint extends NibbleLayerPaint {
 
     @Override
     public void apply(Dimension dimension, int centreX, int centreY, float dynamicLevel) {
+        if (applyNativeCombinedBrush(dimension, centreX, centreY, dynamicLevel, false)) return;
         super.apply(dimension, centreX, centreY, dynamicLevel);
         final CombinedLayer combinedLayer = (CombinedLayer) layer;
         if (combinedLayer.isApplyTerrainAndBiomeOnExport() || (brush.getRadius() == 0)) {
@@ -114,6 +116,7 @@ public final class CombinedLayerPaint extends NibbleLayerPaint {
 
     @Override
     public void remove(Dimension dimension, int centreX, int centreY, float dynamicLevel) {
+        if (applyNativeCombinedBrush(dimension, centreX, centreY, dynamicLevel, true)) return;
         super.remove(dimension, centreX, centreY, dynamicLevel);
         final CombinedLayer combinedLayer = (CombinedLayer) layer;
         if (combinedLayer.isApplyTerrainAndBiomeOnExport() || (brush.getRadius() == 0)) {
@@ -245,7 +248,8 @@ public final class CombinedLayerPaint extends NibbleLayerPaint {
         final int x2 = x1 + boundingBox.width - 1, y2 = y1 + boundingBox.height - 1;
         final long width = (long) x2 - x1 + 1L;
         final long height = (long) y2 - y1 + 1L;
-        if (dither || filter != null || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+        if (remove && terrainConfigured || dither || filter != null || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || dimension.getClass() != Dimension.class || !dimension.isEventsInhibited()
                 || width <= 0 || height <= 0 || width > 65_536L || height > 65_536L
                 || width * height > 65_536L) {
             return false;
@@ -319,6 +323,28 @@ public final class CombinedLayerPaint extends NibbleLayerPaint {
             nativeStrengths = new float[area];
             nativeModified = new byte[area];
         }
+    }
+
+    private boolean applyNativeCombinedBrush(Dimension dimension, int centreX, int centreY, float dynamicLevel, boolean remove) {
+        CombinedLayer combined = (CombinedLayer) layer;
+        if (combined.isApplyTerrainAndBiomeOnExport() || brush.getRadius() == 0 || dither || filter != null
+                || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || dimension.getClass() != Dimension.class || !dimension.isEventsInhibited()) return false;
+        Terrain terrain = combined.getTerrain(); int biome = combined.getBiome();
+        if (terrain == null && biome == -1 || remove && terrain != null) return false;
+        Rectangle box = brush.getBoundingBox(); int x1 = centreX + box.x, y1 = centreY + box.y;
+        int x2 = x1 + box.width - 1, y2 = y1 + box.height - 1;
+        long width = (long) x2 - x1 + 1, height = (long) y2 - y1 + 1;
+        if (width <= 0 || height <= 0 || width > 65536 || height > 65536 || width * height > 65536) return false;
+        boolean oneTile = (x1 >> TILE_SIZE_BITS) == (x2 >> TILE_SIZE_BITS) && (y1 >> TILE_SIZE_BITS) == (y2 >> TILE_SIZE_BITS);
+        if (oneTile && dimension.getTile(x1 >> TILE_SIZE_BITS, y1 >> TILE_SIZE_BITS) == null) return true;
+        ensureNativeBuffers((int) (width * height)); int index = 0;
+        for (int y = y1; y <= y2; y++) for (int x = x1; x <= x2; x++) {
+            nativeStrengths[index] = dynamicLevel * (remove ? getFullStrength(centreX, centreY, x, y) : getStrength(centreX, centreY, x, y));
+            nativeModified[index++] = (byte) (dynamicLevel * getFullStrength(centreX, centreY, x, y) > 0.75f ? 1 : 0);
+        }
+        return NibbleBrushAccess.tryApplyCombined(dimension, layer, terrain, remove ? (biome == -1 ? -1 : 255) : biome,
+                x1, y1, (int) width, (int) height, nativeStrengths, nativeModified, remove ? (oneTile ? 1 : 2) : 0);
     }
 
     private float[] nativeStrengths;

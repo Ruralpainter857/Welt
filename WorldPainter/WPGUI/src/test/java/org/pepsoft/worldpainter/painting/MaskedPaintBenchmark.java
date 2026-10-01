@@ -17,6 +17,11 @@ public final class MaskedPaintBenchmark {
             case "biome" -> new DiscreteLayerPaint(Biome.INSTANCE, 42);
             case "bit" -> new BitLayerPaint(Frost.INSTANCE);
             case "chunk" -> new BitLayerPaint(Populate.INSTANCE);
+            case "combined" -> {
+                CombinedLayer layer = new CombinedLayer("Parity", "Parity", java.awt.Color.GREEN);
+                layer.setTerrain(Terrain.CUSTOM_1); layer.setBiome(42); layer.setApplyTerrainAndBiomeOnExport(false);
+                yield new CombinedLayerPaint(layer);
+            }
             default -> throw new IllegalArgumentException(type);
         };
     }
@@ -50,7 +55,7 @@ public final class MaskedPaintBenchmark {
         dimension.setEventsInhibited(true);
         try {
             for (int pass = 0; pass < 2; pass++) for (int y = -192; y <= 192; y += 128) for (int x = -192; x <= 192; x += 128) {
-                if (pass == 1 && !type.equals("terrain")) painter.remove(dimension, x, y, 1f);
+                if (pass == 1 && !type.equals("terrain") && !type.equals("combined")) painter.remove(dimension, x, y, 1f);
                 else painter.apply(dimension, x, y, 1f);
             }
         } finally { dimension.setEventsInhibited(false); }

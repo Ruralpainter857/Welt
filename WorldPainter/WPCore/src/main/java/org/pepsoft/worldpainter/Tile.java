@@ -2582,6 +2582,38 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    synchronized void editCombinedNibbleRegion(Layer layer, Terrain terrainValue, int biomeValue, int x, int y, int width, int height,
+                                               float[] strengths, byte[] mask, int offset, int stride, int mode) {
+        checkHeightRegion(y, x, height, width, strengths.length, offset, stride);
+        checkHeightRegion(y, x, height, width, mask.length, offset, stride);
+        ensureReadable(LAYER_DATA); if (terrainValue != null) ensureReadable(TERRAIN);
+        boolean biomePresent = layerData.containsKey(Biome.INSTANCE);
+        ByteBuffer buffer = NibbleBrushAccess.editCombined(x, y, width, height, strengths, mask, offset, stride, mode,
+                layerData.get(layer), layer.getDefaultValue(), terrainValue == null ? null : terrain,
+                biomeValue < 0 ? null : layerData.get(Biome.INSTANCE), terrainValue == null ? -1 : terrainValue.ordinal(), biomeValue);
+        if (buffer == null) {
+            editNibbleRegion(layer, x, y, width, height, strengths, offset, stride, mode);
+            for (int dy = 0; dy < height; dy++) for (int dx = 0; dx < width; dx++) if (mask[offset + dy * stride + dx] != 0) {
+                if (terrainValue != null) setTerrain(x + dx, y + dy, terrainValue);
+                if (biomeValue >= 0) setLayerValue(Biome.INSTANCE, x + dx, y + dy, biomeValue);
+            }
+            return;
+        }
+        if (buffer.getInt(28) != 0) {
+            ensureWriteable(LAYER_DATA); applyNumericLayerPlane(layer, buffer, 64, 8192);
+            cachedLayers = null; layerDataChanged(layer);
+        }
+        if (buffer.getInt(44) != 0) {
+            if (terrainValue != null) {
+                ensureWriteable(TERRAIN); buffer.position(8256); buffer.get(terrain); terrainChanged();
+            }
+            if (biomeValue >= 0 && (biomePresent || biomeValue != Biome.INSTANCE.getDefaultValue())) {
+                ensureWriteable(LAYER_DATA); applyNumericLayerPlane(Biome.INSTANCE, buffer, 8256 + (terrainValue != null ? 16384 : 0), 16384);
+                cachedLayers = null; layerDataChanged(Biome.INSTANCE);
+            }
+        }
+    }
+
     synchronized boolean editNibbleRegionNative(Layer layer, int x, int y, int width, int height,
                                                 float[] strengths, int offset, int stride, int mode) {
         if (getClass() != Tile.class || eventInhibitionCounter == 0 || layer.dataSize != NIBBLE

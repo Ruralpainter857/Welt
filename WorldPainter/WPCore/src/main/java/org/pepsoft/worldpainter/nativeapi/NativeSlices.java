@@ -116,7 +116,7 @@ public final class NativeSlices {
     public static boolean editNibbleBrush(ByteBuffer buffer) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
                 || buffer == null || !buffer.isDirect() || buffer.isReadOnly()
-                || buffer.position() != 0 || buffer.limit() < 8240 || buffer.limit() > 73776) return false;
+                || buffer.position() != 0 || buffer.limit() < 8240 || buffer.limit() > 122944) return false;
         try { return nativeEditNibbleBrush(buffer, buffer.limit()) == 0; }
         catch (UnsatisfiedLinkError e) { return false; }
     }
