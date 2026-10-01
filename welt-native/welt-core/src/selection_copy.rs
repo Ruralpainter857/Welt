@@ -22,7 +22,7 @@ fn mask(d: &[u8], p: usize) -> u64 {
 fn put_mask(d: &mut [u8], p: usize, v: u64) {
     d[p..p + 8].copy_from_slice(&v.to_le_bytes());
 }
-fn length(kind: u32) -> usize {
+pub(crate) fn length(kind: u32) -> usize {
     match kind {
         0 => AREA * 4,
         1 => AREA,
@@ -32,14 +32,14 @@ fn length(kind: u32) -> usize {
         _ => 0,
     }
 }
-fn index(kind: u32, x: usize, y: usize) -> usize {
+pub(crate) fn index(kind: u32, x: usize, y: usize) -> usize {
     if kind == 4 {
         x / 16 + y / 16 * 8
     } else {
         x + y * 128
     }
 }
-fn get(d: &[u8], base: usize, kind: u32, i: usize) -> u32 {
+pub(crate) fn get(d: &[u8], base: usize, kind: u32, i: usize) -> u32 {
     match kind {
         0 => word(d, base + i * 4),
         1 => d[base + i] as u32,
@@ -47,7 +47,7 @@ fn get(d: &[u8], base: usize, kind: u32, i: usize) -> u32 {
         _ => ((d[base + i / 8] >> (i % 8)) & 1) as u32,
     }
 }
-fn set(d: &mut [u8], base: usize, kind: u32, i: usize, value: u32) {
+pub(crate) fn set(d: &mut [u8], base: usize, kind: u32, i: usize, value: u32) {
     match kind {
         0 => d[base + i * 4..base + i * 4 + 4].copy_from_slice(&value.to_le_bytes()),
         1 => d[base + i] = value as u8,
