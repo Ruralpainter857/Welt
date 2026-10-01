@@ -19,6 +19,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.io.ObjectInputStream;
 import java.util.*;
 
@@ -110,6 +111,57 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
         }
         tile.applyPreparedTheme(scratch.terrains, scratch.layers, scratch.values);
         return true;
+    }
+
+    /** Prépare une seule fois le thème à hauteur constante, sans consommer le flux aléatoire partagé. */
+    public final HeightFillPlan prepareHeightFill(int height) {
+        if (getClass() != SimpleTheme.class || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return null;
+        int h = clamp(minHeight, height, maxHeight - 1), count = getFreshTileLayerCount();
+        int range = maxHeight - minHeight, numeric = layerCache == null ? 0 : layerCache.length;
+        if (count > 64 || range <= 0 || range > 1_048_576) return null;
+        Layer[] layers = new Layer[count]; byte[] levels = new byte[count];
+        for (int l = 0; l < count; l++) {
+            Layer layer = l < numeric ? layerCache[l] : bitLayerCache[l - numeric];
+            int value = l < numeric ? layerLevelCache[l][h - minHeight] : bitLayerLevelCache[l - numeric][h - minHeight];
+            if (l >= numeric) {
+                // Une probabilité intermédiaire dépend de l'ordre exact du parcours Java.
+                if (value > 0 && value != 15) return null;
+                value = value == 15 ? 1 : 0;
+            }
+            if (value < 0 || value > layer.getDataSize().maxValue || layer.getDefaultValue() < 0
+                    || layer.getDefaultValue() > layer.getDataSize().maxValue) return null;
+            layers[l] = layer; levels[l] = (byte) value;
+        }
+        byte[] terrain = new byte[TILE_SIZE * TILE_SIZE];
+        if (uniformTerrain != null && !beaches) Arrays.fill(terrain, (byte) uniformTerrain.ordinal());
+        else {
+            for (Terrain t : terrainRangesTable) if (t == null) return null;
+            ThemeEditScratch scratch = THEME_EDIT_SCRATCH.get();
+            if (scratch.ranges.length != range) scratch.ranges = new int[range];
+            Arrays.fill(scratch.heights, h); copyTerrainRangeOrdinals(scratch.ranges);
+            if (!NativeSlices.fillSimpleThemeTerrainOrdinals(0, 0, TILE_SIZE, TILE_SIZE, minHeight, maxHeight,
+                    waterHeight, randomise, beaches, Terrain.BEACHES.ordinal(), seed, scratch.heights,
+                    scratch.ranges, scratch.terrains)) return null;
+            for (int i = 0; i < terrain.length; i++) terrain[i] = (byte) scratch.terrains[i];
+        }
+        return new HeightFillPlan(terrain, layers, levels, uniformTerrain != null && !beaches ? 0 : 1);
+    }
+
+    /** Plan immuable propre à l'action ; aucun scratch de worker n'est retenu lors d'une reprise. */
+    public static final class HeightFillPlan {
+        private final byte[] terrain, values;
+        private final Layer[] layers;
+        private final int preparationCalls;
+        private HeightFillPlan(byte[] terrain, Layer[] layers, byte[] values, int preparationCalls) {
+            this.terrain = terrain; this.layers = layers; this.values = values; this.preparationCalls = preparationCalls;
+        }
+        public int getPreparationCalls() { return preparationCalls; }
+        public void copyTerrain(ByteBuffer data) {
+            data.duplicate().position(64 + TILE_SIZE * TILE_SIZE * 4).put(terrain);
+        }
+        public void apply(Tile tile, ByteBuffer data) {
+            tile.applyHeightThemeFlood(data, layers, values);
+        }
     }
 
     private static final ThreadLocal<ThemeEditScratch> THEME_EDIT_SCRATCH = ThreadLocal.withInitial(ThemeEditScratch::new);

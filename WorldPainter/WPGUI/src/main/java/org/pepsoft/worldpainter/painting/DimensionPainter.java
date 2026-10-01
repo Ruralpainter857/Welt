@@ -450,7 +450,7 @@ public final class DimensionPainter {
             };
         };
         if (! fillMethod.isFilled(x, y)) {
-            if (additionalAction != AdditionalFillAction.APPLY_THEME && tryNativeHeightFill(dimension, x, y, parent, additionalAction, fillMethod.getDescription())) return true;
+            if (tryNativeHeightFill(dimension, x, y, parent, additionalAction, fillMethod.getDescription())) return true;
             GeneralQueueLinearFloodFiller filler = new GeneralQueueLinearFloodFiller(fillMethod);
             filler.floodFill(x, y, parent);
             return ! filler.isBoundsHit();
@@ -684,6 +684,7 @@ public final class DimensionPainter {
         long started = System.nanoTime();
         HeightFloodSession session;
         if (action == NONE) session = HeightFloodSession.tryStart(dimension, x, y);
+        else if (action == AdditionalFillAction.APPLY_THEME) session = HeightFloodSession.tryStartWithTheme(dimension, x, y);
         else {
             Layer layer = null; Terrain terrain = null; int target = 0, mode = 0;
             if (paint.getClass() == TerrainPaint.class) terrain = ((TerrainPaint) paint).getTerrain();

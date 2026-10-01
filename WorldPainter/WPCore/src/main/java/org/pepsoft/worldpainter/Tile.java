@@ -219,38 +219,57 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
 
     /** Applique un thème préparé sans contourner les buffers d'annulation ni les événements différés. */
     public synchronized void applyPreparedTheme(int[] terrains, Layer[] layers, byte[][] values) {
+        applyThemePlanes(terrains, layers, values, null, null);
+    }
+
+    /** Le relief et son thème utilisent le même masque, sans setters individuels. */
+    public synchronized void applyHeightThemeFlood(ByteBuffer data, Layer[] layers, byte[] values) {
+        applyThemePlanes(null, layers, null, values, data);
+    }
+
+    private void applyThemePlanes(int[] terrains, Layer[] layers, byte[][] values, byte[] constants, ByteBuffer data) {
         final int area = TILE_SIZE * TILE_SIZE;
         if (getClass() != Tile.class || eventInhibitionCounter == 0) throw new IllegalStateException("Inhibited plain tile required");
-        if (terrains.length != area || layers.length != values.length) throw new IllegalArgumentException("Invalid theme planes");
-        for (int ordinal : terrains) if (ordinal < 0 || ordinal >= TERRAIN_VALUES.length) throw new IllegalArgumentException("Invalid terrain");
+        if (data == null ? terrains.length != area || layers.length != values.length
+                : data.limit() != 100416 || constants.length != layers.length) throw new IllegalArgumentException("Invalid theme planes");
+        for (int i = 0; i < area; i++) {
+            int ordinal = data == null ? terrains[i] : data.get(64 + area * 4 + i) & 255;
+            if (ordinal < 0 || ordinal >= TERRAIN_VALUES.length) throw new IllegalArgumentException("Invalid terrain");
+        }
         for (int l = 0; l < layers.length; l++) {
             DataSize size = layers[l].getDataSize();
             if (size != DataSize.BIT && size != DataSize.BIT_PER_CHUNK && size != NIBBLE && size != BYTE
-                    || values[l].length != area) throw new IllegalArgumentException("Invalid layer plane");
-            for (byte value : values[l]) if ((value & 255) > size.maxValue) throw new IllegalArgumentException("Invalid layer value");
+                    || data == null && values[l].length != area) throw new IllegalArgumentException("Invalid layer plane");
+            if (data == null) { for (byte value : values[l]) if ((value & 255) > size.maxValue) throw new IllegalArgumentException("Invalid layer value"); }
+            else if ((constants[l] & 255) > size.maxValue) throw new IllegalArgumentException("Invalid layer value");
         }
+        if (data != null) applyHeightFlood(data, data.getInt(16), 64 + area * 5);
         ensureReadable(TERRAIN);
         boolean changed = false;
-        for (int i = 0; i < area; i++) if ((terrain[i] & 255) != terrains[i]) {
+        for (int i = 0; i < area; i++) {
+            if (data != null && (data.get(64 + area * 5 + i) & 1) == 0) continue;
+            int target = data == null ? terrains[i] : data.get(64 + area * 4 + i) & 255;
+            if ((terrain[i] & 255) == target) continue;
             if (!changed) { ensureWriteable(TERRAIN); changed = true; }
-            terrain[i] = (byte) terrains[i];
+            terrain[i] = (byte) target;
         }
         if (changed) terrainChanged();
         for (int l = 0; l < layers.length; l++) {
-            Layer layer = layers[l]; DataSize size = layer.getDataSize(); byte[] plane = values[l];
+            Layer layer = layers[l]; DataSize size = layer.getDataSize(); byte[] plane = data == null ? values[l] : null;
             boolean bit = size == DataSize.BIT || size == DataSize.BIT_PER_CHUNK;
             ensureReadable(bit ? BIT_LAYER_DATA : LAYER_DATA);
             BitSet bits = bit ? bitLayerData.get(layer) : null;
-            byte[] data = bit ? null : layerData.get(layer);
+            byte[] layerBytes = bit ? null : layerData.get(layer);
             changed = false;
             // L'ordre X/Y conserve les mutations successives des couches par chunk.
             for (int x = 0; x < TILE_SIZE; x++) for (int y = 0; y < TILE_SIZE; y++) {
                 int index = x | y << TILE_SIZE_BITS;
-                int target = plane[index] & 255;
+                if (data != null && (data.get(64 + area * 5 + index) & 1) == 0) continue;
+                int target = data == null ? plane[index] & 255 : constants[l] & 255;
                 int offset = size == DataSize.BIT_PER_CHUNK ? x / 16 + (y / 16) * 8 : index;
                 int current = bit ? bits != null && bits.get(offset) ? 1 : 0
-                        : data == null ? layer.getDefaultValue()
-                        : size == NIBBLE ? (data[index / 2] >>> ((index & 1) * 4)) & 15 : data[index] & 255;
+                        : layerBytes == null ? layer.getDefaultValue()
+                        : size == NIBBLE ? (layerBytes[index / 2] >>> ((index & 1) * 4)) & 15 : layerBytes[index] & 255;
                 if (current == target) continue;
                 if (!changed) {
                     ensureWriteable(bit ? BIT_LAYER_DATA : LAYER_DATA);
@@ -258,22 +277,22 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                         bits = bitLayerData.get(layer);
                         if (bits == null) { bits = new BitSet(size == DataSize.BIT ? area : 64); bitLayerData.put(layer, bits); cachedLayers = null; }
                     } else {
-                        data = layerData.get(layer);
-                        if (data == null) {
-                            data = new byte[size == NIBBLE ? area / 2 : area];
+                        layerBytes = layerData.get(layer);
+                        if (layerBytes == null) {
+                            layerBytes = new byte[size == NIBBLE ? area / 2 : area];
                             int d = layer.getDefaultValue();
-                            if (d != 0) Arrays.fill(data, (byte) (size == NIBBLE ? d | d << 4 : d));
-                            layerData.put(layer, data); cachedLayers = null;
+                            if (d != 0) Arrays.fill(layerBytes, (byte) (size == NIBBLE ? d | d << 4 : d));
+                            layerData.put(layer, layerBytes); cachedLayers = null;
                         }
-                        data = detachSharedLayerDataBuffer(layer, data);
+                        layerBytes = detachSharedLayerDataBuffer(layer, layerBytes);
                     }
                     changed = true;
                 }
                 if (bit) bits.set(offset, target != 0);
                 else if (size == NIBBLE) {
                     int shift = (index & 1) * 4;
-                    data[index / 2] = (byte) ((data[index / 2] & ~(15 << shift)) | target << shift);
-                } else data[index] = (byte) target;
+                    layerBytes[index / 2] = (byte) ((layerBytes[index / 2] & ~(15 << shift)) | target << shift);
+                } else layerBytes[index] = (byte) target;
             }
             if (changed) layerDataChanged(layer);
         }

@@ -26,7 +26,7 @@ pub fn edit(d: &mut [u8], queue: &mut Vec<usize>) -> Result<(), WeltError> {
                 || ![1, 4, 8].contains(&bits)
                 || target < 0
                 || target >= 1 << bits
-                || !(0..=1).contains(&mode)
+                || !(0..=2).contains(&mode)
                 || d[32..64].iter().any(|&v| v != 0)
                 || d[64 + AREA * 4..64 + AREA * 5]
                     .iter()
@@ -56,8 +56,10 @@ pub fn edit(d: &mut [u8], queue: &mut Vec<usize>) -> Result<(), WeltError> {
     );
     for &i in queue.iter() {
         heights[i * 4..i * 4 + 4].copy_from_slice(&level.to_le_bytes());
-        if painted && (mode == 0 || values[i] < target as u8) {
-            values[i] = target as u8;
+        if painted && (mode == 0 || mode == 2 || values[i] < target as u8) {
+            if mode != 2 {
+                values[i] = target as u8;
+            }
             flags[i] |= 2;
         }
     }
@@ -70,6 +72,32 @@ pub fn edit(d: &mut [u8], queue: &mut Vec<usize>) -> Result<(), WeltError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn prepared_theme_keeps_its_local_terrain_palette() {
+        let mut d = vec![0; MAX_BYTES];
+        for (at, v) in [
+            (0, 0x48464c57i32),
+            (4, 2),
+            (8, 128),
+            (12, 128),
+            (16, 51),
+            (24, 2),
+            (28, 8),
+        ] {
+            d[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        for i in 0..AREA {
+            d[64 + i * 4..68 + i * 4].copy_from_slice(&50i32.to_le_bytes());
+            d[64 + AREA * 4 + i] = (i % 251) as u8;
+        }
+        let before = d[64 + AREA * 4..64 + AREA * 5].to_vec();
+        d[64 + AREA * 6] = 1;
+        edit(&mut d, &mut Vec::new()).unwrap();
+        assert_eq!(&d[64 + AREA * 4..64 + AREA * 5], before.as_slice());
+        assert_eq!(word(&d, 36), AREA as i32);
+        assert!(d[64 + AREA * 5..64 + AREA * 6].iter().all(|&v| v == 3));
+    }
+
     #[test]
     fn paint_and_height_share_the_selected_cells_and_validate_atomically() {
         for mode in 0..=1 {
