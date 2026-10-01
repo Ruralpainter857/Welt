@@ -1,27 +1,46 @@
-//! WLFH v1 : propagation des hauteurs quantifiées sur une tuile et ses entrées.
+//! WLFH v1/v2 : relief et peinture traités ensemble sur une tuile et ses entrées.
 use crate::error::WeltError;
 use crate::flood_frontier::{collect_many, Frontier};
 
 const AREA: usize = 16_384;
-pub const MAX_BYTES: usize = 64 + AREA * 5 + AREA / 8;
+pub const HEIGHT_ONLY_BYTES: usize = 64 + AREA * 5 + AREA / 8;
+pub const MAX_BYTES: usize = 64 + AREA * 6 + AREA / 8;
 fn word(d: &[u8], at: usize) -> i32 {
     i32::from_le_bytes(d[at..at + 4].try_into().unwrap())
 }
 
 /// Le niveau est global ; les tuiles manquantes restent traversables comme les getters Java.
 pub fn edit(d: &mut [u8], queue: &mut Vec<usize>) -> Result<(), WeltError> {
-    if d.len() != MAX_BYTES
-        || word(d, 0) != 0x48464c57
-        || word(d, 4) != 1
+    if d.len() < 64 {
+        return Err(WeltError::IllegalArgument);
+    }
+    let painted = word(d, 4) == 2;
+    let target = word(d, 20);
+    let mode = word(d, 24);
+    let bits = word(d, 28);
+    if word(d, 0) != 0x48464c57
         || word(d, 8) != 128
         || word(d, 12) != 128
-        || d[20..64].iter().any(|&v| v != 0)
+        || if painted {
+            d.len() != MAX_BYTES
+                || ![1, 4, 8].contains(&bits)
+                || target < 0
+                || target >= 1 << bits
+                || !(0..=1).contains(&mode)
+                || d[32..64].iter().any(|&v| v != 0)
+                || d[64 + AREA * 4..64 + AREA * 5]
+                    .iter()
+                    .any(|&v| v as i32 >= 1 << bits)
+        } else {
+            d.len() != HEIGHT_ONLY_BYTES || word(d, 4) != 1 || d[20..64].iter().any(|&v| v != 0)
+        }
     {
         return Err(WeltError::IllegalArgument);
     }
     let level = word(d, 16);
-    let (planes, seeds) = d[64..].split_at_mut(AREA * 5);
-    let (heights, flags) = planes.split_at_mut(AREA * 4);
+    let (planes, seeds) = d[64..].split_at_mut(AREA * if painted { 6 } else { 5 });
+    let (heights, rest) = planes.split_at_mut(AREA * 4);
+    let (values, flags) = rest.split_at_mut(if painted { AREA } else { 0 });
     collect_many(
         Frontier {
             width: 128,
@@ -37,6 +56,10 @@ pub fn edit(d: &mut [u8], queue: &mut Vec<usize>) -> Result<(), WeltError> {
     );
     for &i in queue.iter() {
         heights[i * 4..i * 4 + 4].copy_from_slice(&level.to_le_bytes());
+        if painted && (mode == 0 || values[i] < target as u8) {
+            values[i] = target as u8;
+            flags[i] |= 2;
+        }
     }
     let remaining = (0..AREA).filter(|&i| word(heights, i * 4) < level).count();
     d[36..40].copy_from_slice(&(queue.len() as u32).to_le_bytes());
@@ -48,8 +71,46 @@ pub fn edit(d: &mut [u8], queue: &mut Vec<usize>) -> Result<(), WeltError> {
 mod tests {
     use super::*;
     #[test]
+    fn paint_and_height_share_the_selected_cells_and_validate_atomically() {
+        for mode in 0..=1 {
+            let mut d = vec![0; MAX_BYTES];
+            for (at, v) in [
+                (0, 0x48464c57i32),
+                (4, 2),
+                (8, 128),
+                (12, 128),
+                (16, 51),
+                (20, 9),
+                (24, mode),
+                (28, 4),
+            ] {
+                d[at..at + 4].copy_from_slice(&v.to_le_bytes());
+            }
+            for i in 0..AREA {
+                let h = if i % 128 == 64 { 100i32 } else { 50 };
+                d[64 + i * 4..68 + i * 4].copy_from_slice(&h.to_le_bytes());
+                d[64 + AREA * 4 + i] = if i % 128 < 32 { 5 } else { 15 };
+            }
+            d[64 + AREA * 6] = 1;
+            let mut invalid = d.clone();
+            invalid[64 + AREA * 4 + 127] = 16;
+            let before = invalid.clone();
+            assert!(edit(&mut invalid, &mut Vec::new()).is_err());
+            assert_eq!(invalid, before);
+            edit(&mut d, &mut Vec::new()).unwrap();
+            assert_eq!(word(&d, 36), 64 * 128);
+            for i in 0..AREA {
+                assert_eq!(d[64 + AREA * 5 + i] & 1 != 0, i % 128 < 64);
+                assert_eq!(
+                    d[64 + AREA * 5 + i] & 2 != 0,
+                    i % 128 < (if mode == 0 { 64 } else { 32 })
+                );
+            }
+        }
+    }
+    #[test]
     fn reentry_and_missing_cells_preserve_global_level() {
-        let mut d = vec![0; MAX_BYTES];
+        let mut d = vec![0; HEIGHT_ONLY_BYTES];
         for (at, v) in [(0, 0x48464c57i32), (4, 1), (8, 128), (12, 128), (16, 51)] {
             d[at..at + 4].copy_from_slice(&v.to_le_bytes());
         }

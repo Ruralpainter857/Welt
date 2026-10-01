@@ -509,6 +509,10 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
 
     /** Snapshot compact des valeurs de peinture et de la présence des cellules. */
     synchronized void copyFloodPaint(ByteBuffer buffer, int offset, int stride, int area, Layer layer) {
+        copyFloodPaintPlanes(buffer, offset, stride, 64, 64 + area, layer);
+    }
+
+    private void copyFloodPaintPlanes(ByteBuffer buffer, int offset, int stride, int valueBase, int flagsBase, Layer layer) {
         boolean bit = layer != null && layer.dataSize == DataSize.BIT;
         ensureReadable(layer == null ? TERRAIN : bit ? BIT_LAYER_DATA : LAYER_DATA);
         BitSet bits = bit ? bitLayerData.get(layer) : null;
@@ -519,19 +523,26 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
             int cell = x | y << 7, i = offset + x + y * stride;
             int value = bit ? bits != null && bits.get(cell) ? 1 : 0 : values == null ? defaults
                     : nibble ? (values[cell / 2] >>> ((cell & 1) * 4)) & 15 : values[cell] & 255;
-            buffer.put(64 + i, (byte) value).put(64 + area + i, (byte) 1);
+            buffer.put(valueBase + i, (byte) value).put(flagsBase + i, (byte) 1);
         }
     }
 
     /** Applique le même plan muté en Rust sans répéter les setters ni les recherches de couches. */
     synchronized void applyFloodPaint(ByteBuffer buffer, int offset, int stride, int area, Layer layer) {
+        applyFloodPaintPlanes(buffer, offset, stride, 64, 64 + area, layer, false);
+    }
+
+    private void applyFloodPaintPlanes(ByteBuffer buffer, int offset, int stride, int valueBase, int flagsBase, Layer layer, boolean skipMissingDefaults) {
         if (eventInhibitionCounter == 0) throw new IllegalStateException("Flood paint requires inhibited events");
         boolean bit = layer != null && layer.dataSize == DataSize.BIT;
         boolean nibble = layer != null && layer.dataSize == NIBBLE;
         boolean changed = false; BitSet bits = null; byte[] values = null;
+        if (skipMissingDefaults && layer != null && !bit) ensureReadable(LAYER_DATA);
+        boolean absent = skipMissingDefaults && layer != null && !bit && layerData.get(layer) == null;
         for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++) {
             int cell = x | y << 7, i = offset + x + y * stride;
-            if ((buffer.get(64 + area + i) & 2) == 0) continue;
+            if ((buffer.get(flagsBase + i) & 2) == 0) continue;
+            if (absent && (buffer.get(valueBase + i) & 255) == layer.getDefaultValue()) continue;
             if (!changed) {
                 ensureWriteable(layer == null ? TERRAIN : bit ? BIT_LAYER_DATA : LAYER_DATA);
                 if (bit) {
@@ -542,13 +553,13 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                     if (values == null) {
                         values = new byte[nibble ? 8192 : 16384]; int defaults = layer.getDefaultValue();
                         if (defaults != 0) Arrays.fill(values, (byte) (nibble ? defaults | defaults << 4 : defaults));
-                        layerData.put(layer, values); cachedLayers = null;
+                        layerData.put(layer, values); cachedLayers = null; absent = false;
                     }
                     if (layer != null) values = detachSharedLayerDataBuffer(layer, values);
                 }
                 changed = true;
             }
-            int value = buffer.get(64 + i) & 255;
+            int value = buffer.get(valueBase + i) & 255;
             if (bit) bits.set(cell, value != 0);
             else if (nibble) {
                 int shift = (cell & 1) * 4;
@@ -567,15 +578,31 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
 
     /** Écriture groupée du niveau constant, avec les mêmes conversions que setHeight. */
     synchronized void applyHeightFlood(ByteBuffer data, int level) {
+        applyHeightFlood(data, level, 64 + TILE_SIZE * TILE_SIZE * 4);
+    }
+
+    private void applyHeightFlood(ByteBuffer data, int level, int flagsBase) {
         if (getClass() != Tile.class || eventInhibitionCounter == 0) throw new IllegalStateException("Inhibited plain tile required");
         int raw = (int) (((float) level - minHeight) * 256f);
         boolean changed = false;
         for (int i = 0; i < TILE_SIZE * TILE_SIZE; i++) {
-            if (data.get(64 + TILE_SIZE * TILE_SIZE * 4 + i) == 0) continue;
+            if ((data.get(flagsBase + i) & 1) == 0) continue;
             if (!changed) { ensureWriteable(tall ? TALL_HEIGHTMAP : HEIGHTMAP); changed = true; }
             if (tall) tallHeightMap[i] = raw; else heightMap[i] = (short) raw;
         }
         if (changed) heightMapChanged();
+    }
+
+    /** Relief et peinture utilisent les mêmes buffers et un seul verrou par tuile. */
+    synchronized void copyHeightPaintFlood(ByteBuffer data, Layer layer) {
+        copyHeightFlood(data);
+        copyFloodPaintPlanes(data, 0, TILE_SIZE, 64 + 16384 * 4, 64 + 16384 * 5, layer);
+    }
+
+    /** Applique les deux plans avec leurs masques, en conservant le COW et les événements. */
+    synchronized void applyHeightPaintFlood(ByteBuffer data, int level, Layer layer) {
+        applyHeightFlood(data, level, 64 + 16384 * 5);
+        applyFloodPaintPlanes(data, 0, TILE_SIZE, 64 + 16384 * 4, 64 + 16384 * 5, layer, true);
     }
 
     /** Copie les trois plans nécessaires à l'inondation sous un seul verrou. */

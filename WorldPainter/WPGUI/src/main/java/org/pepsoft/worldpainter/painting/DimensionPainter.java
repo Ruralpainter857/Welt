@@ -450,7 +450,7 @@ public final class DimensionPainter {
             };
         };
         if (! fillMethod.isFilled(x, y)) {
-            if (additionalAction == NONE && tryNativeHeightFill(dimension, x, y, parent)) return true;
+            if (additionalAction != AdditionalFillAction.APPLY_THEME && tryNativeHeightFill(dimension, x, y, parent, additionalAction, fillMethod.getDescription())) return true;
             GeneralQueueLinearFloodFiller filler = new GeneralQueueLinearFloodFiller(fillMethod);
             filler.floodFill(x, y, parent);
             return ! filler.isBoundsHit();
@@ -680,15 +680,27 @@ public final class DimensionPainter {
     private static final Brush MY_CONSTANT_CIRCLE = SymmetricBrush.CONSTANT_CIRCLE.clone();
 
     /** Le parcours progressif conserve le comportement d'annulation de Fill. */
-    private boolean tryNativeHeightFill(Dimension dimension, int x, int y, Window parent) {
+    private boolean tryNativeHeightFill(Dimension dimension, int x, int y, Window parent, AdditionalFillAction action, String description) {
         long started = System.nanoTime();
-        HeightFloodSession session = HeightFloodSession.tryStart(dimension, x, y);
+        HeightFloodSession session;
+        if (action == NONE) session = HeightFloodSession.tryStart(dimension, x, y);
+        else {
+            Layer layer = null; Terrain terrain = null; int target = 0, mode = 0;
+            if (paint.getClass() == TerrainPaint.class) terrain = ((TerrainPaint) paint).getTerrain();
+            else if (paint.getClass() == BitLayerPaint.class) { layer = ((LayerPaint) paint).getLayer(); target = 1; }
+            else if (paint.getClass() == DiscreteLayerPaint.class) {
+                layer = ((LayerPaint) paint).getLayer(); target = ((DiscreteLayerPaint) paint).getValue();
+            } else if (paint.getClass() == NibbleLayerPaint.class && hasStableBrushLevel(paint)) {
+                layer = ((LayerPaint) paint).getLayer(); target = 1 + Math.round(paint.getBrush().getLevel() * 14); mode = 1;
+            } else return false;
+            session = HeightFloodSession.tryStart(dimension, x, y, layer, terrain, target, mode);
+        }
         if (session == null) return false;
         while (!session.isComplete()) {
             session.advance();
             if (!session.isComplete() && System.nanoTime() - started > 2_000_000_000L) {
                 ProgressDialog.executeTask(parent, new ProgressTask<Boolean>() {
-                    @Override public String getName() { return "Raising Terrain"; }
+                    @Override public String getName() { return description; }
                     @Override public Boolean execute(ProgressReceiver progress) throws ProgressReceiver.OperationCancelled {
                         while (!session.isComplete()) { progress.checkForCancellation(); session.advance(); }
                         return true;
