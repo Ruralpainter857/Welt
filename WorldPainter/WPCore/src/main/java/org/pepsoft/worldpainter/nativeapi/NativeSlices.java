@@ -112,6 +112,15 @@ public final class NativeSlices {
     }
     private static native int nativeFloodPaintRegion(ByteBuffer buffer, int length);
 
+    /** WMIM v1: source raster, mapping gates and one packed output plane share the transaction. */
+    public static boolean importMaskTile(ByteBuffer buffer) {
+        if(!Native.isGenEnabled()||!NativeLoader.areSlicesAvailable()||buffer==null||!buffer.isDirect()
+                ||buffer.isReadOnly()||buffer.position()!=0||buffer.limit()<256||buffer.limit()>4*1024*1024)return false;
+        try{return nativeImportMaskTile(buffer,buffer.limit())==0;}
+        catch(UnsatisfiedLinkError e){return false;}
+    }
+    private static native int nativeImportMaskTile(ByteBuffer buffer,int length);
+
     /** WGLY v1: one packed glyph crop and all its paint planes remain in one buffer. */
     public static boolean paintGlyphTile(ByteBuffer buffer) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()

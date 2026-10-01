@@ -10,7 +10,8 @@ import org.pepsoft.worldpainter.layers.Layer;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.awt.image.IndexColorModel;
-import java.util.Random;
+import org.pepsoft.worldpainter.MaskImportAccess;
+import org.pepsoft.worldpainter.nativeapi.SnapshotRandom;
 
 import static java.awt.RenderingHints.KEY_DITHERING;
 import static java.awt.RenderingHints.VALUE_DITHER_ENABLE;
@@ -23,6 +24,8 @@ abstract class Mapping {
         this.aspect = aspect;
         this.description = description;
     }
+
+    MaskImportAccess.Plan nativePlan() { return null; }
 
     String getAspect() {
         return aspect;
@@ -74,6 +77,11 @@ abstract class Mapping {
 
     Mapping ditheredActualRange() {
         return new Mapping(aspect, description + " (dithered from actual mask range)") {
+            @Override MaskImportAccess.Plan nativePlan() {
+                MaskImportAccess.Plan parent=Mapping.this.nativePlan();
+                return parent==null?null:parent.gated(2,random);
+            }
+
             @Override
             void applyGreyScale(int x, int y, double maskValue) {
                 if ((maskValue >= maskHighValue) || ((maskValue > maskLowValue) && (maskValue > (random.nextDouble() * (maskHighValue - maskLowValue) + maskLowValue)))) {
@@ -128,12 +136,17 @@ abstract class Mapping {
                 return Mapping.this.isThreshold();
             }
 
-            private final Random random = new Random(0L);
+            private final SnapshotRandom random = new SnapshotRandom(0L);
         };
     }
 
     Mapping ditheredFullRange() {
         return new Mapping(aspect, description + " (dithered from full mask range)") {
+            @Override MaskImportAccess.Plan nativePlan() {
+                MaskImportAccess.Plan parent=Mapping.this.nativePlan();
+                return parent==null?null:parent.gated(3,random);
+            }
+
             @Override
             void applyGreyScale(int x, int y, double maskValue) {
                 if ((maskValue > 0.0) && (maskValue > random.nextDouble() * maskMaxValue)) {
@@ -188,12 +201,17 @@ abstract class Mapping {
                 return Mapping.this.isThreshold();
             }
 
-            private final Random random = new Random(0L);
+            private final SnapshotRandom random = new SnapshotRandom(0L);
         };
     }
 
     Mapping threshold() {
         return new Mapping(aspect, description + " where mask is at or above threshold") {
+            @Override MaskImportAccess.Plan nativePlan() {
+                MaskImportAccess.Plan parent=Mapping.this.nativePlan();
+                return parent==null?null:parent.gated(1,null);
+            }
+
             @Override
             void applyGreyScale(int x, int y, double maskValue) {
                 if (maskValue >= threshold) {
@@ -252,6 +270,8 @@ abstract class Mapping {
 
     static Mapping setTerrainValue(Terrain terrain) {
         return new Mapping("terrain " + terrain, "Set terrain type to " + terrain) {
+            @Override MaskImportAccess.Plan nativePlan() { return new MaskImportAccess.Plan(null,0,terrain.ordinal(),null); }
+
             @Override
             void applyGreyScale(int x, int y, double maskValue) {
                 if (maskValue > 0.5) {
@@ -264,7 +284,9 @@ abstract class Mapping {
     static Mapping setLayerValue(Layer layer, int targetValue) {
         if (layer.dataSize.maxValue == 1) {
             return new Mapping("layer " + layer + " (value " + targetValue + ")", "Set layer " + layer + " to selected value") {
-                @Override
+                @Override MaskImportAccess.Plan nativePlan() { return new MaskImportAccess.Plan(layer,1,targetValue,null); }
+
+            @Override
                 void applyGreyScale(int x, int y, double maskValue) {
                     if ((targetValue != 0) && (maskValue > 0.5)) {
                         tile.setBitLayerValue(layer, x, y, true);
@@ -273,7 +295,9 @@ abstract class Mapping {
             };
         } else if (layer.discrete) {
             return new Mapping("layer " + layer + " (value " + targetValue + ")", "Set layer " + layer + " to selected value") {
-                @Override
+                @Override MaskImportAccess.Plan nativePlan() { return new MaskImportAccess.Plan(layer,2,targetValue,null); }
+
+            @Override
                 void applyGreyScale(int x, int y, double maskValue) {
                     if (maskValue > 0.5) {
                         tile.setLayerValue(layer, x, y, targetValue);
@@ -282,7 +306,9 @@ abstract class Mapping {
             };
         } else {
             return new Mapping("layer " + layer + " (value " + targetValue + ")", "Set layer " + layer + " to selected value") {
-                @Override
+                @Override MaskImportAccess.Plan nativePlan() { return new MaskImportAccess.Plan(layer,3,targetValue,null); }
+
+            @Override
                 void applyGreyScale(int x, int y, double maskValue) {
                     tile.setLayerValue(layer, x, y, Math.max(targetValue, tile.getLayerValue(layer, x, y)));
                 }
@@ -292,6 +318,8 @@ abstract class Mapping {
 
     static Mapping mapToTerrain() {
         return new Mapping("terrain", "Set terrain type index to mask value") {
+            @Override MaskImportAccess.Plan nativePlan() { return new MaskImportAccess.Plan(null,4,0,java.util.Arrays.stream(Terrain.VALUES).mapToInt(Terrain::ordinal).toArray()); }
+
             @Override
             void applyDiscrete(int x, int y, int maskValue) {
                 tile.setTerrain(x, y, Terrain.VALUES[maskValue]);
@@ -302,7 +330,9 @@ abstract class Mapping {
     static Mapping mapToLayer(Layer layer) {
         if (layer.discrete) {
             return new Mapping("layer " + layer, "Set layer " + layer + " to mask value") {
-                @Override
+                @Override MaskImportAccess.Plan nativePlan() { return new MaskImportAccess.Plan(layer,5,0,null); }
+
+            @Override
                 void applyDiscrete(int x, int y, int maskValue) {
                     if (maskValue != 0) {
                         tile.setLayerValue(layer, x, y, Math.max(maskValue, tile.getLayerValue(layer, x, y)));
@@ -311,7 +341,9 @@ abstract class Mapping {
             };
         } else if (layer.dataSize.maxValue == 1) {
             return new Mapping("layer " + layer, "Set layer " + layer + " to mask value") {
-                @Override
+                @Override MaskImportAccess.Plan nativePlan() { return new MaskImportAccess.Plan(layer,6,0,null); }
+
+            @Override
                 void applyGreyScale(int x, int y, double maskValue) {
                     if (maskValue > 0.5) {
                         tile.setBitLayerValue(layer, x, y, true);
@@ -320,7 +352,9 @@ abstract class Mapping {
             };
         } else {
             return new Mapping("layer " + layer, "Set layer " + layer + " to mask value") {
-                @Override
+                @Override MaskImportAccess.Plan nativePlan() { return new MaskImportAccess.Plan(layer,7,0,null); }
+
+            @Override
                 void applyGreyScale(int x, int y, double maskValue) {
                     if (maskValue > 0.0) {
                         tile.setLayerValue(layer, x, y, (int) Math.max(Math.round(maskValue), tile.getLayerValue(layer, x, y)));
@@ -336,7 +370,9 @@ abstract class Mapping {
         }
         if (layer.discrete) {
             return new Mapping("layer " + layer, "Map layer " + layer + " to actual mask range") {
-                @Override
+                @Override MaskImportAccess.Plan nativePlan() { return new MaskImportAccess.Plan(layer,8,0,null); }
+
+            @Override
                 void applyGreyScale(int x, int y, double maskValue) {
                     if (maskValue > 0.0) {
                         tile.setLayerValue(layer, x, y, (int) Math.round((maskValue - maskLowValue) * layer.dataSize.maxValue / (maskHighValue - maskLowValue)));
@@ -345,7 +381,9 @@ abstract class Mapping {
             };
         } else {
             return new Mapping("layer " + layer, "Map layer " + layer + " to actual mask range") {
-                @Override
+                @Override MaskImportAccess.Plan nativePlan() { return new MaskImportAccess.Plan(layer,9,0,null); }
+
+            @Override
                 void applyGreyScale(int x, int y, double maskValue) {
                     tile.setLayerValue(layer, x, y, Math.max((int) Math.round((maskValue - maskLowValue) * layer.dataSize.maxValue / (maskHighValue - maskLowValue)), tile.getLayerValue(layer, x, y)));
                 }
@@ -364,7 +402,9 @@ abstract class Mapping {
         }
         if (layer.discrete) {
             return new Mapping("layer " + layer, "Map layer " + layer + " to full mask range") {
-                @Override
+                @Override MaskImportAccess.Plan nativePlan() { return new MaskImportAccess.Plan(layer,10,0,null); }
+
+            @Override
                 void applyGreyScale(int x, int y, double maskValue) {
                     if (maskValue > 0.0) {
                         tile.setLayerValue(layer, x, y, (int) Math.round(maskValue * layer.dataSize.maxValue / maskMaxValue));
@@ -373,7 +413,9 @@ abstract class Mapping {
             };
         } else {
             return new Mapping("layer " + layer, "Map layer " + layer + " to full mask range") {
-                @Override
+                @Override MaskImportAccess.Plan nativePlan() { return new MaskImportAccess.Plan(layer,11,0,null); }
+
+            @Override
                 void applyGreyScale(int x, int y, double maskValue) {
                     tile.setLayerValue(layer, x, y, Math.max((int) Math.round(maskValue * layer.dataSize.maxValue / maskMaxValue), tile.getLayerValue(layer, x, y)));
                 }
@@ -396,6 +438,8 @@ abstract class Mapping {
 
     static ColourToAnnotationsMapping colourToAnnotations() {
         return new ColourToAnnotationsMapping("annotations", "Map layer Annotations to mask colours") {
+            @Override MaskImportAccess.Plan nativePlan() { return new MaskImportAccess.Plan(Annotations.INSTANCE,12,0,COLOUR_ANNOTATION_MAPPING); }
+
             @Override
             void applyColour(int x, int y, int rgb) {
                 if (((rgb >> 24) & 0xff) > 0x7f) {
@@ -409,6 +453,8 @@ abstract class Mapping {
                     {
                         dithered = true;
                     }
+
+                    @Override MaskImportAccess.Plan nativePlan() { return new MaskImportAccess.Plan(Annotations.INSTANCE,12,0,COLOUR_ANNOTATION_MAPPING); }
 
                     @Override
                     void applyColour(int x, int y, int rgb) {

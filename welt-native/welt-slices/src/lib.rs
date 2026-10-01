@@ -4445,3 +4445,22 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
         })
     }
 }
+
+/// # Safety
+/// The writable direct frame stays exclusive and alive throughout the call.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeImportMaskTile(
+    env:*mut JNIEnv,_class:jclass,buffer:jobject,length:jint,
+)->jint{
+    unsafe{jni_catch(env,||{
+        if buffer.is_null()||length<256||length as usize>welt_gen::mask_import::MAX_BYTES{return WeltError::IllegalArgument as jint;}
+        type Address=unsafe extern "system" fn(*mut JNIEnv,jobject)->*mut c_void;
+        type Capacity=unsafe extern "system" fn(*mut JNIEnv,jobject)->jlong;
+        let address:Address=std::mem::transmute(function(env,GET_DIRECT_BUFFER_ADDRESS));
+        let capacity:Capacity=std::mem::transmute(function(env,GET_DIRECT_BUFFER_CAPACITY));
+        let pointer=address(env,buffer);
+        if pointer.is_null()||capacity(env,buffer)<length as jlong{return WeltError::IllegalArgument as jint;}
+        let data=slice::from_raw_parts_mut(pointer.cast::<u8>(),length as usize);
+        match welt_gen::mask_import::import(data){Ok(())=>WeltError::Ok as jint,Err(error)=>error as jint}
+    })}
+}
