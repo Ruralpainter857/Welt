@@ -13,13 +13,33 @@ pub(crate) fn collect(
     queue: &mut Vec<usize>,
     accept: impl Fn(usize) -> bool,
 ) {
+    let seed = spec.seed;
+    collect_many(spec, flags, queue, [seed], true, accept);
+}
+
+/// Regroupe les points d'entrée d'une tuile avant de parcourir sa frontière.
+pub(crate) fn collect_many(
+    spec: Frontier,
+    flags: &mut [u8],
+    queue: &mut Vec<usize>,
+    seeds: impl IntoIterator<Item = usize>,
+    force: bool,
+    accept: impl Fn(usize) -> bool,
+) {
     queue.clear();
     queue.reserve(flags.len());
     for flag in flags.iter_mut() {
         *flag &= spec.present_bit;
     }
-    queue.push(spec.seed);
-    flags[spec.seed] |= spec.visited_bit;
+    for seed in seeds {
+        if flags[seed] & spec.visited_bit == 0
+            && (force
+                || (spec.present_bit == 0 || flags[seed] & spec.present_bit != 0) && accept(seed))
+        {
+            queue.push(seed);
+            flags[seed] |= spec.visited_bit;
+        }
+    }
     let mut next = 0;
     while next < queue.len() {
         let cell = queue[next];

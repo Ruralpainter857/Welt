@@ -9,6 +9,10 @@ package org.pepsoft.worldpainter.painting;
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.Terrain;
 import org.pepsoft.worldpainter.PaintFloodAccess;
+import org.pepsoft.worldpainter.PaintFloodSession;
+import org.pepsoft.util.ProgressReceiver;
+import org.pepsoft.util.swing.ProgressDialog;
+import org.pepsoft.util.swing.ProgressTask;
 import org.pepsoft.worldpainter.brushes.Brush;
 import org.pepsoft.worldpainter.brushes.LineBrush;
 import org.pepsoft.worldpainter.brushes.SymmetricBrush;
@@ -369,7 +373,7 @@ public final class DimensionPainter {
             throw new IllegalArgumentException("Don't know how to fill with paint " + paint);
         }
         if (! fillMethod.isFilled(x, y)) {
-            if (tryNativePaintFill(dimension, x, y)) return true;
+            if (tryNativePaintFill(dimension, x, y, parent, description)) return true;
             final GeneralQueueLinearFloodFiller filler = new GeneralQueueLinearFloodFiller(fillMethod);
             filler.floodFill(x, y, parent);
             return ! filler.isBoundsHit();
@@ -674,20 +678,38 @@ public final class DimensionPainter {
     private static final Brush MY_CONSTANT_CIRCLE = SymmetricBrush.CONSTANT_CIRCLE.clone();
 
     /** Les peintures personnalisées et le thème retiré conservent leur ordre historique. */
-    private boolean tryNativePaintFill(Dimension dimension, int x, int y) {
-        if (paint.getClass() == TerrainPaint.class) {
-            return !undo && PaintFloodAccess.tryFill(dimension, x, y, null, ((TerrainPaint) paint).getTerrain(), 0, PaintFloodAccess.EQUAL);
+    private boolean tryNativePaintFill(Dimension dimension, int x, int y, Window parent, String description) {
+        Layer layer = null; Terrain terrain = null; int target, mode = PaintFloodAccess.EQUAL;
+        if (paint.getClass() == TerrainPaint.class && !undo) {
+            terrain = ((TerrainPaint) paint).getTerrain(); target = terrain.ordinal();
+        } else if (paint instanceof LayerPaint) {
+            layer = ((LayerPaint) paint).getLayer();
+            if (paint.getClass() == BitLayerPaint.class && layer.dataSize == Layer.DataSize.BIT) target = undo ? 0 : 1;
+            else if (paint.getClass() == DiscreteLayerPaint.class) target = undo ? layer.getDefaultValue() : ((DiscreteLayerPaint) paint).getValue();
+            else if (paint.getClass() == NibbleLayerPaint.class && hasStableBrushLevel(paint)) {
+                target = undo ? 0 : 1 + Math.round(paint.getBrush().getLevel() * 14);
+                mode = undo ? PaintFloodAccess.ERASE : PaintFloodAccess.RAISE;
+            } else return false;
+        } else return false;
+        if (PaintFloodAccess.tryFill(dimension, x, y, layer, terrain, target, mode)) return true;
+        PaintFloodSession session = PaintFloodSession.tryStart(dimension, x, y, layer, terrain, target, mode);
+        if (session == null) return false;
+        long started = System.nanoTime();
+        while (!session.isComplete()) {
+            session.advance();
+            if (!session.isComplete() && System.nanoTime() - started > 2_000_000_000L) {
+                // Le même parcours reprend dans le worker du dialogue, avec annulation entre les tuiles.
+                ProgressDialog.executeTask(parent, new ProgressTask<Boolean>() {
+                    @Override public String getName() { return description; }
+                    @Override public Boolean execute(ProgressReceiver progress) throws ProgressReceiver.OperationCancelled {
+                        while (!session.isComplete()) { progress.checkForCancellation(); session.advance(); }
+                        return true;
+                    }
+                });
+                return true;
+            }
         }
-        if (!(paint instanceof LayerPaint)) return false;
-        Layer layer = ((LayerPaint) paint).getLayer();
-        if (paint.getClass() == BitLayerPaint.class && layer.dataSize == Layer.DataSize.BIT)
-            return PaintFloodAccess.tryFill(dimension, x, y, layer, null, undo ? 0 : 1, PaintFloodAccess.EQUAL);
-        if (paint.getClass() == DiscreteLayerPaint.class)
-            return PaintFloodAccess.tryFill(dimension, x, y, layer, null, undo ? layer.getDefaultValue() : ((DiscreteLayerPaint) paint).getValue(), PaintFloodAccess.EQUAL);
-        if (paint.getClass() == NibbleLayerPaint.class && hasStableBrushLevel(paint))
-            return PaintFloodAccess.tryFill(dimension, x, y, layer, null, undo ? 0 : 1 + Math.round(paint.getBrush().getLevel() * 14),
-                    undo ? PaintFloodAccess.ERASE : PaintFloodAccess.RAISE);
-        return false;
+        return true;
     }
 
     private static boolean hasStableBrushLevel(Paint paint) {
