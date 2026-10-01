@@ -28,6 +28,24 @@ impl JavaRandom {
         }
     }
 
+    /// Resume a raw Java LCG state for a float-only native transaction.
+    /// Gaussian cache ownership remains with the Java Random instance.
+    pub fn from_lcg_state(state: u64) -> Option<Self> {
+        if state > MASK {
+            return None;
+        }
+        Some(Self {
+            seed: state,
+            have_next_gaussian: false,
+            next_gaussian: 0.0,
+        })
+    }
+
+    /// Return the exact raw state to commit after a successful native transaction.
+    pub fn lcg_state(&self) -> u64 {
+        self.seed
+    }
+
     #[inline]
     fn next(&mut self, bits: u32) -> u32 {
         debug_assert!((1..=32).contains(&bits));
@@ -254,5 +272,26 @@ mod tests {
             rng.next_int_bound(0)
         }))
         .is_err());
+    }
+}
+
+#[cfg(test)]
+mod state_tests {
+    use super::*;
+    #[test]
+    fn float_transactions_resume_the_exact_lcg_state() {
+        assert!(JavaRandom::from_lcg_state(MASK + 1).is_none());
+        for seed in [0, 42, -1, i64::MIN, i64::MAX] {
+            let mut java = JavaRandom::new(seed);
+            for _ in 0..37 {
+                java.next_float();
+            }
+            let mut native = JavaRandom::from_lcg_state(java.lcg_state()).unwrap();
+            for _ in 0..10003 {
+                assert_eq!(java.next_float().to_bits(), native.next_float().to_bits());
+            }
+            assert_eq!(java.lcg_state(), native.lcg_state());
+            assert_eq!(java.next_long(), native.next_long());
+        }
     }
 }

@@ -55,10 +55,11 @@ public final class SelectionCopyBenchmark {
     public static void main(String[] args) throws Exception {
         boolean rust = args.length > 0 && args[0].equals("rust");
         int side = args.length > 1 ? Integer.parseInt(args[1]) : 4;
+        boolean blending = args.length > 2 && args[2].equals("blend");
         NativeLoader.areSlicesAvailable();
         var bean = (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
         double[] times = new double[7]; long[] bytes = new long[7]; long peak = 0;
-        SelectionOptions options = new SelectionOptions(); options.setCopyAnnotations(true);
+        SelectionOptions options = new SelectionOptions(); options.setCopyAnnotations(true); options.setDoBlending(blending);
         for (int trial = -5; trial < 7; trial++) {
             System.setProperty(Native.GEN_KEY, "false"); Dimension d = fixture(side);
             long before = bean.getThreadAllocatedBytes(Thread.currentThread().getId()), start = System.nanoTime();
@@ -69,7 +70,7 @@ public final class SelectionCopyBenchmark {
             if (trial >= 0) { times[trial] = elapsed; bytes[trial] = allocated; }
         }
         Arrays.sort(times); Arrays.sort(bytes);
-        System.out.printf(Locale.ROOT, "%s copy_8_actions_ms=%.3f heap_allocated_bytes=%d sampled_peak_rss_bytes=%d tiles=%d%n",
-                rust ? "Rust" : "Java", times[3], bytes[3], peak, side * side);
+        System.out.printf(Locale.ROOT, "%s copy_8_actions_ms=%.3f heap_allocated_bytes=%d sampled_peak_rss_bytes=%d tiles=%d blending=%b%n",
+                rust ? "Rust" : "Java", times[3], bytes[3], peak, side * side, blending);
     }
 }
