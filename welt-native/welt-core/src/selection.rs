@@ -18,7 +18,7 @@ fn word(data: &[u8], index: usize) -> u32 {
 pub fn edit(data: &mut [u8]) -> Result<(), &'static str> {
     if data.len() != LENGTH
         || word(data, 0) != MAGIC
-        || word(data, 4) != 1
+        || !matches!(word(data, 4), 1 | 2)
         || word(data, 8) > 1
         || word(data, 16) > 1
         || word(data, 20) > 1
@@ -27,17 +27,36 @@ pub fn edit(data: &mut [u8]) -> Result<(), &'static str> {
         return Err("invalid selection program");
     }
     let add = word(data, 8) != 0;
+    let brush = word(data, 4) == 2;
     let chunks_present = word(data, 16) != 0;
     let blocks_present = word(data, 20) != 0;
     let mut flags = 0_u32;
     for chunk in 0..64 {
-        let action = data[ACTIONS + chunk];
+        let action = if brush {
+            let mut any = false;
+            let mut all = true;
+            for row in 0..16 {
+                let offset = (chunk / 8 * 16 + row) * 16 + chunk % 8 * 2;
+                let mask = u16::from_le_bytes([data[MASK + offset], data[MASK + offset + 1]]);
+                any |= mask != 0;
+                all &= mask == u16::MAX;
+            }
+            if all {
+                1
+            } else if any {
+                2
+            } else {
+                0
+            }
+        } else {
+            data[ACTIONS + chunk]
+        };
         if action == 0 {
             continue;
         }
         let bit = 1_u8 << (chunk % 8);
         let whole = data[CHUNKS + chunk / 8] & bit != 0;
-        if action == 2 && add && whole {
+        if add && whole && (brush || action == 2) {
             continue;
         }
         let mut any_mask = false;
@@ -51,7 +70,12 @@ pub fn edit(data: &mut [u8]) -> Result<(), &'static str> {
             } else if add {
                 old | mask
             } else if whole {
-                !mask
+                // Au pinceau, Java conserve les bits déjà présents sous une sélection de chunk.
+                if brush {
+                    old | !mask
+                } else {
+                    !mask
+                }
             } else {
                 old & !mask
             };
@@ -83,4 +107,31 @@ pub fn edit(data: &mut [u8]) -> Result<(), &'static str> {
     }
     data[12..16].copy_from_slice(&flags.to_le_bytes());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn brush_keeps_existing_bits_during_demotion_and_skips_selected_chunks() {
+        let mut data = vec![0; super::LENGTH];
+        for (offset, value) in [(0, super::MAGIC), (4, 2), (16, 1), (20, 1)] {
+            data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        data[super::CHUNKS] = 1;
+        data[super::BLOCKS] = 1;
+        data[super::MASK] = 1;
+        super::edit(&mut data).unwrap();
+        assert_eq!(data[super::CHUNKS] & 1, 0);
+        assert_eq!(data[super::BLOCKS], 255);
+        data[8..12].copy_from_slice(&1u32.to_le_bytes());
+        data[super::CHUNKS] = 1;
+        let blocks = data[super::BLOCKS..super::MASK].to_vec();
+        data[super::MASK..].fill(255);
+        super::edit(&mut data).unwrap();
+        assert_eq!(&data[super::BLOCKS..super::BLOCKS + 2], &blocks[..2]);
+        let before = data.clone();
+        data[4..8].copy_from_slice(&3u32.to_le_bytes());
+        assert!(super::edit(&mut data).is_err());
+        assert_eq!(&data[super::CHUNKS..], &before[super::CHUNKS..]);
+    }
 }

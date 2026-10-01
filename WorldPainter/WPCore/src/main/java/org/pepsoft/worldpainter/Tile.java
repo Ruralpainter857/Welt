@@ -1537,6 +1537,64 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         return true;
     }
 
+    public synchronized boolean canEditSelectionMask() {
+        return Native.isGenEnabled() && NativeLoader.areSlicesAvailable() && selectionMaskCompatible();
+    }
+
+    private boolean selectionMaskCompatible() {
+        if (getClass() != Tile.class || eventInhibitionCounter == 0) return false;
+        ensureReadable(BIT_LAYER_DATA);
+        BitSet chunks = bitLayerData.get(SelectionChunk.INSTANCE), blocks = bitLayerData.get(SelectionBlock.INSTANCE);
+        return (chunks == null || chunks.length() <= 64) && (blocks == null || blocks.length() <= 16384);
+    }
+
+    /** Masque de 2 048 octets, bit x + y * 128 ; aucun tirage aléatoire n'est refait lors du repli. */
+    public boolean editSelectionMask(byte[] mask, boolean add) {
+        final int flags;
+        synchronized (this) {
+            if (mask.length != 2048 || !selectionMaskCompatible()) return false;
+            ByteBuffer result = SelectionTileAccess.editMask(add, bitLayerData.get(SelectionChunk.INSTANCE), bitLayerData.get(SelectionBlock.INSTANCE), mask);
+            if (result == null) { editSelectionMaskJava(mask, add); return true; }
+            flags = result.getInt(12);
+            if (flags == 0) return true;
+            ensureWriteable(BIT_LAYER_DATA);
+            if ((flags & 1) != 0) bitLayerData.put(SelectionChunk.INSTANCE,
+                    SelectionTileAccess.applyBits(result, 88, 8, bitLayerData.get(SelectionChunk.INSTANCE)));
+            if ((flags & 2) != 0) bitLayerData.put(SelectionBlock.INSTANCE,
+                    SelectionTileAccess.applyBits(result, 96, 2048, bitLayerData.get(SelectionBlock.INSTANCE)));
+            cachedLayers = null;
+        }
+        if ((flags & 1) != 0) layerDataChanged(SelectionChunk.INSTANCE);
+        if ((flags & 2) != 0) layerDataChanged(SelectionBlock.INSTANCE);
+        return true;
+    }
+
+    private void editSelectionMaskJava(byte[] mask, boolean add) {
+        boolean chunksPresent = hasLayer(SelectionChunk.INSTANCE), blocksPresent = hasLayer(SelectionBlock.INSTANCE);
+        for (int cx = 0; cx < 128; cx += 16) for (int cy = 0; cy < 128; cy += 16) {
+            boolean whole = chunksPresent && getBitLayerValue(SelectionChunk.INSTANCE, cx, cy);
+            if (add && whole) continue;
+            boolean any = false, all = true;
+            for (int dx = 0; dx < 16; dx++) for (int dy = 0; dy < 16; dy++) {
+                int bit = cx + dx + (cy + dy) * 128; boolean selected = (mask[bit / 8] & (1 << (bit % 8))) != 0;
+                any |= selected; all &= selected;
+            }
+            if (!any) continue;
+            if (all) {
+                if (add || chunksPresent) setBitLayerValue(SelectionChunk.INSTANCE, cx, cy, add);
+                if (blocksPresent) for (int dx = 0; dx < 16; dx++) for (int dy = 0; dy < 16; dy++)
+                    setBitLayerValue(SelectionBlock.INSTANCE, cx + dx, cy + dy, false);
+            } else {
+                if (!add && whole) setBitLayerValue(SelectionChunk.INSTANCE, cx, cy, false);
+                for (int dx = 0; dx < 16; dx++) for (int dy = 0; dy < 16; dy++) {
+                    int bit = cx + dx + (cy + dy) * 128; boolean selected = (mask[bit / 8] & (1 << (bit % 8))) != 0;
+                    if (add ? selected : whole ? !selected : selected)
+                        setBitLayerValue(SelectionBlock.INSTANCE, cx + dx, cy + dy, add || whole);
+                }
+            }
+        }
+    }
+
     /**
      * Set a bit layer on the entire tile.
      *

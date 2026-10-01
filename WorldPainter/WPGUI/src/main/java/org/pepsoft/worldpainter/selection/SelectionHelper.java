@@ -5,6 +5,8 @@ import org.pepsoft.util.ProgressReceiver;
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.brushes.Brush;
+import org.pepsoft.worldpainter.brushes.RotatedBrush;
+import org.pepsoft.worldpainter.brushes.SymmetricBrush;
 import org.pepsoft.worldpainter.layers.*;
 import org.pepsoft.worldpainter.operations.Filter;
 
@@ -26,7 +28,12 @@ import static org.pepsoft.worldpainter.Constants.TILE_SIZE_BITS;
  */
 public class SelectionHelper {
     public SelectionHelper(Dimension dimension) {
+        this(dimension, Math::random);
+    }
+
+    SelectionHelper(Dimension dimension, java.util.function.DoubleSupplier selectionRandom) {
         this.dimension = dimension;
+        this.selectionRandom = Objects.requireNonNull(selectionRandom);
     }
 
     public void addToSelection(Shape shape) {
@@ -51,6 +58,7 @@ public class SelectionHelper {
                     }
                 }
             } else {
+                if (!filterSpecified && editBrushSelectionNative(tile, x, y, brush, dynamicLevel, true)) return;
                 int worldTileX = tile.getX() << TILE_SIZE_BITS;
                 int worldTileY = tile.getY() << TILE_SIZE_BITS;
                 boolean tileHasBlockSelection = tile.hasLayer(SelectionBlock.INSTANCE);
@@ -72,7 +80,7 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
                                 if (filterSpecified) {
                                     strength = filter.modifyStrength(worldX, worldY, strength);
                                 }
-                                boolean select = (strength > 0.95f) || (Math.random() < strength);
+                                boolean select = (strength > 0.95f) || (selectionRandom.getAsDouble() < strength);
                                 blocksSet[xInChunk][yInChunk] = select;
                                 if (! select) {
                                     chunkEntirelySelected = false;
@@ -127,6 +135,7 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
             dimension.clearLayerData(SelectionBlock.INSTANCE);
         } else {
             dimension.visitTilesForEditing().forSelection().forFilter(filter).forBrush(brush, x, y).andDo(tile -> {
+                if (!filterSpecified && editBrushSelectionNative(tile, x, y, brush, dynamicLevel, false)) return;
                 boolean tileHasChunkSelection = tile.hasLayer(SelectionChunk.INSTANCE);
                 boolean tileHasBlockSelection = tile.hasLayer(SelectionBlock.INSTANCE);
                 int worldTileX = tile.getX() << TILE_SIZE_BITS;
@@ -144,7 +153,7 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
                                 if (filterSpecified) {
                                     strength = filter.modifyStrength(worldX, worldY, strength);
                                 }
-                                boolean deselect = (strength > 0.95f) || (Math.random() < strength);
+                                boolean deselect = (strength > 0.95f) || (selectionRandom.getAsDouble() < strength);
                                 blocksDeselected[xInChunk][yInChunk] = deselect;
                                 if (! deselect) {
                                     chunkEntirelyDeselected = false;
@@ -691,7 +700,38 @@ outer:  for (int dx = -1; dx <= 1; dx++) {
         }
     }
 
+    private boolean editBrushSelectionNative(Tile tile, int x, int y, Brush brush, float level, boolean add) {
+        if (!Boolean.getBoolean("wp.native.gen.selectionCompact")
+                || dimension.getClass() != Dimension.class || brush == null || !tile.canEditSelectionMask()) return false;
+        int worldX = tile.getX() << TILE_SIZE_BITS, worldY = tile.getY() << TILE_SIZE_BITS;
+        // Ces pinceaux lisent leur cache ; une implémentation personnalisée peut observer les mutations précédentes.
+        if (!(brush instanceof RotatedBrush)) {
+            if (!(brush instanceof SymmetricBrush) || Math.abs((long) x - worldX) > brush.getRadius()
+                    || Math.abs((long) x - (worldX + 127L)) > brush.getRadius()
+                    || Math.abs((long) y - worldY) > brush.getRadius()
+                    || Math.abs((long) y - (worldY + 127L)) > brush.getRadius()) return false;
+        }
+        if (selectionMask == null) selectionMask = new byte[2048];
+        Arrays.fill(selectionMask, (byte) 0);
+        boolean chunksPresent = tile.hasLayer(SelectionChunk.INSTANCE);
+        // Le parcours historique saute le reste de la colonne de chunks dès qu’un chunk est sélectionné.
+        chunks: for (int cx = 0; cx < 128; cx += 16) for (int cy = 0; cy < 128; cy += 16) {
+            if (add && chunksPresent && tile.getBitLayerValue(SelectionChunk.INSTANCE, cx, cy)) continue chunks;
+            for (int dx = 0; dx < 16; dx++) for (int dy = 0; dy < 16; dy++) {
+                int wx = worldX | cx | dx, wy = worldY | cy | dy;
+                float strength = brush.getStrength(x - wx, y - wy) * level;
+                if (strength > 0.95f || selectionRandom.getAsDouble() < strength) {
+                    int bit = cx + dx + (cy + dy) * 128;
+                    selectionMask[bit / 8] |= (byte) (1 << (bit % 8));
+                }
+            }
+        }
+        return tile.editSelectionMask(selectionMask, add);
+    }
+
+    private byte[] selectionMask;
     private final Dimension dimension;
+    private final java.util.function.DoubleSupplier selectionRandom;
     private SelectionOptions options;
     private boolean clearUndoOnNewTileCreation;
 

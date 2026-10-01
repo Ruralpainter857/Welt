@@ -76,6 +76,17 @@ final class SelectionTileAccess {
         }
     }
 
+    // WSEL v2 : le masque indique les tirages retenus ; Rust classe et modifie les deux plans ensemble.
+    static ByteBuffer editMask(boolean add, BitSet chunks, BitSet blocks, byte[] mask) {
+        ByteBuffer buffer = BUFFERS.get(); buffer.clear();
+        for (int i = 0; i < buffer.capacity(); i += 8) buffer.putLong(i, 0);
+        buffer.putInt(0, 0x4c455357).putInt(4, 2).putInt(8, add ? 1 : 0)
+                .putInt(16, chunks != null ? 1 : 0).putInt(20, blocks != null ? 1 : 0);
+        putBits(buffer, 88, chunks); putBits(buffer, 96, blocks);
+        buffer.position(2144); buffer.put(mask); buffer.position(0);
+        return NativeSlices.editSelection(buffer) ? buffer : null;
+    }
+
     /** The caller already acquired the undo-aware writable bit-layer map. */
     static BitSet applyBits(ByteBuffer buffer, int offset, int length, BitSet destination) {
         if (destination == null) destination = new BitSet(length * 8);
