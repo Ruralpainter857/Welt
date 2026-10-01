@@ -104,6 +104,14 @@ public final class NativeSlices {
 
     private static native int nativeShapePyramidRegion(ByteBuffer buffer, int length);
 
+    /** Une seule transition JNI pour l'exploration et les mutations fluides d'une zone. */
+    public static boolean floodFluidRegion(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()
+                || buffer.isReadOnly() || buffer.position() != 0 || buffer.limit() < 74 || buffer.limit() > 64 + 65536 * 10) return false;
+        try { return nativeFloodFluidRegion(buffer, buffer.limit()) == 0; } catch (UnsatisfiedLinkError e) { return false; }
+    }
+    private static native int nativeFloodFluidRegion(ByteBuffer buffer, int length);
+
     public static boolean editRiverRegion(ByteBuffer buffer) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()
                 || buffer.isReadOnly() || buffer.position() != 0 || buffer.limit() < 85 || buffer.limit() > 64 + 511 * 511 * 21) return false;

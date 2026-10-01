@@ -6,6 +6,7 @@
 package org.pepsoft.worldpainter.operations;
 
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.FluidFloodAccess;
 import org.pepsoft.worldpainter.WorldPainter;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.painting.GeneralQueueLinearFloodFiller;
@@ -180,6 +181,7 @@ public class Flood extends MouseOrTabletOperation {
                 }
                 final GeneralQueueLinearFloodFiller flooder = new GeneralQueueLinearFloodFiller(fillMethod);
                 try {
+                    if (FluidFloodAccess.tryFill(dimension, centreX, centreY, inverse, floodWithLava)) return;
                     if (! flooder.floodFill(centreX, centreY, SwingUtilities.getWindowAncestor(getView()))) {
                         // Cancelled by user
                         synchronized (dimension) {

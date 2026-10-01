@@ -8,6 +8,7 @@ pub mod erosion;
 pub mod error;
 pub mod flood_fill;
 pub mod fluid_brush;
+pub mod fluid_flood;
 pub mod height_edit;
 pub mod jni;
 pub mod jni_export;

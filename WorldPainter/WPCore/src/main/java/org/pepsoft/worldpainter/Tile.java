@@ -507,6 +507,45 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    /** Copie les trois plans nécessaires à l'inondation sous un seul verrou. */
+    synchronized void copyFluidFlood(ByteBuffer data, int offset, int stride, int area) {
+        ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP); ensureReadable(tall ? TALL_WATERLEVEL : WATERLEVEL); ensureReadable(BIT_LAYER_DATA);
+        BitSet lava = bitLayerData.get(FloodWithLava.INSTANCE);
+        for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++) {
+            int cell = x | y << 7, i = offset + x + y * stride;
+            data.putInt(64 + i * 4, Math.round((tall ? tallHeightMap[cell] : heightMap[cell] & 65535) / 256f + minHeight))
+                    .putInt(64 + area * 4 + i * 4, (tall ? tallWaterLevel[cell] & 65535 : waterLevel[cell] & 255) + minHeight)
+                    .put(64 + area * 8 + i, (byte) (lava != null && lava.get(cell) ? 1 : 0));
+        }
+    }
+
+    /** Applique le masque calculé en Rust en conservant les valeurs brutes, le COW et les notifications. */
+    synchronized void applyFluidFlood(ByteBuffer data, int offset, int stride, int area, int mode) {
+        if (eventInhibitionCounter == 0) throw new IllegalStateException("Fluid flood requires inhibited events");
+        ensureReadable(BIT_LAYER_DATA);
+        BitSet lava = bitLayerData.get(FloodWithLava.INSTANCE);
+        boolean waters = false, bits = false;
+        for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++) {
+            int cell = x | y << 7, i = offset + x + y * stride;
+            if (data.get(64 + area * 9 + i) == 0) continue;
+            if (mode != 2) {
+                if (!waters) { ensureWriteable(tall ? TALL_WATERLEVEL : WATERLEVEL); waters = true; }
+                int raw = data.getInt(64 + area * 4 + i * 4) - minHeight;
+                if (tall) tallWaterLevel[cell] = (short) raw; else waterLevel[cell] = (byte) raw;
+            }
+            boolean value = data.get(64 + area * 8 + i) != 0;
+            if (lava != null || value) {
+                if (!bits) {
+                    ensureWriteable(BIT_LAYER_DATA); lava = bitLayerData.get(FloodWithLava.INSTANCE);
+                    if (lava == null) { lava = new BitSet(16384); bitLayerData.put(FloodWithLava.INSTANCE, lava); cachedLayers = null; }
+                    bits = true;
+                }
+                lava.set(cell, value);
+            }
+        }
+        if (waters) waterLevelChanged(); if (bits) layerDataChanged(FloodWithLava.INSTANCE);
+    }
+
     synchronized void applyRiverRegion(int x, int y, int width, int height, ByteBuffer data, int offset, int stride,
                                        int area, int level, boolean lava) {
         checkHeightRegion(x, y, width, height, area, offset, stride);
