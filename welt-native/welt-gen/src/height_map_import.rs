@@ -36,9 +36,9 @@ fn length(kind: u32) -> usize {
     }
 }
 #[derive(Clone, Copy)]
-struct Plane {
-    kind: u32,
-    base: usize,
+pub(crate) struct Plane {
+    pub(crate) kind: u32,
+    pub(crate) base: usize,
 }
 impl Plane {
     fn index(self, i: usize) -> usize {
@@ -48,7 +48,7 @@ impl Plane {
             i
         }
     }
-    fn get(self, d: &[u8], i: usize) -> u32 {
+    pub(crate) fn get(self, d: &[u8], i: usize) -> u32 {
         let i = self.index(i);
         match self.kind {
             0 => word(d, self.base + i * 4),
@@ -79,7 +79,7 @@ struct Levels {
     values: Vec<i32>,
 }
 #[derive(Default)]
-struct Theme {
+pub(crate) struct Theme {
     min: i32,
     max: i32,
     terrain: Option<SimpleThemeTerrainBulk>,
@@ -88,7 +88,7 @@ struct Theme {
     axes: SimpleThemeTerrainScratch,
 }
 impl Theme {
-    fn read(
+    pub(crate) fn read(
         &mut self,
         d: &[u8],
         start: usize,
@@ -176,6 +176,39 @@ impl Theme {
         }
         Ok(end)
     }
+    pub(crate) fn prepare_selected_terrains(
+        &mut self,
+        heights: &[i32],
+        selected: &[bool],
+        output: &mut [u8],
+    ) {
+        self.terrain
+            .as_ref()
+            .unwrap()
+            .fill_selected_tile_with_scratch(heights, selected, output, &mut self.axes)
+            .unwrap();
+    }
+    pub(crate) fn apply_cell(
+        &self,
+        d: &mut [u8],
+        planes: &[Plane],
+        state: &mut TileState,
+        i: usize,
+        result: (i32, u8),
+        random: &mut JavaRandom,
+    ) {
+        state.set(d, planes, 2, i, result.1 as u32, false);
+        let h = result.0.clamp(self.min, self.max - 1);
+        for l in &self.layers {
+            let level = l.values[(h - self.min) as usize];
+            let value = if planes[l.plane].kind >= 3 {
+                u32::from(level > 0 && (level == 15 || random.next_int_bound(15) < level))
+            } else {
+                level as u32
+            };
+            state.set(d, planes, l.plane, i, value, false);
+        }
+    }
     #[allow(clippy::too_many_arguments)]
     fn apply(
         &mut self,
@@ -217,14 +250,14 @@ impl Theme {
         }
     }
 }
-struct TileState {
-    present: u64,
-    changed: u64,
-    order: [u8; 64],
-    count: usize,
+pub(crate) struct TileState {
+    pub(crate) present: u64,
+    pub(crate) changed: u64,
+    pub(crate) order: [u8; 64],
+    pub(crate) count: usize,
 }
 impl TileState {
-    fn set(
+    pub(crate) fn set(
         &mut self,
         d: &mut [u8],
         planes: &[Plane],

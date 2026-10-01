@@ -121,6 +121,15 @@ public final class NativeSlices {
     }
     private static native int nativeImportMaskTile(ByteBuffer buffer,int length);
 
+    /** WHTB v1: compact grouped tiles retain global stroke order across their shared theme. */
+    public static boolean applyThemedHeightBrush(ByteBuffer buffer) {
+        if(!Native.isGenEnabled()||!NativeLoader.areSlicesAvailable()||buffer==null||!buffer.isDirect()
+                ||buffer.isReadOnly()||buffer.position()!=0||buffer.limit()<128||buffer.limit()>4*1024*1024)return false;
+        try{return nativeApplyThemedHeightBrush(buffer,buffer.limit())==0;}
+        catch(UnsatisfiedLinkError e){return false;}
+    }
+    private static native int nativeApplyThemedHeightBrush(ByteBuffer buffer,int length);
+
     /** WGLY v1: one packed glyph crop and all its paint planes remain in one buffer. */
     public static boolean paintGlyphTile(ByteBuffer buffer) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()

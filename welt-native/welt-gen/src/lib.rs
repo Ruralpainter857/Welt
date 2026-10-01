@@ -9,3 +9,5 @@ pub mod noise_height_map;
 pub mod resource_noise;
 pub mod theme_layers;
 pub mod theme_terrain;
+
+pub mod height_theme_brush;

@@ -232,6 +232,15 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
         }
     }
 
+    /** The complete brush commits the shared stream only after native validation succeeds. */
+    public static boolean processThemedHeightBrush(ByteBuffer data) {
+        synchronized(random) {
+            data.putLong(80,random.snapshotState());
+            if(!NativeSlices.applyThemedHeightBrush(data))return false;
+            random.restoreState(data.getLong(80));return true;
+        }
+    }
+
     private static final ThreadLocal<ThemeEditScratch> THEME_EDIT_SCRATCH = ThreadLocal.withInitial(ThemeEditScratch::new);
 
     private static final class ThemeEditScratch {

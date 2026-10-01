@@ -94,6 +94,9 @@ public class Height extends AbstractBrushOperation {
             }
         }
 
+        if (applyTheme && HeightBrushAccess.tryApplyThemed(dimension,centreX-radius,centreY-radius,
+                diameter,diameter,nativeStrengths,inverse?HeightBrushAccess.LOWER:HeightBrushAccess.RAISE,
+                adjustment,minZ,maxZ)) return true;
         if (!applyTheme && HeightBrushAccess.tryApply(dimension, centreX - radius, centreY - radius,
                 diameter, diameter, nativeStrengths, inverse ? HeightBrushAccess.LOWER : HeightBrushAccess.RAISE,
                 adjustment, minZ, maxZ)) return true;

@@ -32,6 +32,14 @@ public final class HeightBrushAccess {
         return true;
     }
 
+    /** Apply heights and an exact SimpleTheme together without per-cell Java setters. */
+    public static boolean tryApplyThemed(Dimension dimension,int ox,int oy,int width,int height,
+                                         float[] strengths,int mode,float value,float minClamp,float maxClamp) {
+        // Complete small-stroke measurements still favour the original path over full packed-tile copies.
+        if ((long)width * height < 16384) return false;
+        return ThemedHeightBrushAccess.apply(dimension,ox,oy,width,height,strengths,mode,value,minClamp,maxClamp);
+    }
+
     static Scratch edit(int minZ, int x, int y, int width, int height, float[] strengths, int offset, int stride,
                         int mode, float value, float minClamp, float maxClamp, short[] shorts, int[] ints) {
         Scratch scratch = BUFFER.get(); ByteBuffer buffer = scratch.buffer;

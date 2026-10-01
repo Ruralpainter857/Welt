@@ -264,6 +264,40 @@ impl SimpleThemeTerrainBulk {
         output: &mut [u8],
         scratch: &mut SimpleThemeTerrainScratch,
     ) -> Result<(), SimpleThemeTerrainError> {
+        self.fill_compact_selected(
+            origin_x, origin_y, width, height, heights, None, output, scratch,
+        )
+    }
+
+    /// Evaluate only cells changed by a grouped editing transaction; other output bytes remain untouched.
+    pub(crate) fn fill_selected_tile_with_scratch(
+        &self,
+        heights: &[i32],
+        selected: &[bool],
+        output: &mut [u8],
+        scratch: &mut SimpleThemeTerrainScratch,
+    ) -> Result<(), SimpleThemeTerrainError> {
+        if selected.len() != 16384 {
+            return Err(SimpleThemeTerrainError::HeightLength {
+                expected: 16384,
+                actual: selected.len(),
+            });
+        }
+        self.fill_compact_selected(0, 0, 128, 128, heights, Some(selected), output, scratch)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fill_compact_selected(
+        &self,
+        origin_x: i32,
+        origin_y: i32,
+        width: usize,
+        height: usize,
+        heights: &[i32],
+        selected: Option<&[bool]>,
+        output: &mut [u8],
+        scratch: &mut SimpleThemeTerrainScratch,
+    ) -> Result<(), SimpleThemeTerrainError> {
         let expected = width
             .checked_mul(height)
             .ok_or(SimpleThemeTerrainError::AreaOverflow)?;
@@ -296,6 +330,9 @@ impl SimpleThemeTerrainBulk {
         for row in 0..height {
             for col in 0..width {
                 let index = row * width + col;
+                if selected.is_some_and(|mask| !mask[index]) {
+                    continue;
+                }
                 let ordinal = self.get_terrain_ordinal_with_axes(
                     scratch.small_x[col],
                     scratch.small_y[row],
