@@ -104,6 +104,14 @@ public final class NativeSlices {
 
     private static native int nativeShapePyramidRegion(ByteBuffer buffer, int length);
 
+    /** Exploration et mutation de la peinture dans un même tampon de zone. */
+    public static boolean floodPaintRegion(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()
+                || buffer.isReadOnly() || buffer.position() != 0 || buffer.limit() < 66 || buffer.limit() > 64 + 65536 * 2) return false;
+        try { return nativeFloodPaintRegion(buffer, buffer.limit()) == 0; } catch (UnsatisfiedLinkError e) { return false; }
+    }
+    private static native int nativeFloodPaintRegion(ByteBuffer buffer, int length);
+
     /** Une seule transition JNI pour l'exploration et les mutations fluides d'une zone. */
     public static boolean floodFluidRegion(ByteBuffer buffer) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()

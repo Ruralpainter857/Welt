@@ -8,9 +8,11 @@ package org.pepsoft.worldpainter.painting;
 
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.Terrain;
+import org.pepsoft.worldpainter.PaintFloodAccess;
 import org.pepsoft.worldpainter.brushes.Brush;
 import org.pepsoft.worldpainter.brushes.LineBrush;
 import org.pepsoft.worldpainter.brushes.SymmetricBrush;
+import org.pepsoft.worldpainter.brushes.RotatedBrush;
 import org.pepsoft.worldpainter.layers.Layer;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
@@ -367,6 +369,7 @@ public final class DimensionPainter {
             throw new IllegalArgumentException("Don't know how to fill with paint " + paint);
         }
         if (! fillMethod.isFilled(x, y)) {
+            if (tryNativePaintFill(dimension, x, y)) return true;
             final GeneralQueueLinearFloodFiller filler = new GeneralQueueLinearFloodFiller(fillMethod);
             filler.floodFill(x, y, parent);
             return ! filler.isBoundsHit();
@@ -670,6 +673,28 @@ public final class DimensionPainter {
 
     private static final Brush MY_CONSTANT_CIRCLE = SymmetricBrush.CONSTANT_CIRCLE.clone();
 
+    /** Les peintures personnalisées et le thème retiré conservent leur ordre historique. */
+    private boolean tryNativePaintFill(Dimension dimension, int x, int y) {
+        if (paint.getClass() == TerrainPaint.class) {
+            return !undo && PaintFloodAccess.tryFill(dimension, x, y, null, ((TerrainPaint) paint).getTerrain(), 0, PaintFloodAccess.EQUAL);
+        }
+        if (!(paint instanceof LayerPaint)) return false;
+        Layer layer = ((LayerPaint) paint).getLayer();
+        if (paint.getClass() == BitLayerPaint.class && layer.dataSize == Layer.DataSize.BIT)
+            return PaintFloodAccess.tryFill(dimension, x, y, layer, null, undo ? 0 : 1, PaintFloodAccess.EQUAL);
+        if (paint.getClass() == DiscreteLayerPaint.class)
+            return PaintFloodAccess.tryFill(dimension, x, y, layer, null, undo ? layer.getDefaultValue() : ((DiscreteLayerPaint) paint).getValue(), PaintFloodAccess.EQUAL);
+        if (paint.getClass() == NibbleLayerPaint.class && hasStableBrushLevel(paint))
+            return PaintFloodAccess.tryFill(dimension, x, y, layer, null, undo ? 0 : 1 + Math.round(paint.getBrush().getLevel() * 14),
+                    undo ? PaintFloodAccess.ERASE : PaintFloodAccess.RAISE);
+        return false;
+    }
+
+    private static boolean hasStableBrushLevel(Paint paint) {
+        return paint.getBrush() != null && (paint.getBrush().getClass() == RotatedBrush.class
+                || paint.getBrush().getClass().getName().startsWith(SymmetricBrush.class.getName() + "$"));
+    }
+
     static abstract class AbstractDimensionPaintFillMethod implements GeneralQueueLinearFloodFiller.FillMethod {
         protected AbstractDimensionPaintFillMethod(String description, Dimension dimension, Paint paint) {
             this.description = description;
@@ -680,7 +705,12 @@ public final class DimensionPainter {
 
         @Override
         public final boolean isNativeSnapshotSafe() {
-            return true;
+            // Les thèmes, peintures personnalisées et couches par chunk peuvent modifier les frontières voisines.
+            if (paint == null) return true;
+            if (paint.getClass() == TerrainPaint.class) return !(this instanceof UndoDimensionPaintFillMethod);
+            if (paint.getClass() == DiscreteLayerPaint.class) return true;
+            if (paint.getClass() == BitLayerPaint.class) return ((LayerPaint) paint).getLayer().dataSize == Layer.DataSize.BIT;
+            return paint.getClass() == NibbleLayerPaint.class && hasStableBrushLevel(paint);
         }
 
         @Override

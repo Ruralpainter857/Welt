@@ -507,6 +507,57 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    /** Snapshot compact des valeurs de peinture et de la présence des cellules. */
+    synchronized void copyFloodPaint(ByteBuffer buffer, int offset, int stride, int area, Layer layer) {
+        boolean bit = layer != null && layer.dataSize == DataSize.BIT;
+        ensureReadable(layer == null ? TERRAIN : bit ? BIT_LAYER_DATA : LAYER_DATA);
+        BitSet bits = bit ? bitLayerData.get(layer) : null;
+        byte[] values = layer == null ? terrain : bit ? null : layerData.get(layer);
+        int defaults = layer == null || bit ? 0 : layer.getDefaultValue();
+        boolean nibble = layer != null && layer.dataSize == NIBBLE;
+        for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++) {
+            int cell = x | y << 7, i = offset + x + y * stride;
+            int value = bit ? bits != null && bits.get(cell) ? 1 : 0 : values == null ? defaults
+                    : nibble ? (values[cell / 2] >>> ((cell & 1) * 4)) & 15 : values[cell] & 255;
+            buffer.put(64 + i, (byte) value).put(64 + area + i, (byte) 1);
+        }
+    }
+
+    /** Applique le même plan muté en Rust sans répéter les setters ni les recherches de couches. */
+    synchronized void applyFloodPaint(ByteBuffer buffer, int offset, int stride, int area, Layer layer) {
+        if (eventInhibitionCounter == 0) throw new IllegalStateException("Flood paint requires inhibited events");
+        boolean bit = layer != null && layer.dataSize == DataSize.BIT;
+        boolean nibble = layer != null && layer.dataSize == NIBBLE;
+        boolean changed = false; BitSet bits = null; byte[] values = null;
+        for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++) {
+            int cell = x | y << 7, i = offset + x + y * stride;
+            if ((buffer.get(64 + area + i) & 2) == 0) continue;
+            if (!changed) {
+                ensureWriteable(layer == null ? TERRAIN : bit ? BIT_LAYER_DATA : LAYER_DATA);
+                if (bit) {
+                    bits = bitLayerData.get(layer);
+                    if (bits == null) { bits = new BitSet(16384); bitLayerData.put(layer, bits); cachedLayers = null; }
+                } else {
+                    values = layer == null ? terrain : layerData.get(layer);
+                    if (values == null) {
+                        values = new byte[nibble ? 8192 : 16384]; int defaults = layer.getDefaultValue();
+                        if (defaults != 0) Arrays.fill(values, (byte) (nibble ? defaults | defaults << 4 : defaults));
+                        layerData.put(layer, values); cachedLayers = null;
+                    }
+                    if (layer != null) values = detachSharedLayerDataBuffer(layer, values);
+                }
+                changed = true;
+            }
+            int value = buffer.get(64 + i) & 255;
+            if (bit) bits.set(cell, value != 0);
+            else if (nibble) {
+                int shift = (cell & 1) * 4;
+                values[cell / 2] = (byte) ((values[cell / 2] & ~(15 << shift)) | value << shift);
+            } else values[cell] = (byte) value;
+        }
+        if (changed) { if (layer == null) terrainChanged(); else layerDataChanged(layer); }
+    }
+
     /** Copie les trois plans nécessaires à l'inondation sous un seul verrou. */
     synchronized void copyFluidFlood(ByteBuffer data, int offset, int stride, int area) {
         ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP); ensureReadable(tall ? TALL_WATERLEVEL : WATERLEVEL); ensureReadable(BIT_LAYER_DATA);

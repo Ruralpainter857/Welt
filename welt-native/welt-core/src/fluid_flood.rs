@@ -1,5 +1,6 @@
 //! WLFD v1 : hauteurs, fluides et masque d'une zone bornée, traités ensemble.
 use crate::error::WeltError;
+use crate::flood_frontier::{collect, Frontier};
 
 pub const MAX_CELLS: usize = 65_536;
 pub const MAX_BYTES: usize = 64 + MAX_CELLS * 10;
@@ -44,51 +45,39 @@ pub fn edit(data: &mut [u8], queue: &mut Vec<usize>) -> Result<(), WeltError> {
     }
     let width = width as usize;
     let seed = sy as usize * width + sx as usize;
-    let water = 64 + area * 4;
     let types = 64 + area * 8;
     let mask = types + area;
     if word(data, 64 + seed * 4) == i32::MIN || data[types..mask].iter().any(|&v| v > 1) {
         return Err(WeltError::IllegalArgument);
     }
-    queue.clear();
-    queue.reserve(area);
-    data[mask..].fill(0);
-    queue.push(seed);
-    data[mask + seed] = 1;
-    let mut next = 0;
-    while next < queue.len() {
-        let cell = queue[next];
-        next += 1;
-        let candidates = [
-            (!cell.is_multiple_of(width)).then(|| cell - 1),
-            (cell % width + 1 < width).then_some(cell + 1),
-            (cell >= width).then(|| cell - width),
-            (cell + width < area).then_some(cell + width),
-        ];
-        for neighbour in candidates.into_iter().flatten() {
-            if data[mask + neighbour] != 0 {
-                continue;
-            }
-            let h = word(data, 64 + neighbour * 4);
-            let w = word(data, water + neighbour * 4);
-            let boundary = h == i32::MIN
-                || match mode {
-                    0 => h >= level || w >= level,
-                    1 => w <= h || w <= level,
-                    _ => w <= h || data[types + neighbour] == lava as u8,
-                };
-            if !boundary {
-                data[mask + neighbour] = 1;
-                queue.push(neighbour);
-            }
-        }
-    }
+    let (payload, flags) = data[64..].split_at_mut(area * 9);
+    collect(
+        Frontier {
+            width,
+            seed,
+            visited_bit: 1,
+            present_bit: 0,
+        },
+        flags,
+        queue,
+        |cell| {
+            let h = word(payload, cell * 4);
+            let w = word(payload, area * 4 + cell * 4);
+            h != i32::MIN
+                && match mode {
+                    0 => h < level && w < level,
+                    1 => w > h && w > level,
+                    _ => w > h && payload[area * 8 + cell] != lava as u8,
+                }
+        },
+    );
     // La graine est remplie même si elle est une frontière, comme le parcours Java.
     for &cell in queue.iter() {
         if mode != 2 {
-            data[water + cell * 4..water + cell * 4 + 4].copy_from_slice(&level.to_le_bytes());
+            payload[area * 4 + cell * 4..area * 4 + cell * 4 + 4]
+                .copy_from_slice(&level.to_le_bytes());
         }
-        data[types + cell] = lava as u8;
+        payload[area * 8 + cell] = lava as u8;
     }
     data[36..40].copy_from_slice(&(queue.len() as u32).to_le_bytes());
     Ok(())
