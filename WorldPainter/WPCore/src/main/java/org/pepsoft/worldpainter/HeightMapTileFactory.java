@@ -1082,6 +1082,12 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         }
     }
 
+    /** Réapplique le thème groupé quand aucun comportement personnalisé n'intervient. */
+    public final boolean tryApplyTheme(Tile tile) {
+        return getClass() == HeightMapTileFactory.class && theme instanceof SimpleTheme
+                && ((SimpleTheme) theme).applyToExistingTile(tile);
+    }
+
     @Override
     public final void applyTheme(Tile tile, int x, int y) {
         theme.apply(tile, x, y);

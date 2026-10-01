@@ -660,6 +660,9 @@ public class FillDialog extends WPDialogWithPaintSelection implements Listener, 
 
     private void resetTerrain(ProgressReceiver progressReceiver) throws OperationCancelled {
         dimension.visitTilesForEditing().forFilter(filter).andDo(tile -> {
+            if (filter == null && dimension.getClass() == Dimension.class
+                    && dimension.getTileFactory() instanceof HeightMapTileFactory
+                    && ((HeightMapTileFactory) dimension.getTileFactory()).tryApplyTheme(tile)) return;
             final int worldTileX = tile.getX() << TILE_SIZE_BITS;
             final int worldTileY = tile.getY() << TILE_SIZE_BITS;
             for (int x = 0; x < TILE_SIZE; x++) {

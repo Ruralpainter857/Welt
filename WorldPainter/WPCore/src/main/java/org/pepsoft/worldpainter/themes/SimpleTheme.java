@@ -64,6 +64,63 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
         apply(tile, x, y, false);
     }
 
+    /** Réapplique un thème sur une tuile existante avec un seul appel JNI et des buffers par worker. */
+    public final boolean applyToExistingTile(Tile tile) {
+        if (getClass() != SimpleTheme.class || tile.getClass() != Tile.class || !tile.isEventsInhibited()
+                || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return false;
+        if (uniformTerrain != null && !beaches && layerCache == null && bitLayerCache == null) {
+            tile.fillTerrain(uniformTerrain); return true;
+        }
+        int count = getFreshTileLayerCount();
+        int range = maxHeight - minHeight;
+        if (count > 64 || range <= 0 || range > 1_048_576) return false;
+        for (Terrain terrain : terrainRangesTable) if (terrain == null) return false;
+        ThemeEditScratch scratch = THEME_EDIT_SCRATCH.get();
+        if (scratch.ranges.length != range) scratch.ranges = new int[range];
+        if (scratch.layers.length != count) {
+            scratch.layers = new Layer[count]; scratch.values = new byte[count][TILE_SIZE * TILE_SIZE];
+        }
+        int numeric = layerCache == null ? 0 : layerCache.length;
+        for (int l = 0; l < count; l++) scratch.layers[l] = l < numeric ? layerCache[l] : bitLayerCache[l - numeric];
+        for (int l = 0; l < numeric; l++) {
+            int d = layerCache[l].getDefaultValue();
+            if (d < 0 || d > layerCache[l].getDataSize().maxValue) return false;
+        }
+        tile.copyQuantisedHeights(scratch.heights);
+        for (int i = 0; i < scratch.heights.length; i++) {
+            int h = clamp(minHeight, scratch.heights[i], maxHeight - 1);
+            scratch.heights[i] = h;
+            for (int l = 0; l < numeric; l++) {
+                int value = layerLevelCache[l][h - minHeight];
+                if (value < 0 || value > layerCache[l].getDataSize().maxValue) return false;
+                scratch.values[l][i] = (byte) value;
+            }
+        }
+        copyTerrainRangeOrdinals(scratch.ranges);
+        if (!NativeSlices.fillSimpleThemeTerrainOrdinals(0, 0, TILE_SIZE, TILE_SIZE, minHeight, maxHeight,
+                waterHeight, randomise, beaches, Terrain.BEACHES.ordinal(), seed, scratch.heights,
+                scratch.ranges, scratch.terrains)) return false;
+        // Les tirages restent en Java, dans l'ordre exact X/Y/couche de la boucle historique.
+        for (int x = 0; x < TILE_SIZE; x++) for (int y = 0; y < TILE_SIZE; y++) {
+            int index = x | y << TILE_SIZE_BITS;
+            for (int l = numeric; l < count; l++) {
+                int level = bitLayerLevelCache[l - numeric][scratch.heights[index] - minHeight];
+                scratch.values[l][index] = (byte) ((level > 0 && (level == 15 || random.nextInt(15) < level)) ? 1 : 0);
+            }
+        }
+        tile.applyPreparedTheme(scratch.terrains, scratch.layers, scratch.values);
+        return true;
+    }
+
+    private static final ThreadLocal<ThemeEditScratch> THEME_EDIT_SCRATCH = ThreadLocal.withInitial(ThemeEditScratch::new);
+
+    private static final class ThemeEditScratch {
+        final int[] heights = new int[TILE_SIZE * TILE_SIZE], terrains = new int[TILE_SIZE * TILE_SIZE];
+        int[] ranges = new int[0];
+        Layer[] layers = new Layer[0];
+        byte[][] values = new byte[0][];
+    }
+
     /**
      * Apply the theme to a freshly constructed tile whose layer values have
      * not yet been written. The caller must not use this for an existing tile.

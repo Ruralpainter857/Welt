@@ -208,6 +208,77 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    /** Copie les hauteurs arrondies dans l'ordre de stockage, sous un seul verrou. */
+    public synchronized void copyQuantisedHeights(int[] destination) {
+        if (destination.length != TILE_SIZE * TILE_SIZE) throw new IllegalArgumentException("Expected one height per cell");
+        ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+        for (int i = 0; i < destination.length; i++) {
+            destination[i] = Math.round((tall ? tallHeightMap[i] : heightMap[i] & 0xffff) / 256f + minHeight);
+        }
+    }
+
+    /** Applique un thème préparé sans contourner les buffers d'annulation ni les événements différés. */
+    public synchronized void applyPreparedTheme(int[] terrains, Layer[] layers, byte[][] values) {
+        final int area = TILE_SIZE * TILE_SIZE;
+        if (getClass() != Tile.class || eventInhibitionCounter == 0) throw new IllegalStateException("Inhibited plain tile required");
+        if (terrains.length != area || layers.length != values.length) throw new IllegalArgumentException("Invalid theme planes");
+        for (int ordinal : terrains) if (ordinal < 0 || ordinal >= TERRAIN_VALUES.length) throw new IllegalArgumentException("Invalid terrain");
+        for (int l = 0; l < layers.length; l++) {
+            DataSize size = layers[l].getDataSize();
+            if (size != DataSize.BIT && size != DataSize.BIT_PER_CHUNK && size != NIBBLE && size != BYTE
+                    || values[l].length != area) throw new IllegalArgumentException("Invalid layer plane");
+            for (byte value : values[l]) if ((value & 255) > size.maxValue) throw new IllegalArgumentException("Invalid layer value");
+        }
+        ensureReadable(TERRAIN);
+        boolean changed = false;
+        for (int i = 0; i < area; i++) if ((terrain[i] & 255) != terrains[i]) {
+            if (!changed) { ensureWriteable(TERRAIN); changed = true; }
+            terrain[i] = (byte) terrains[i];
+        }
+        if (changed) terrainChanged();
+        for (int l = 0; l < layers.length; l++) {
+            Layer layer = layers[l]; DataSize size = layer.getDataSize(); byte[] plane = values[l];
+            boolean bit = size == DataSize.BIT || size == DataSize.BIT_PER_CHUNK;
+            ensureReadable(bit ? BIT_LAYER_DATA : LAYER_DATA);
+            BitSet bits = bit ? bitLayerData.get(layer) : null;
+            byte[] data = bit ? null : layerData.get(layer);
+            changed = false;
+            // L'ordre X/Y conserve les mutations successives des couches par chunk.
+            for (int x = 0; x < TILE_SIZE; x++) for (int y = 0; y < TILE_SIZE; y++) {
+                int index = x | y << TILE_SIZE_BITS;
+                int target = plane[index] & 255;
+                int offset = size == DataSize.BIT_PER_CHUNK ? x / 16 + (y / 16) * 8 : index;
+                int current = bit ? bits != null && bits.get(offset) ? 1 : 0
+                        : data == null ? layer.getDefaultValue()
+                        : size == NIBBLE ? (data[index / 2] >>> ((index & 1) * 4)) & 15 : data[index] & 255;
+                if (current == target) continue;
+                if (!changed) {
+                    ensureWriteable(bit ? BIT_LAYER_DATA : LAYER_DATA);
+                    if (bit) {
+                        bits = bitLayerData.get(layer);
+                        if (bits == null) { bits = new BitSet(size == DataSize.BIT ? area : 64); bitLayerData.put(layer, bits); cachedLayers = null; }
+                    } else {
+                        data = layerData.get(layer);
+                        if (data == null) {
+                            data = new byte[size == NIBBLE ? area / 2 : area];
+                            int d = layer.getDefaultValue();
+                            if (d != 0) Arrays.fill(data, (byte) (size == NIBBLE ? d | d << 4 : d));
+                            layerData.put(layer, data); cachedLayers = null;
+                        }
+                        data = detachSharedLayerDataBuffer(layer, data);
+                    }
+                    changed = true;
+                }
+                if (bit) bits.set(offset, target != 0);
+                else if (size == NIBBLE) {
+                    int shift = (index & 1) * 4;
+                    data[index / 2] = (byte) ((data[index / 2] & ~(15 << shift)) | target << shift);
+                } else data[index] = (byte) target;
+            }
+            if (changed) layerDataChanged(layer);
+        }
+    }
+
     /** Copy a rectangle into a caller-owned, X-major region buffer under one lock. */
     synchronized void copyHeightRegion(int x, int y, int width, int height,
                                      float[] destination, int offset, int columnStride) {
