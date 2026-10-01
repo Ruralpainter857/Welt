@@ -65,6 +65,10 @@ public final class HeightMapImportBenchmark {
             boolean rust = args.length>0 && args[0].equals("rust"); String mode=args.length>1 ? args[1] : "fresh";
             int side=args.length>2 ? Integer.parseInt(args[2]) : 4; boolean voidBelow=args.length>3 && args[3].equals("void");
             NativeLoader.areSlicesAvailable(); HeightMap map=image(side);
+            String sampling=args.length>4 ? args[4] : "bitmap";
+            if (sampling.equals("scaled")) map=new TransformingHeightMap("Scaled",new BicubicHeightMap(map),1.5f,.75f,-61,-73,0);
+            else if (sampling.equals("repeat")) map=new TransformingHeightMap("Repeat",new BicubicHeightMap(map,true),1.5f,.75f,-61,-73,0);
+            else if (!sampling.equals("bitmap")) throw new IllegalArgumentException("Unknown sampling workload");
             var bean=(com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean(); double[] times=new double[7]; long[] bytes=new long[7]; long peak=0; int calls=0;
             for (int trial=-5; trial<7; trial++) {
                 System.setProperty(Native.GEN_KEY,"false"); State state=fixture(map,mode,voidBelow); random().setSeed(42);
@@ -74,8 +78,8 @@ public final class HeightMapImportBenchmark {
                 peak=Math.max(peak,NativeSlices.currentProcessResidentBytes()); if(trial>=0) {times[trial]=elapsed;bytes[trial]=allocated;}
             }
             Arrays.sort(times); Arrays.sort(bytes);
-            System.out.printf(Locale.ROOT,"%s import_mode=%s side=%d void=%b median_ms=%.3f heap_allocated_bytes=%d sampled_peak_rss_bytes=%d jni_calls=%d%n",
-                    rust?"Rust":"Java",mode,side*128,voidBelow,times[3],bytes[3],peak,calls);
+            System.out.printf(Locale.ROOT,"%s import_mode=%s side=%d void=%b sampling=%s median_ms=%.3f heap_allocated_bytes=%d sampled_peak_rss_bytes=%d jni_calls=%d%n",
+                    rust?"Rust":"Java",mode,side*128,voidBelow,sampling,times[3],bytes[3],peak,calls);
         } finally {Configuration.setInstance(previous);if(old==null)System.clearProperty(Native.GEN_KEY);else System.setProperty(Native.GEN_KEY,old);}
     }
 }

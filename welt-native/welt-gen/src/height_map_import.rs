@@ -1,4 +1,4 @@
-//! WHIM v1: factory initialization, image height conversion and both themes share
+//! WHIM v1/v2: factory initialization, image height conversion and both themes share
 //! one packed tile. Integers are little endian; cells are x + y * 128.
 //! The 256-byte header contains offsets into the frame, followed by 16-byte
 //! plane descriptors (kind, role, default, payload offset), image samples,
@@ -273,10 +273,12 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
     if d.len() < HEADER
         || d.len() > MAX_BYTES
         || word(d, 0) != 0x4d49_4857
-        || word(d, 4) != 1
+        || !(1..=2).contains(&word(d, 4))
         || word(d, 8) as usize != d.len()
         || word(d, 124) as usize != HEADER
-        || d[208..HEADER].iter().any(|v| *v != 0)
+        || d[if word(d, 4) == 1 { 208 } else { 212 }..HEADER]
+            .iter()
+            .any(|v| *v != 0)
     {
         return Err(bad);
     }
@@ -357,9 +359,22 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
         }
         end = s.imported.read(d, imported, &planes[..n], beach)?;
     }
-    if end != d.len() {
-        return Err(bad);
-    }
+    let source = if word(d, 4) == 2 {
+        if word(d, 208) as usize != end {
+            return Err(bad);
+        }
+        Some(crate::bitmap_import::BitmapSource::read(
+            d,
+            end,
+            word(d, 40) as i32,
+            word(d, 44) as i32,
+        )?)
+    } else {
+        if end != d.len() {
+            return Err(bad);
+        }
+        None
+    };
     let void_plane = word(d, 32) as usize;
     if void && (void_plane < 3 || void_plane >= n || planes[void_plane].kind != 3) {
         return Err(bad);
@@ -374,6 +389,28 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
     }
     let x0 = word(d, 40) as i32;
     let y0 = word(d, 44) as i32;
+    if let Some(source) = source {
+        for y in 0..128 {
+            for x in 0..128 {
+                let wx = x0.wrapping_add(x);
+                let wy = y0.wrapping_add(y);
+                let covered = i64::from(wx) >= i64::from(ex)
+                    && i64::from(wx) < i64::from(ex) + i64::from(ew)
+                    && i64::from(wy) >= i64::from(ey)
+                    && i64::from(wy) < i64::from(ey) + i64::from(eh);
+                let value = if covered {
+                    source.sample(d, wx, wy)
+                } else {
+                    0.0
+                };
+                put_long(
+                    d,
+                    samples + (x as usize + y as usize * 128) * 8,
+                    value.to_bits(),
+                );
+            }
+        }
+    }
     s.heights.resize(AREA, 0);
     s.selected.resize(AREA, true);
     s.terrains.resize(AREA, 0);
@@ -594,6 +631,65 @@ mod tests {
         }
         d
     }
+    #[test]
+    fn fused_raster_sampling_matches_legacy_samples_and_rejects_bad_sources_atomically() {
+        let mut legacy = frame(true);
+        let samples = word(&legacy, 112) as usize;
+        for i in 0..AREA {
+            number(&mut legacy, samples + i * 8, (i * 31 % 65536) as f64);
+        }
+        let mut fused = legacy.clone();
+        let source = fused.len();
+        fused.resize(source + 112 + AREA * 8, 0);
+        let size = fused.len();
+        put(&mut fused, 4, 2);
+        put(&mut fused, 8, size as u32);
+        put(&mut fused, 208, source as u32);
+        for (p, v) in [
+            (0, 0x4d53_4257),
+            (4, 1),
+            (8, (112 + AREA * 8) as u32),
+            (12, 1),
+            (24, 128),
+            (28, 128),
+            (32, 128),
+            (36, 128),
+        ] {
+            put(&mut fused, source + p, v);
+        }
+        number(&mut fused, source + 48, 1.0);
+        number(&mut fused, source + 56, 1.0);
+        for i in 0..AREA {
+            number(&mut fused, source + 112 + i * 8, (i * 31 % 65536) as f64);
+            number(&mut fused, samples + i * 8, -1.0);
+        }
+        let original = fused.clone();
+        import(&mut fused, &mut ImportScratch::default()).unwrap();
+        import(&mut legacy, &mut ImportScratch::default()).unwrap();
+        put(&mut fused, 4, 1);
+        put(&mut fused, 8, source as u32);
+        put(&mut fused, 208, 0);
+        assert_eq!(&fused[..source], &legacy);
+        for (p, v) in [(8, 1), (12, 8), (24, u32::MAX), (16, 100), (104, 1)] {
+            let mut invalid = original.clone();
+            put(&mut invalid, source + p, v);
+            let before = invalid.clone();
+            assert_eq!(
+                import(&mut invalid, &mut ImportScratch::default()),
+                Err(WeltError::IllegalArgument)
+            );
+            assert_eq!(invalid, before);
+        }
+        let mut invalid = original.clone();
+        put(&mut invalid, 208, (source - 1) as u32);
+        let before = invalid.clone();
+        assert_eq!(
+            import(&mut invalid, &mut ImportScratch::default()),
+            Err(WeltError::IllegalArgument)
+        );
+        assert_eq!(invalid, before);
+    }
+
     #[test]
     fn conversion_preserves_java_float_quantisation() {
         let mut d = frame(false);

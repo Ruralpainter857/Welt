@@ -24,10 +24,12 @@ public final class HeightMapImportAccess {
     private final byte[] header, themes;
     private final int samples, initial, meta, size;
     private final boolean canCreate;
+    private final BitmapImportSource source;
 
     private HeightMapImportAccess(HeightMapImporter importer, Dimension dimension, HeightMapTileFactory factory,
                                  SimpleTheme.ImportPlan first, SimpleTheme.ImportPlan second) {
         this.importer = importer; this.factory = factory;
+        source = BitmapImportSource.prepare(importer.getHeightMap());
         extent = importer.getHeightMap().getExtent(); canCreate = first != null;
         List<Layer> planes = new ArrayList<>(Arrays.asList(null, null, null));
         if (importer.isVoidBelow()) planes.add(Void.INSTANCE);
@@ -116,17 +118,22 @@ public final class HeightMapImportAccess {
                 || tile.getMaxHeight()!=importer.getMaxHeight())) return null;
         long x=(long)tx*128,y=(long)ty*128;
         if(x<Integer.MIN_VALUE || y<Integer.MIN_VALUE || x+127>Integer.MAX_VALUE || y+127>Integer.MAX_VALUE) return null;
+        BitmapImportSource.Window window = source == null ? null : source.window((int)x, (int)y);
+        if (window != null && size + window.bytes() > MAX_BYTES) window = null;
+        int frameSize = size + (window == null ? 0 : window.bytes());
         ByteBuffer d=BUFFER.get();
-        if(d==null || d.capacity()<size) {d=ByteBuffer.allocateDirect(size).order(ByteOrder.LITTLE_ENDIAN);BUFFER.set(d);}
-        d.clear().limit(size); d.put(header); d.putInt(24,d.getInt(24)|(fresh?1:0)).putInt(40,(int)x).putInt(44,(int)y);
+        if(d==null || d.capacity()<frameSize) {d=ByteBuffer.allocateDirect(frameSize).order(ByteOrder.LITTLE_ENDIAN);BUFFER.set(d);}
+        d.clear().limit(frameSize); d.put(header);
+        d.putInt(8, frameSize).putInt(4, window == null ? 1 : 2).putInt(208, window == null ? 0 : size); d.putInt(24,d.getInt(24)|(fresh?1:0)).putInt(40,(int)x).putInt(44,(int)y);
         for(int lx=0;lx<128;lx++) for(int ly=0;ly<128;ly++) {
             int i=lx+ly*128,wx=(int)x+lx,wy=(int)y+ly;
-            d.putDouble(samples+i*8,extent.contains(wx,wy)?importer.getHeightMap().getHeight(wx,wy):0);
+            if (window == null) d.putDouble(samples+i*8,extent.contains(wx,wy)?importer.getHeightMap().getHeight(wx,wy):0);
             if(fresh) d.putDouble(initial+i*8,factory.getHeightMap().getHeight(wx,wy));
         }
         if(fresh) tile=new Tile(tx,ty,importer.getMinHeight(),importer.getMaxHeight());
         tile.copySelectionPlanes(d,meta,layers,roles,kinds,offsets);
         d.position(size-themes.length);d.put(themes);d.position(0);
+        if (window != null) source.write(d, size, window);
         if(!SimpleTheme.processHeightMapImport(d)) return null;
         tile.inhibitEvents();
         try {tile.applyOrderedPlanes(d,meta,layers,roles,kinds,offsets);}

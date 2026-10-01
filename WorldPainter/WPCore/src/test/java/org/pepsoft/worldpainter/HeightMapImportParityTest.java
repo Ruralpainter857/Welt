@@ -30,6 +30,75 @@ public class HeightMapImportParityTest {
         });
     }
 
+    @Test public void scaledRasterImportsMatchAllModesAndRepeatedEdges() throws Exception {
+        withConfiguration(() -> {
+            BufferedImage image = new BufferedImage(29, 37, BufferedImage.TYPE_USHORT_GRAY);
+            for (int y=0;y<37;y++) for(int x=0;x<29;x++) image.getRaster().setSample(x,y,0,(x*971+y*313+x*y*17)&65535);
+            HeightMap bitmap=BitmapHeightMap.build().withImage(image).now();
+            for(boolean repeat:new boolean[]{false,true}) for(float scale:new float[]{.5f,.75f,1.5f,2.3f,-1.5f}) for(float rotation:new float[]{0,.2f,-.7f,(float)Math.PI/2}) {
+                HeightMap map=new TransformingHeightMap("Scaled",new BicubicHeightMap(bitmap,repeat),scale,scale*.75f,-13,7,rotation);
+                for(String mode:new String[]{"fresh","existing","raise"}) compareImport(map,mode,true,true,0);
+            }
+        });
+    }
+
+    @Test public void packedSamplingMatchesOriginalDoubleValuesAcrossRasterFormats() throws Exception {
+        withConfiguration(() -> {
+            if(!NativeLoader.areSlicesAvailable()) return;
+            int[] formats={java.awt.image.DataBuffer.TYPE_BYTE,java.awt.image.DataBuffer.TYPE_USHORT,
+                    java.awt.image.DataBuffer.TYPE_SHORT,java.awt.image.DataBuffer.TYPE_INT,
+                    java.awt.image.DataBuffer.TYPE_FLOAT,java.awt.image.DataBuffer.TYPE_DOUBLE};
+            for(int format:formats) {
+                int width=19,height=23;
+                var model=new java.awt.image.ComponentSampleModel(format,width,height,1,width,new int[]{0});
+                var raster=java.awt.image.Raster.createWritableRaster(model,model.createDataBuffer(),null);
+                var colors=new java.awt.image.ComponentColorModel(java.awt.color.ColorSpace.getInstance(java.awt.color.ColorSpace.CS_GRAY),
+                        false,false,java.awt.Transparency.OPAQUE,format);
+                BufferedImage image=new BufferedImage(colors,raster,false,null);
+                for(int y=0;y<height;y++) for(int x=0;x<width;x++) {
+                    double value=(x*971+y*313+x*y*17)%1000-250.125;
+                    if(format==java.awt.image.DataBuffer.TYPE_INT) value=x%2==0 ? Integer.MIN_VALUE+x*17 : Integer.MAX_VALUE-y*3;
+                    raster.setSample(x,y,0,value);
+                }
+                if(format==java.awt.image.DataBuffer.TYPE_FLOAT || format==java.awt.image.DataBuffer.TYPE_DOUBLE) {
+                    raster.setSample(0,0,0,-0.0);raster.setSample(1,0,0,0.0);
+                }
+                HeightMap bitmap=BitmapHeightMap.build().withImage(image).now();
+                for(boolean repeat:new boolean[]{false,true}) for(boolean cubic:new boolean[]{false,true}) {
+                    HeightMap base=cubic?new BicubicHeightMap(bitmap,repeat):bitmap;
+                    for(float scale:new float[]{1f,.75f,2.3f,-1.5f}) for(float rotation:new float[]{0,.2f,-.7f}) {
+                        HeightMap map=new TransformingHeightMap("Samples",base,scale,scale==1?1:scale*.63f,-11,-7,rotation);
+                        System.setProperty(Native.GEN_KEY,"false");
+                        var state=HeightMapImportBenchmark.fixture(map,"fresh",false); state.importer().setTheme(null);
+                        System.setProperty(Native.GEN_KEY,"true");
+                        HeightMapImportAccess access=HeightMapImportAccess.prepare(state.importer(),state.dimension(),true);
+                        assertNotNull(access);assertNotNull(access.importTile(null,-1,-1));
+                        var field=HeightMapImportAccess.class.getDeclaredField("BUFFER");field.setAccessible(true);
+                        java.nio.ByteBuffer data=(java.nio.ByteBuffer)((ThreadLocal<?>)field.get(null)).get();
+                        assertEquals("The fused source must execute",2,data.getInt(4));
+                        int samples=data.getInt(112);var extent=map.getExtent();
+                        for(int y=0;y<128;y++) for(int x=0;x<128;x++) {
+                            int wx=x-128,wy=y-128;double expected=extent.contains(wx,wy)?map.getHeight(wx,wy):0;
+                            assertEquals("Exact sample format="+format+" repeat="+repeat+" cubic="+cubic+" scale="+scale,
+                                    Double.doubleToLongBits(expected),Double.doubleToLongBits(data.getDouble(samples+(x+y*128)*8)));
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    @Test public void oversizedWindowsKeepTheOriginalSamplingPath() throws Exception {
+        withConfiguration(() -> {
+            HeightMap large=BitmapHeightMap.build().withImage(new BufferedImage(2048,2048,BufferedImage.TYPE_BYTE_GRAY)).now();
+            HeightMap shrinking=new TransformingHeightMap("Bounded",new BicubicHeightMap(large),.125f,.125f,0,0,0);
+            assertNull(BitmapImportSource.prepare(shrinking).window(0,0));
+            HeightMap rotated=new TransformingHeightMap("Rotated",new BicubicHeightMap(HeightMapImportBenchmark.image(1)),1.2f,.8f,-15,-17,.2f);
+            assertNotNull(BitmapImportSource.prepare(rotated));
+            compareImport(rotated,"fresh",true,true,0);
+        });
+    }
+
     @Test public void heightConversionClampingAndThemesMatchAtTheirBoundaries() throws Exception {
         withConfiguration(() -> {
             BufferedImage image = new BufferedImage(19, 23, BufferedImage.TYPE_USHORT_GRAY);
