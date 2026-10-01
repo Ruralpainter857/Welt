@@ -303,6 +303,9 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
         // Make sure to copy in the right direction to avoid problems if the
         // destination overlaps the selection
         clearUndoOnNewTileCreation = options.createNewTiles;
+        org.pepsoft.worldpainter.SelectionCopyAccess copyPlan = options.doBlending || options.createNewTiles ? null
+                : org.pepsoft.worldpainter.SelectionCopyAccess.prepare(dimension, dx, dy, options.copyHeights, options.copyTerrain,
+                        options.copyFluids, options.copyLayers, options.copyBiomes, options.copyAnnotations, options.removeExistingLayers);
         if (dx > 0) {
             // Shifting right
             if (dy > 0) {
@@ -310,7 +313,7 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
                 for (int tileX = tileX2; tileX >= tileX1; tileX--) {
                     for (int tileY = tileY2; tileY >= tileY1; tileY--) {
                         Tile tile = dimension.getTile(tileX, tileY);
-                        if (tile != null) {
+                        if (tile != null && (copyPlan == null || !copyPlan.copyTile(tile, dx, dy))) {
                             for (int xInTile = TILE_SIZE - 1; xInTile >= 0; xInTile--) {
                                 for (int yInTile = TILE_SIZE - 1; yInTile >= 0; yInTile--) {
                                     processColumn(tile, xInTile, yInTile, dx, dy);
@@ -327,7 +330,7 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
                 for (int tileX = tileX2; tileX >= tileX1; tileX--) {
                     for (int tileY = tileY1; tileY <= tileY2; tileY++) {
                         Tile tile = dimension.getTile(tileX, tileY);
-                        if (tile != null) {
+                        if (tile != null && (copyPlan == null || !copyPlan.copyTile(tile, dx, dy))) {
                             for (int xInTile = TILE_SIZE - 1; xInTile >= 0; xInTile--) {
                                 for (int yInTile = 0; yInTile < TILE_SIZE; yInTile++) {
                                     processColumn(tile, xInTile, yInTile, dx, dy);
@@ -347,7 +350,7 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
                 for (int tileX = tileX1; tileX <= tileX2; tileX++) {
                     for (int tileY = tileY2; tileY >= tileY1; tileY--) {
                         Tile tile = dimension.getTile(tileX, tileY);
-                        if (tile != null) {
+                        if (tile != null && (copyPlan == null || !copyPlan.copyTile(tile, dx, dy))) {
                             for (int xInTile = 0; xInTile < TILE_SIZE; xInTile++) {
                                 for (int yInTile = TILE_SIZE - 1; yInTile >= 0; yInTile--) {
                                     processColumn(tile, xInTile, yInTile,  dx, dy);
@@ -364,7 +367,7 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
                 for (int tileX = tileX1; tileX <= tileX2; tileX++) {
                     for (int tileY = tileY1; tileY <= tileY2; tileY++) {
                         Tile tile = dimension.getTile(tileX, tileY);
-                        if (tile != null) {
+                        if (tile != null && (copyPlan == null || !copyPlan.copyTile(tile, dx, dy))) {
                             for (int xInTile = 0; xInTile < TILE_SIZE; xInTile++) {
                                 for (int yInTile = 0; yInTile < TILE_SIZE; yInTile++) {
                                     processColumn(tile, xInTile, yInTile, dx, dy);

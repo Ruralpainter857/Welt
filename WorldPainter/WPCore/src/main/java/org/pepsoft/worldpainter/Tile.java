@@ -3209,6 +3209,63 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         layerDataChanged(layer);
     }
 
+    /** Copy all planes under one tile lock; layer absence remains explicit. */
+    synchronized void copySelectionPlanes(ByteBuffer data, int meta, Layer[] layers, int[] roles, int[] kinds, int[] offsets) {
+        data.putInt(meta, x).putInt(meta+4, y).putLong(meta+8, 0).putLong(meta+16, 0).putLong(meta+24, 0);
+        long present = 0;
+        for (int p = 0; p < layers.length; p++) {
+            int base = meta+32+offsets[p], role = roles[p], kind = kinds[p], length = SelectionCopyAccess.length(kind);
+            Layer layer = layers[p]; boolean exists = true;
+            if (role == 0) {
+                ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+                for (int i = 0; i < 16384; i++) data.putInt(base+i*4, tall ? tallHeightMap[i] : heightMap[i] & 65535);
+            } else if (role == 1) {
+                ensureReadable(tall ? TALL_WATERLEVEL : WATERLEVEL);
+                for (int i = 0; i < 16384; i++) data.putInt(base+i*4, (tall ? tallWaterLevel[i] & 65535 : waterLevel[i] & 255) + minHeight);
+            } else if (role == 2) {
+                ensureReadable(TERRAIN); data.position(base); data.put(terrain);
+            } else if (kind >= 3) {
+                ensureReadable(BIT_LAYER_DATA); BitSet bits = bitLayerData.get(layer); exists = bits != null;
+                for (int i = 0; i < length; i += 8) data.putLong(base+i, 0);
+                if (bits != null) for (int b = bits.nextSetBit(0); b >= 0 && b < length*8; b = bits.nextSetBit(b+1))
+                    data.put(base+b/8, (byte) (data.get(base+b/8) | (1 << (b%8))));
+            } else {
+                ensureReadable(LAYER_DATA); byte[] values = layerData.get(layer); exists = values != null;
+                if (exists) { data.position(base); data.put(values); }
+                else {
+                    int value = layer.getDefaultValue(); if (kind == 2) value |= value << 4;
+                    for (int i = 0; i < length; i++) data.put(base+i, (byte) value);
+                }
+            }
+            if (exists) present |= 1L << p;
+        }
+        data.putLong(meta+8, present);
+    }
+
+    /** Apply complete changed planes through undo-aware, copy-on-write storage. */
+    synchronized void applySelectionPlanes(ByteBuffer data, int meta, Layer[] layers, int[] roles, int[] kinds, int[] offsets) {
+        long changed = data.getLong(meta+16);
+        for (int p = 0; p < layers.length; p++) if ((changed & (1L << p)) != 0) {
+            int base = meta+32+offsets[p], role = roles[p], kind = kinds[p]; Layer layer = layers[p];
+            if (role == 0) {
+                ensureWriteable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+                for (int i = 0; i < 16384; i++) if (tall) tallHeightMap[i] = data.getInt(base+i*4); else heightMap[i] = (short) data.getInt(base+i*4);
+                heightMapChanged();
+            } else if (role == 1) {
+                ensureWriteable(tall ? TALL_WATERLEVEL : WATERLEVEL);
+                for (int i = 0; i < 16384; i++) if (tall) tallWaterLevel[i] = (short) (data.getInt(base+i*4)-minHeight); else waterLevel[i] = (byte) (data.getInt(base+i*4)-minHeight);
+                waterLevelChanged();
+            } else if (role == 2) {
+                ensureWriteable(TERRAIN); data.position(base); data.get(terrain); terrainChanged();
+            } else {
+                ensureWriteable(kind >= 3 ? BIT_LAYER_DATA : LAYER_DATA);
+                if (kind >= 3) bitLayerData.put(layer, SelectionTileAccess.applyBits(data, base, SelectionCopyAccess.length(kind), bitLayerData.get(layer)));
+                else applyNumericLayerPlane(layer, data, base, SelectionCopyAccess.length(kind));
+                cachedLayers = null; layerDataChanged(layer);
+            }
+        }
+    }
+
     private void applyNumericLayerPlane(Layer layer, ByteBuffer buffer, int offset, int bytes) {
         byte[] values = layerData.get(layer);
         if (values == null) { values = new byte[bytes]; layerData.put(layer, values); }

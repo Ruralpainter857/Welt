@@ -9,7 +9,7 @@ import org.pepsoft.worldpainter.layers.*;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import static org.junit.Assert.*;
 
-/** Oracle scalaire indépendant pour préserver l'ordre des lectures et des écritures en cas de chevauchement. */
+/** Independent scalar oracle preserving read/write order during overlapping copies. */
 public class SelectionCopyParityTest {
     private static final Set<Layer> SKIP = Set.of(Biome.INSTANCE, SelectionChunk.INSTANCE, SelectionBlock.INSTANCE,
             NotPresent.INSTANCE, NotPresentBlock.INSTANCE, Annotations.INSTANCE, FloodWithLava.INSTANCE);
@@ -97,5 +97,52 @@ public class SelectionCopyParityTest {
             assertTrue(undo.undo()); same(before, b); assertTrue(undo.redo()); same(a, b);
         } finally { restore(old); }
     }
+    @Test public void preparedPlanUsesOneNativeCallPerSourceTile() throws Exception {
+        org.junit.Assume.assumeTrue(org.pepsoft.worldpainter.nativeapi.NativeLoader.areSlicesAvailable());
+        String old = System.getProperty(Native.GEN_KEY);
+        try {
+            Dimension expected = SelectionCopyBenchmark.fixture(2), actual = SelectionCopyBenchmark.fixture(2);
+            SelectionOptions o = new SelectionOptions(); o.setCopyAnnotations(true);
+            SelectionCopyBenchmark.copy(expected, o, 17, -19, false);
+            System.setProperty(Native.GEN_KEY, "true"); actual.setEventsInhibited(true);
+            var plan = org.pepsoft.worldpainter.SelectionCopyAccess.prepare(actual, 17, -19, true, true, true, true, true, true, true);
+            assertNotNull(plan);
+            for (int tx = 0; tx >= -1; tx--) for (int ty = -1; ty <= 0; ty++) assertTrue(plan.copyTile(actual.getTile(tx, ty), 17, -19));
+            actual.setEventsInhibited(false); assertEquals(4, plan.getNativeCalls()); same(expected, actual);
+        } finally { restore(old); }
+    }
+
+    @Test public void absentPlanesAndChunkDefaultsKeepLayerPresence() throws Exception {
+        String old = System.getProperty(Native.GEN_KEY);
+        Layer bitDefault = new Layer("welt.test.copy.bitdefault", "BitDefault", "", Layer.DataSize.BIT_PER_CHUNK, false, 32) {
+            @Override public int getDefaultValue() { return 1; }
+        };
+        try {
+            for (int dx : new int[] {17, 129}) {
+                Dimension expected = SelectionCopyBenchmark.fixture(2), actual = SelectionCopyBenchmark.fixture(2);
+                for (Dimension d : new Dimension[] {expected, actual}) {
+                    d.getTile(0, 0).clearLayerData(Resources.INSTANCE);
+                    d.getTile(0, 0).clearLayerData(SelectionCopyBenchmark.DEFAULT);
+                    d.getTile(0, 0).clearLayerData(Frost.INSTANCE);
+                    d.getTile(0, 0).clearLayerData(Biome.INSTANCE);
+                    d.getTile(-1, -1).setBitLayerValue(bitDefault, 17, 17, true);
+                    d.getTile(0, -1).setBitLayerValue(bitDefault, 17, 17, true);
+                }
+                SelectionOptions o = new SelectionOptions(); o.setCopyAnnotations(true);
+                SelectionCopyBenchmark.copy(expected, o, dx, 19, false); SelectionCopyBenchmark.copy(actual, o, dx, 19, true);
+                same(expected, actual);
+            }
+        } finally { restore(old); }
+    }
+    @Test public void unsupportedStorageFallsBackBeforeAnyNativeChanges() {
+        String old = System.getProperty(Native.GEN_KEY);
+        try {
+            System.setProperty(Native.GEN_KEY, "true"); Dimension d = SelectionCopyBenchmark.fixture(2);
+            d.removeTile(0, 0); d.addTile(new Tile(0, 0, d.getMinHeight(), d.getMaxHeight()) {}); d.setEventsInhibited(true);
+            assertNull(org.pepsoft.worldpainter.SelectionCopyAccess.prepare(d, 17, -19, true, true, true, true, true, true, true));
+            d.setEventsInhibited(false);
+        } finally { restore(old); }
+    }
+
     private static void restore(String old) { if (old == null) System.clearProperty(Native.GEN_KEY); else System.setProperty(Native.GEN_KEY, old); }
 }
