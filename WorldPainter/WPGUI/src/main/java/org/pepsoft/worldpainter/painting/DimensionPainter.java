@@ -7,6 +7,7 @@
 package org.pepsoft.worldpainter.painting;
 
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.GlyphPaintAccess;
 import org.pepsoft.worldpainter.Terrain;
 import org.pepsoft.worldpainter.PaintFloodAccess;
 import org.pepsoft.worldpainter.PaintFloodSession;
@@ -228,6 +229,7 @@ public final class DimensionPainter {
      */
     @SuppressWarnings("SuspiciousNameCombination")
     public void drawText(Dimension dimension, int x, int y, String text) {
+        lastNativeTextCalls = 0;
         final String[] lines = text.split("\\n");
         for (String line: lines) {
             final int lineHeight = drawTextLine(dimension, x, y, line);
@@ -589,6 +591,7 @@ public final class DimensionPainter {
         } finally {
             g2.dispose();
         }
+        if (paintNativeGlyph(dimension, image, textWidth, textHeight, x, y)) return (int) bounds.getHeight();
         if (undo) {
             for (int xx = 0; xx < textWidth; xx++) {
                 for (int yy = 0; yy < textHeight; yy++) {
@@ -633,6 +636,47 @@ public final class DimensionPainter {
             }
         }
         return (int) bounds.getHeight();
+    }
+
+    /** Number of successful whole-tile JNI transactions in the most recent text drawing. */
+    public int getLastNativeTextCalls() { return lastNativeTextCalls; }
+    private int lastNativeTextCalls;
+
+    private boolean paintNativeGlyph(Dimension dimension, BufferedImage image, int width, int height, int x, int y) {
+        if (paint == null || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return false;
+        java.util.List<Layer> layers = new java.util.ArrayList<>();
+        java.util.List<Integer> roles = new java.util.ArrayList<>(), operations = new java.util.ArrayList<>(), targets = new java.util.ArrayList<>();
+        if (paint.getClass() == TerrainPaint.class && !undo) {
+            glyphPlane(layers, roles, operations, targets, null, 2, 0, ((TerrainPaint)paint).getTerrain().ordinal());
+        } else if (paint.getClass() == BitLayerPaint.class) {
+            glyphPlane(layers, roles, operations, targets, ((LayerPaint)paint).getLayer(), 3, 0, undo ? 0 : 1);
+        } else if (paint.getClass() == DiscreteLayerPaint.class) {
+            DiscreteLayerPaint p = (DiscreteLayerPaint)paint;
+            glyphPlane(layers, roles, operations, targets, p.getLayer(), 3, 0, undo ? p.getRemovalValue() : p.getValue());
+        } else if (paint.getClass() == NibbleLayerPaint.class || paint.getClass() == CombinedLayerPaint.class) {
+            if (!undo && !hasStableBrushLevel(paint)) return false;
+            glyphPlane(layers, roles, operations, targets, ((LayerPaint)paint).getLayer(), 3, undo ? 0 : 1,
+                    undo ? 0 : 1 + Math.round(paint.getBrush().getLevel() * 14));
+            if (paint.getClass() == CombinedLayerPaint.class) {
+                org.pepsoft.worldpainter.layers.CombinedLayer combined = (org.pepsoft.worldpainter.layers.CombinedLayer)((LayerPaint)paint).getLayer();
+                if (!combined.isApplyTerrainAndBiomeOnExport()) {
+                    if (undo && combined.getTerrain() != null) return false;
+                    if (combined.getTerrain() != null) glyphPlane(layers, roles, operations, targets, null, 2, 0, combined.getTerrain().ordinal());
+                    if (combined.getBiome() != -1) glyphPlane(layers, roles, operations, targets, org.pepsoft.worldpainter.layers.Biome.INSTANCE,
+                            3, 0, undo ? 255 : combined.getBiome());
+                }
+            }
+        } else return false;
+        int calls = GlyphPaintAccess.paint(dimension, image, width, height, x, y, textAngle,
+                layers.toArray(new Layer[0]), roles.stream().mapToInt(Integer::intValue).toArray(),
+                operations.stream().mapToInt(Integer::intValue).toArray(), targets.stream().mapToInt(Integer::intValue).toArray());
+        if (calls < 0) return false;
+        lastNativeTextCalls += calls;return true;
+    }
+    private static void glyphPlane(java.util.List<Layer> layers, java.util.List<Integer> roles,
+                                   java.util.List<Integer> operations, java.util.List<Integer> targets,
+                                   Layer layer, int role, int operation, int target) {
+        layers.add(layer);roles.add(role);operations.add(operation);targets.add(target);
     }
 
     private Paint paint;

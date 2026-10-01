@@ -129,7 +129,7 @@ public final class HeightMapImportAccess {
         d.position(size-themes.length);d.put(themes);d.position(0);
         if(!SimpleTheme.processHeightMapImport(d)) return null;
         tile.inhibitEvents();
-        try {tile.applyImportPlanes(d,meta,layers,roles,kinds,offsets);}
+        try {tile.applyOrderedPlanes(d,meta,layers,roles,kinds,offsets);}
         finally {tile.releaseEvents();}
         return tile;
     }

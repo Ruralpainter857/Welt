@@ -12,6 +12,7 @@ import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.layers.Layer;
 import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import static org.junit.Assert.*;
 
 /** Original scalar glyph renderer is independent of the production drawText implementation. */
@@ -29,6 +30,9 @@ public class TextPaintParityTest {
                     System.setProperty(Native.GEN_KEY, "true");
                     DimensionPainter painter = painter(paint, font, angle, undo); painter.drawText(actual, -9, 4, text);
                     expected.setEventsInhibited(false); actual.setEventsInhibited(false); same(expected, actual);
+                    if (NativeLoader.areSlicesAvailable() && !(undo && (type.equals("terrain") || type.equals("combined"))))
+                        assertTrue("The native glyph path must execute", painter.getLastNativeTextCalls() > 0);
+                    else if (undo && (type.equals("terrain") || type.equals("combined"))) assertEquals(0,painter.getLastNativeTextCalls());
                 }
         } finally {restore(old);}
     }
@@ -60,6 +64,53 @@ public class TextPaintParityTest {
             same(expected,actual);assertTrue(undo.undo());same(before,actual);assertTrue(undo.redo());same(expected,actual);
         } finally {restore(old);}
     }
+    @Test public void nativeEditsPreserveCoalescedNotificationsAndExistingDefaultPlanes() {
+        String old = System.getProperty(Native.GEN_KEY);
+        try {
+            for (String type : new String[] {"terrain", "biome", "bit", "chunk", "nibble", "combined"}) {
+                System.setProperty(Native.GEN_KEY,"false");Dimension expected=NibbleLayerPaintParityTest.fixture(),actual=NibbleLayerPaintParityTest.fixture();
+                Paint paint=TextPaintBenchmark.paint(type);Font font=new Font("Dialog",Font.BOLD,25);
+                Map<String,Integer> expectedEvents=events(expected),actualEvents=events(actual);
+                for (boolean undo : new boolean[] {false,true,false}) {
+                    expected.setEventsInhibited(true);actual.setEventsInhibited(true);
+                    System.setProperty(Native.GEN_KEY,"false");scalar(expected,paint,font,2,undo,5,11,"Welt\nRust");
+                    System.setProperty(Native.GEN_KEY,"true");painter(paint,font,2,undo).drawText(actual,5,11,"Welt\nRust");
+                    expected.setEventsInhibited(false);actual.setEventsInhibited(false);
+                    same(expected,actual);assertEquals(expectedEvents,actualEvents);
+                }
+            }
+        } finally {restore(old);}
+    }
+    @Test public void customPaintPreservesGlobalPixelOrderAndWrappedCoordinates() {
+        String old=System.getProperty(Native.GEN_KEY);
+        try {
+            for(int angle=0;angle<4;angle++) for(int start:new int[]{-9,Integer.MAX_VALUE-7,Integer.MIN_VALUE+7}) {
+                System.setProperty(Native.GEN_KEY,"false");Dimension expected=NibbleLayerPaintParityTest.fixture(),actual=NibbleLayerPaintParityTest.fixture();
+                Paint base=TextPaintBenchmark.paint("biome");List<Long> wanted=new ArrayList<>(),observed=new ArrayList<>();
+                Font font=new Font("Dialog",Font.PLAIN,8);
+                expected.setEventsInhibited(true);scalar(expected,recording(base,wanted),font,angle,false,start,3,"Welt\nRust");expected.setEventsInhibited(false);
+                System.setProperty(Native.GEN_KEY,"true");DimensionPainter painter=painter(recording(base,observed),font,angle,false);
+                actual.setEventsInhibited(true);painter.drawText(actual,start,3,"Welt\nRust");actual.setEventsInhibited(false);
+                assertEquals(wanted,observed);same(expected,actual);assertEquals(0,painter.getLastNativeTextCalls());
+            }
+        } finally {restore(old);}
+    }
+    private static Paint recording(Paint delegate,List<Long> points) {
+        return (Paint)java.lang.reflect.Proxy.newProxyInstance(Paint.class.getClassLoader(),new Class<?>[]{Paint.class},(p,m,args)->{
+            if(m.getName().equals("applyPixel") || m.getName().equals("removePixel"))
+                points.add(((long)(int)args[1]<<32)|((int)args[2]&0xffffffffL));
+            return m.invoke(delegate,args);
+        });
+    }
+    private static Map<String,Integer> events(Dimension dimension) {
+        Map<String,Integer> result=new TreeMap<>();
+        for(Tile tile:dimension.getTiles())tile.addListener((Tile.Listener)java.lang.reflect.Proxy.newProxyInstance(
+                Tile.Listener.class.getClassLoader(),new Class<?>[]{Tile.Listener.class},(p,m,args)->{
+                    result.merge(tile.getX()+","+tile.getY()+":"+m.getName(),1,Integer::sum);return null;
+                }));
+        return result;
+    }
+
     static DimensionPainter painter(Paint paint, Font font, int angle, boolean undo) {
         DimensionPainter painter = new DimensionPainter();painter.setPaint(paint);painter.setFont(font);
         painter.setTextAngle(angle);painter.setUndo(undo);return painter;

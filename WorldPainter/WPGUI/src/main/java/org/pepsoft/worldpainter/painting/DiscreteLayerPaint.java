@@ -49,6 +49,9 @@ public final class DiscreteLayerPaint extends LayerPaint {
         return value;
     }
 
+    /** The removal target is captured when this paint is constructed. */
+    public int getRemovalValue() { return defaultValue; }
+
     @Override
     public String getId() {
         return super.getId() + '/' + value;

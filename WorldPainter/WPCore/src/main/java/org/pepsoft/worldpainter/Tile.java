@@ -3295,8 +3295,8 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         applyPackedPlanes(data, meta, layers, roles, kinds, offsets, -1);
     }
 
-    /** Preserve original map insertion order when applying a fused import transaction. */
-    synchronized void applyImportPlanes(ByteBuffer data, int meta, Layer[] layers, int[] roles, int[] kinds, int[] offsets) {
+    /** Preserve original map insertion order when applying prepared native planes. */
+    synchronized void applyOrderedPlanes(ByteBuffer data, int meta, Layer[] layers, int[] roles, int[] kinds, int[] offsets) {
         applyPackedPlanes(data, meta, layers, roles, kinds, offsets, 140);
     }
 
