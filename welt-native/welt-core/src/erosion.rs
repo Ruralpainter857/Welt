@@ -3,6 +3,104 @@
 const MAX_WINDOW_CELLS: usize = 1_048_576;
 const ERODE_AMOUNT: i32 = 64;
 
+pub const COMPACT_MAX_BYTES: usize = 32 + 6 * 513 * 513 + 3 * 511 * 511;
+
+// WLER v1 : en-tête LE de 32 octets, hauteurs i32, formats u8, masque u8 et contrôles u8.
+// Les formats 0/1/2 représentent une tuile absente, une hauteur u16 et une hauteur i32.
+pub fn erode_compact(data: &mut [u8]) -> Result<(), crate::error::WeltError> {
+    use crate::error::WeltError::IllegalArgument;
+    fn get(data: &[u8], offset: usize) -> i32 {
+        i32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
+    }
+    if data.len() < 32 || get(data, 0) != 0x52454c57 || get(data, 4) != 1 {
+        return Err(IllegalArgument);
+    }
+    let radius = get(data, 8);
+    if !(0..=255).contains(&radius) {
+        return Err(IllegalArgument);
+    }
+    let side = radius as usize * 2 + 1;
+    let width = side + 2;
+    let area = width * width;
+    let types = 32 + area * 4;
+    let mask = types + area;
+    let controls = mask + area;
+    if get(data, 12) != width as i32
+        || get(data, 16) != 32
+        || get(data, 20) != types as i32
+        || get(data, 24) != mask as i32
+        || get(data, 28) != controls as i32
+        || data.len() != controls + side * side * 3
+        || data[types..mask].iter().any(|&format| format > 2)
+    {
+        return Err(IllegalArgument);
+    }
+    data[mask..controls].fill(0);
+    for x in 0..side {
+        for y in 0..side {
+            let c = controls + (x * side + y) * 3;
+            if data[c] == 0 {
+                continue;
+            }
+            let mut low = i32::MAX;
+            let mut lx = 0;
+            let mut ly = 0;
+            for a in 0..3 {
+                for b in 0..3 {
+                    let dx = if data[c + 1] != 0 { 2 - a } else { a };
+                    let dy = if data[c + 2] != 0 { 2 - b } else { b };
+                    let index = (x + dx) * width + y + dy;
+                    let value = if data[types + index] == 0 {
+                        i32::MIN
+                    } else {
+                        get(data, 32 + index * 4)
+                    };
+                    if value < low {
+                        low = value;
+                        lx = dx;
+                        ly = dy;
+                    }
+                }
+            }
+            if lx == 1 && ly == 1 {
+                continue;
+            }
+            let centre = (x + 1) * width + y + 1;
+            let lowest = (x + lx) * width + y + ly;
+            let current = if data[types + centre] == 0 {
+                i32::MIN
+            } else {
+                get(data, 32 + centre * 4)
+            };
+            let half = current.wrapping_sub(low) / 2;
+            let divisor = if lx != 1 && ly != 1 {
+                std::f32::consts::SQRT_2
+            } else {
+                1.0
+            };
+            let amount = ((half as f32 / divisor) as i32).min(64);
+            let fraction = amount as f32 / 64.0;
+            let amount = (fraction * fraction * 64.0) as i32;
+            if amount > 0 {
+                // Chaque mutation respecte immédiatement le stockage Java ; les lectures suivantes la voient.
+                for (index, value) in [
+                    (centre, current.wrapping_sub(amount)),
+                    (lowest, low.wrapping_add(amount)),
+                ] {
+                    let value = match data[types + index] {
+                        0 => continue,
+                        1 => value & 0xffff,
+                        _ => value,
+                    };
+                    data[32 + index * 4..36 + index * 4].copy_from_slice(&value.to_le_bytes());
+                    data[mask + index] = 1;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErosionError {
     InvalidRadius,
@@ -130,6 +228,42 @@ pub fn erode_raw_height_region(
 #[cfg(test)]
 mod tests {
     use super::{erode_raw_height_region, ErosionError};
+
+    #[test]
+    fn compact_format_preserves_missing_cells_and_validates_before_mutation() {
+        let mut data = vec![0; 89];
+        for (offset, value) in [
+            (0, 0x52454c57_i32),
+            (4, 1),
+            (8, 0),
+            (12, 3),
+            (16, 32),
+            (20, 68),
+            (24, 77),
+            (28, 86),
+        ] {
+            data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        for i in 0..9 {
+            data[32 + i * 4..36 + i * 4].copy_from_slice(&1000_i32.to_le_bytes());
+            data[68 + i] = 1;
+        }
+        data[86] = 1;
+        data[68] = 0;
+        super::erode_compact(&mut data).unwrap();
+        assert_eq!(data[77], 0);
+        assert_eq!(i32::from_le_bytes(data[32..36].try_into().unwrap()), 1000);
+        let mut invalid = data.clone();
+        invalid[68 + 8] = 3;
+        let before = invalid.clone();
+        assert!(super::erode_compact(&mut invalid).is_err());
+        assert_eq!(invalid, before);
+        invalid = data.clone();
+        invalid[28] = 0;
+        let before = invalid.clone();
+        assert!(super::erode_compact(&mut invalid).is_err());
+        assert_eq!(invalid, before);
+    }
 
     #[test]
     fn moves_height_to_the_lowest_neighbor_and_logs_java_write_order() {

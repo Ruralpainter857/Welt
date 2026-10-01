@@ -123,6 +123,14 @@ public final class NativeSlices {
 
     private static native int nativeEditNibbleBrush(ByteBuffer buffer, int length);
 
+    public static boolean erodeCompactRegion(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null
+                || !buffer.isDirect() || buffer.isReadOnly() || buffer.limit() < 89 || buffer.limit() > 2362409) return false;
+        try { return nativeErodeCompactRegion(buffer, buffer.limit()) == 0; }
+        catch (UnsatisfiedLinkError e) { return false; }
+    }
+    private static native int nativeErodeCompactRegion(ByteBuffer buffer, int length);
+
     public static boolean editMaskedPlane(ByteBuffer buffer) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
                 || buffer == null || !buffer.isDirect() || buffer.isReadOnly()

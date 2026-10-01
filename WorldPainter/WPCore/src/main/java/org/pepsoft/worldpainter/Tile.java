@@ -376,6 +376,34 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    synchronized void copyErosionRegion(int x, int y, int width, int height, ByteBuffer buffer, int offset, int stride, int types) {
+        checkHeightRegion(x, y, width, height, (types - 32) / 4, offset, stride);
+        ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+        for (int dx = 0; dx < width; dx++) for (int dy = 0; dy < height; dy++) {
+            int cell = (x + dx) | ((y + dy) << TILE_SIZE_BITS), i = offset + dx * stride + dy;
+            buffer.putInt(32 + i * 4, tall ? tallHeightMap[cell] : heightMap[cell] & 0xffff);
+            buffer.put(types + i, (byte) (tall ? 2 : 1));
+        }
+    }
+
+    void applyErosionRegion(int x, int y, int width, int height, ByteBuffer buffer, int offset, int stride, int mask) {
+        int area = (mask - 32) / 5;
+        checkHeightRegion(x, y, width, height, area, offset, stride);
+        if (mask + (long) area > buffer.limit()) throw new IndexOutOfBoundsException("Invalid erosion mask");
+        boolean changed = false;
+        synchronized (this) {
+            if (eventInhibitionCounter == 0) throw new IllegalStateException("Bulk erosion requires inhibited events");
+            for (int dx = 0; dx < width; dx++) for (int dy = 0; dy < height; dy++) {
+                int i = offset + dx * stride + dy;
+                if (buffer.get(mask + i) == 0) continue;
+                if (!changed) { ensureWriteable(tall ? TALL_HEIGHTMAP : HEIGHTMAP); changed = true; }
+                int cell = (x + dx) | ((y + dy) << TILE_SIZE_BITS), value = buffer.getInt(32 + i * 4);
+                if (tall) tallHeightMap[cell] = value; else heightMap[cell] = (short) value;
+            }
+        }
+        if (changed) heightMapChanged();
+    }
+
     private static void checkHeightRegion(int x, int y, int width, int height,
                                           int length, int offset, int columnStride) {
         if (x < 0 || y < 0 || width <= 0 || height <= 0
