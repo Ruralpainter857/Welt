@@ -303,7 +303,10 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
         // Make sure to copy in the right direction to avoid problems if the
         // destination overlaps the selection
         clearUndoOnNewTileCreation = options.createNewTiles;
-        org.pepsoft.worldpainter.SelectionCopyAccess copyPlan = options.doBlending || options.createNewTiles ? null
+        org.pepsoft.worldpainter.SelectionCopyAccess copyPlan = options.createNewTiles ? null
+                : options.doBlending ? org.pepsoft.worldpainter.SelectionCopyAccess.prepareBlended(dimension, dx, dy, options.copyHeights,
+                        options.copyTerrain, options.copyFluids, options.copyLayers, options.copyBiomes, options.copyAnnotations,
+                        options.removeExistingLayers, RANDOM)
                 : org.pepsoft.worldpainter.SelectionCopyAccess.prepare(dimension, dx, dy, options.copyHeights, options.copyTerrain,
                         options.copyFluids, options.copyLayers, options.copyBiomes, options.copyAnnotations, options.removeExistingLayers);
         if (dx > 0) {

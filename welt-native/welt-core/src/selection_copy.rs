@@ -9,6 +9,7 @@
 //! zero bytes, followed by the packed planes. All coordinates are world tile indices.
 
 use crate::error::WeltError;
+mod blend;
 
 pub const MAX_BYTES: usize = 6 * 1024 * 1024;
 const AREA: usize = 16384;
@@ -63,6 +64,9 @@ fn set(d: &mut [u8], base: usize, kind: u32, i: usize, value: u32) {
 
 /// Validate the complete frame before writing data or change masks.
 pub fn copy(data: &mut [u8]) -> Result<(), WeltError> {
+    if data.len() >= 8 && word(data, 4) == 2 {
+        return blend::copy_blended(data);
+    }
     let bad = WeltError::IllegalArgument;
     if data.len() < 64
         || data.len() > MAX_BYTES

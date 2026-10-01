@@ -62,6 +62,10 @@ public final class SelectionCopyBenchmark {
         SelectionOptions options = new SelectionOptions(); options.setCopyAnnotations(true); options.setDoBlending(blending);
         for (int trial = -5; trial < 7; trial++) {
             System.setProperty(Native.GEN_KEY, "false"); Dimension d = fixture(side);
+            if (blending) {
+                var field = SelectionHelper.class.getDeclaredField("RANDOM"); field.setAccessible(true);
+                ((java.util.Random) field.get(null)).setSeed(42);
+            }
             long before = bean.getThreadAllocatedBytes(Thread.currentThread().getId()), start = System.nanoTime();
             for (int i = 0; i < 8; i++) copy(d, options, (i & 1) == 0 ? 17 : -17, (i & 2) == 0 ? -19 : 19, rust);
             double elapsed = (System.nanoTime() - start) / 1e6;

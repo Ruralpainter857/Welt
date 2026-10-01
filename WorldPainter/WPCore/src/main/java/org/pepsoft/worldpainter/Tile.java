@@ -3242,6 +3242,54 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         data.putLong(meta+8, present);
     }
 
+    /** Snapshot both current and post-COW map order without changing undo state. */
+    synchronized boolean copySelectionBlendOrder(ByteBuffer data, int extension, Layer[] layers, int[] roles, int[] operations, boolean copyLayers) {
+        ensureReadable(LAYER_DATA); ensureReadable(BIT_LAYER_DATA);
+        for (int i = 0; i < 64; i++) {
+            data.putInt(extension+i*4, 0); data.put(extension+256+i, (byte) 0);
+            data.put(extension+320+i, (byte) 255); data.put(extension+384+i, (byte) 255);
+        }
+        for (int p = 0; p < layers.length; p++) {
+            Layer l = layers[p]; int role = roles[p];
+            if (role == 3) {
+                int hash = l.hashCode(); data.putInt(extension+p*4, hash ^ (hash >>> 16));
+                role = operations[p] == 0 ? 8 : operations[p] == 2 ? 7 : l == FloodWithLava.INSTANCE ? 3 : l == Biome.INSTANCE ? 5 : 6;
+            }
+            data.put(extension+256+p, (byte) role);
+        }
+        if ((!layerData.isEmpty() && layerData.getClass() != HashMap.class)
+                || (!bitLayerData.isEmpty() && bitLayerData.getClass() != HashMap.class)) return false;
+        boolean numericCow = undoManager != null && !writeableBuffers.contains(LAYER_DATA);
+        boolean bitCow = undoManager != null && !writeableBuffers.contains(BIT_LAYER_DATA);
+        int rank = 0;
+        for (Layer l : layerData.keySet()) { int p = selectionCopyPlane(l, layers); if (p >= 0) data.put(extension+320+p, (byte) rank++); else if (copyLayers) return false; }
+        for (Layer l : bitLayerData.keySet()) { int p = selectionCopyPlane(l, layers); if (p >= 0) data.put(extension+320+p, (byte) rank++); else if (copyLayers) return false; }
+        rank = 0;
+        Map<Layer, byte[]> numeric = numericCow ? new HashMap<>(layerData) : layerData;
+        Map<Layer, BitSet> bits = bitCow ? new HashMap<>(bitLayerData) : bitLayerData;
+        for (Layer l : numeric.keySet()) { int p = selectionCopyPlane(l, layers); if (p >= 0) data.put(extension+384+p, (byte) rank++); }
+        for (Layer l : bits.keySet()) { int p = selectionCopyPlane(l, layers); if (p >= 0) data.put(extension+384+p, (byte) rank++); }
+        data.putInt(extension+448, (numericCow ? 1 : 0) | (bitCow ? 2 : 0)).putInt(extension+452, 0);
+        return true;
+    }
+    private static int selectionCopyPlane(Layer layer, Layer[] layers) {
+        for (int p = 0; p < layers.length; p++) if (layer.equals(layers[p])) return p;
+        return -1;
+    }
+    /** Copy only the intersecting strip of a neighbour into the 16-block selection halo. */
+    synchronized void copySelectionHalo(ByteBuffer data, int offset, int tileDx, int tileDy) {
+        ensureReadable(BIT_LAYER_DATA);
+        BitSet chunks = bitLayerData.get(SelectionChunk.INSTANCE), blocks = bitLayerData.get(SelectionBlock.INSTANCE);
+        int x1 = Math.max(0, -16-tileDx*128), x2 = Math.min(128, 144-tileDx*128);
+        int y1 = Math.max(0, -16-tileDy*128), y2 = Math.min(128, 144-tileDy*128);
+        for (int y = y1; y < y2; y++) for (int x = x1; x < x2; x++) {
+            if (chunks != null && chunks.get(x/16+y/16*8) || blocks != null && blocks.get(x+y*128)) {
+                int bit = x+tileDx*128+16+(y+tileDy*128+16)*160;
+                data.put(offset+bit/8, (byte) (data.get(offset+bit/8) | (1 << (bit%8))));
+            }
+        }
+    }
+
     /** Apply complete changed planes through undo-aware, copy-on-write storage. */
     synchronized void applySelectionPlanes(ByteBuffer data, int meta, Layer[] layers, int[] roles, int[] kinds, int[] offsets) {
         long changed = data.getLong(meta+16);
