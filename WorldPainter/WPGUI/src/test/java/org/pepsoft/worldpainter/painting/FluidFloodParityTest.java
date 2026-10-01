@@ -11,7 +11,7 @@ import org.pepsoft.util.undo.UndoManager;
 import static org.junit.Assert.*;
 
 public class FluidFloodParityTest {
-    private static void same(Dimension a, Dimension b) {
+    static void same(Dimension a, Dimension b) {
         assertEquals(a.getTileCoords(), b.getTileCoords());
         for (Tile ta : a.getTiles()) {
             Tile tb = b.getTile(ta.getX(), ta.getY()); assertEquals(ta.getLayers(), tb.getLayers());
@@ -75,7 +75,7 @@ public class FluidFloodParityTest {
             assertFalse(FluidFloodAccess.tryFill(actual, -64, -64, false, true)); actual.setEventsInhibited(false);
         } finally { restore(old); }
     }
-    private static java.util.Map<String, Integer> events(Dimension d) {
+    static java.util.Map<String, Integer> events(Dimension d) {
         var events = new java.util.TreeMap<String, Integer>();
         for (Tile tile : d.getTiles()) tile.addListener((Tile.Listener) java.lang.reflect.Proxy.newProxyInstance(Tile.Listener.class.getClassLoader(),
                 new Class<?>[] {Tile.Listener.class}, (p, m, a) -> {

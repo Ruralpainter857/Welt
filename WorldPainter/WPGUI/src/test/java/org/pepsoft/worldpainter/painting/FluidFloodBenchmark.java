@@ -11,16 +11,17 @@ public final class FluidFloodBenchmark {
         Platform platform = DefaultPlugin.JAVA_ANVIL_1_19;
         return new World2(platform, platform.minZ, platform.standardMaxHeight);
     }
-    public static Dimension fixture() {
+    public static Dimension fixture() { return fixture(2); }
+    public static Dimension fixture(int side) {
         World2 world = world();
         int min = world.getMinHeight(), max = world.getMaxHeight();
         var factory = new HeightMapTileFactory(0L, new org.pepsoft.worldpainter.heightMaps.ConstantHeightMap(62), min, max,
                 false, org.pepsoft.worldpainter.themes.SimpleTheme.createSingleTerrain(Terrain.GRASS, min, max, 62));
         Dimension d = new Dimension(world, "Fluid", 0, factory, Dimension.Anchor.NORMAL_DETAIL, false);
-        for (int tx = -1; tx <= 0; tx++) for (int ty = -1; ty <= 0; ty++) {
+        for (int tx = -1; tx < side - 1; tx++) for (int ty = -1; ty < side - 1; ty++) {
             Tile t = new Tile(tx, ty, d.getMinHeight(), d.getMaxHeight()); t.inhibitEvents();
             for (int x = 0; x < 128; x++) for (int y = 0; y < 128; y++) {
-                t.setHeight(x, y, x == 127 ? 100 : 50 + (y % 11) / 256f); t.setWaterLevel(x, y, 49);
+                t.setHeight(x, y, side == 2 && x == 127 ? 100 : 50 + (y % 11) / 256f); t.setWaterLevel(x, y, 49);
             }
             t.releaseEvents(); d.addTile(t);
         }
@@ -54,16 +55,21 @@ public final class FluidFloodBenchmark {
     }
     public static void main(String[] args) throws Exception {
         boolean rust = args.length > 0 && args[0].equals("rust");
+        int side = args.length > 1 ? Integer.parseInt(args[1]) : 2;
         org.pepsoft.worldpainter.nativeapi.NativeLoader.areSlicesAvailable();
         double[] times = new double[7]; long allocated = 0;
         var bean = (com.sun.management.ThreadMXBean) java.lang.management.ManagementFactory.getThreadMXBean();
         for (int trial = -5; trial < 7; trial++) {
             System.setProperty(Native.GEN_KEY, "false");
-            Dimension d = fixture(); d.setEventsInhibited(true);
+            Dimension d = fixture(side); d.setEventsInhibited(true);
             System.setProperty(Native.GEN_KEY, Boolean.toString(rust));
             long before = bean.getThreadAllocatedBytes(Thread.currentThread().getId()), start = System.nanoTime();
             for (int i = 0; i < 12; i++) {
-                if (rust) { if (!FluidFloodAccess.tryFill(d, -64, -64, false, (i & 3) == 2)) throw new AssertionError("JNI unavailable"); }
+                if (rust) { if (!FluidFloodAccess.tryFill(d, -64, -64, false, (i & 3) == 2)) {
+                    FluidFloodSession session = FluidFloodSession.tryStart(d, -64, -64, false, (i & 3) == 2);
+                    if (session == null) throw new AssertionError("JNI unavailable");
+                    while (!session.isComplete()) session.advance();
+                } }
                 else scalar(d, -64, -64, false, (i & 3) == 2);
             }
             d.setEventsInhibited(false);
