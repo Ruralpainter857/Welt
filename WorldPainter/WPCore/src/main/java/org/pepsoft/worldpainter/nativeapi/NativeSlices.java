@@ -93,6 +93,17 @@ public final class NativeSlices {
 
     private static native int nativeEditLayerPlanes(ByteBuffer buffer, int length);
 
+    /** WLPY v1 : accès direct exclusif pendant une transaction de modelage. */
+    public static boolean shapePyramidRegion(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || buffer == null || !buffer.isDirect() || buffer.isReadOnly()
+                || buffer.position() != 0 || buffer.limit() < 37 || buffer.limit() > 32 + 1023 * 1023 * 5) return false;
+        try { return nativeShapePyramidRegion(buffer, buffer.limit()) == 0; }
+        catch (UnsatisfiedLinkError e) { return false; }
+    }
+
+    private static native int nativeShapePyramidRegion(ByteBuffer buffer, int length);
+
     public static boolean editHeightPlane(ByteBuffer buffer) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
                 || buffer == null || !buffer.isDirect() || buffer.isReadOnly()

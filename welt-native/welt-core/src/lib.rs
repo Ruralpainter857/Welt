@@ -20,6 +20,7 @@ pub mod noise;
 pub mod paint_mask;
 pub mod pencil_snap;
 pub mod raise_pyramid;
+pub mod pyramid_region;
 pub mod river_paint;
 pub mod rng;
 pub mod scaling;

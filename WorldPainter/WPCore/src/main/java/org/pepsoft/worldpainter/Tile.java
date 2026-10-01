@@ -417,6 +417,31 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         applyRawHeightRegion(x, y, width, height, buffer, offset, stride, 32, mask, area);
     }
 
+    // Masque : bit 0 pour la hauteur, bit 1 pour le terrain. Une seule transaction COW par tuile.
+    void applyShapingRegion(int x, int y, int width, int height, ByteBuffer data, int offset, int stride,
+                            int mask, int area, Terrain material) {
+        checkHeightRegion(x, y, width, height, area, offset, stride);
+        boolean heightsChanged = false, terrainsChanged = false;
+        synchronized (this) {
+            if (eventInhibitionCounter == 0) throw new IllegalStateException("Shaping requires inhibited events");
+            for (int dx = 0; dx < width; dx++) for (int dy = 0; dy < height; dy++) {
+                int input = offset + dx * stride + dy, flags = data.get(mask + input);
+                int cell = (x + dx) | ((y + dy) << TILE_SIZE_BITS);
+                if ((flags & 1) != 0) {
+                    if (!heightsChanged) { ensureWriteable(tall ? TALL_HEIGHTMAP : HEIGHTMAP); heightsChanged = true; }
+                    int raw = (int) ((data.getFloat(32 + input * 4) - minHeight) * 256);
+                    if (tall) tallHeightMap[cell] = raw; else heightMap[cell] = (short) raw;
+                }
+                if ((flags & 2) != 0) {
+                    if (!terrainsChanged) { ensureWriteable(TERRAIN); terrainsChanged = true; }
+                    terrain[cell] = (byte) material.ordinal();
+                }
+            }
+        }
+        if (heightsChanged) heightMapChanged();
+        if (terrainsChanged) terrainChanged();
+    }
+
     synchronized void copyHeightRegionDirect(int x, int y, int width, int height, java.nio.FloatBuffer output, int offset, int stride) {
         checkHeightRegion(x, y, width, height, output.limit(), offset, stride);
         ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
