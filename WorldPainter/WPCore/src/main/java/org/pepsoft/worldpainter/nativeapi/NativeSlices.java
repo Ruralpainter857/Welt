@@ -104,6 +104,13 @@ public final class NativeSlices {
 
     private static native int nativeShapePyramidRegion(ByteBuffer buffer, int length);
 
+    public static boolean editRiverRegion(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()
+                || buffer.isReadOnly() || buffer.position() != 0 || buffer.limit() < 85 || buffer.limit() > 64 + 511 * 511 * 21) return false;
+        try { return nativeEditRiverRegion(buffer, buffer.limit()) == 0; } catch (UnsatisfiedLinkError e) { return false; }
+    }
+    private static native int nativeEditRiverRegion(ByteBuffer buffer, int length);
+
     public static boolean editHeightPlane(ByteBuffer buffer) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
                 || buffer == null || !buffer.isDirect() || buffer.isReadOnly()

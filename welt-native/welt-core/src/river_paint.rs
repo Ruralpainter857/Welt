@@ -107,3 +107,163 @@ fn check_len(actual: usize, expected: usize) -> Result<(), RiverPaintError> {
         Err(RiverPaintError::LengthMismatch)
     }
 }
+
+// WLRV v1 : cinq plans de quatre octets, puis un masque hauteur/eau/terrain.
+pub const MAX_BYTES: usize = 64 + 511 * 511 * 21;
+pub fn edit_compact(data: &mut [u8]) -> Result<(), crate::error::WeltError> {
+    use crate::error::WeltError::IllegalArgument;
+    fn int(data: &[u8], offset: usize) -> i32 {
+        i32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
+    }
+    fn float(data: &[u8], offset: usize) -> f32 {
+        f32::from_bits(int(data, offset) as u32)
+    }
+    if data.len() < 64 || int(data, 0) != 0x56524c57 || int(data, 4) != 1 {
+        return Err(IllegalArgument);
+    }
+    let side = int(data, 8);
+    let lava = int(data, 20);
+    if !(1..=511).contains(&side)
+        || side % 2 != 1
+        || !matches!(lava, 0 | 1)
+        || data[24..64].iter().any(|&v| v != 0)
+    {
+        return Err(IllegalArgument);
+    }
+    let side = side as usize;
+    let area = side * side;
+    if data.len() != 64 + area * 21 {
+        return Err(IllegalArgument);
+    }
+    let terrains = 64 + area * 4;
+    let waters = 64 + area * 8;
+    let strengths = 64 + area * 12;
+    let slopes = 64 + area * 16;
+    let mask = 64 + area * 20;
+    let mut level = i32::MAX;
+    for x in 0..side {
+        for y in 0..side {
+            let i = x * side + y;
+            if float(data, strengths + i * 4) > FLOOD_THRESHOLD {
+                continue;
+            }
+            let height = int(data, terrains + i * 4);
+            let neighbour = (x > 0 && float(data, strengths + (i - side) * 4) > FLOOD_THRESHOLD)
+                || (x + 1 < side && float(data, strengths + (i + side) * 4) > FLOOD_THRESHOLD)
+                || (y > 0 && float(data, strengths + (i - 1) * 4) > FLOOD_THRESHOLD)
+                || (y + 1 < side && float(data, strengths + (i + 1) * 4) > FLOOD_THRESHOLD);
+            if int(data, waters + i * 4) < height && height < level && neighbour {
+                level = height;
+            }
+        }
+    }
+    level = level.min(int(data, 12));
+    let depth = float(data, 16);
+    for i in 0..area {
+        let strength = float(data, strengths + i * 4);
+        let current = float(data, 64 + i * 4);
+        let mut flags = 0u8;
+        if strength > FLOOD_THRESHOLD {
+            let required = level as f32 - strength / 0.75 * depth;
+            if current > required {
+                data[64 + i * 4..68 + i * 4].copy_from_slice(&required.to_le_bytes());
+                flags |= 1;
+            }
+            flags |= 2;
+            if lava == 0 {
+                flags |= 4;
+            }
+        } else if strength > 0.0 {
+            let maximum = level as f32 + float(data, slopes + i * 4);
+            if current > maximum {
+                data[64 + i * 4..68 + i * 4].copy_from_slice(&maximum.to_le_bytes());
+                flags |= 1;
+            }
+            if lava == 0 && maximum - (level as f32) < 2.0 {
+                flags |= 4;
+            }
+        }
+        data[mask + i] = flags;
+    }
+    data[12..16].copy_from_slice(&level.to_le_bytes());
+    Ok(())
+}
+
+#[cfg(test)]
+mod compact_tests {
+    #[test]
+    fn compact_planes_match_legacy_kernel_and_invalid_header_is_atomic() {
+        for lava in [false, true] {
+            let area = 9;
+            let mut data = vec![0u8; 64 + area * 21];
+            for (offset, value) in [
+                (0, 0x56524c57i32),
+                (4, 1),
+                (8, 3),
+                (12, 65),
+                (20, i32::from(lava)),
+            ] {
+                data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            data[16..20].copy_from_slice(&5f32.to_le_bytes());
+            let mut heights = vec![62f32; area];
+            let terrains = vec![62i32; area];
+            let waters = vec![0i32; area];
+            let forces = vec![
+                0f32,
+                0.25,
+                0.3,
+                0.5,
+                1.0,
+                f32::NAN,
+                -1.0,
+                f32::INFINITY,
+                0.2,
+            ];
+            let slopes = vec![0f32; area];
+            for i in 0..area {
+                for (plane, value) in [
+                    (0, heights[i].to_bits()),
+                    (1, terrains[i] as u32),
+                    (2, waters[i] as u32),
+                    (3, forces[i].to_bits()),
+                    (4, slopes[i].to_bits()),
+                ] {
+                    let offset = 64 + plane * area * 4 + i * 4;
+                    data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+                }
+            }
+            let mut modified = vec![0i8; area];
+            let mut flooded = modified.clone();
+            let mut beaches = modified.clone();
+            let level = super::apply_river_paint(
+                1,
+                65,
+                5.0,
+                lava,
+                &mut heights,
+                &terrains,
+                &waters,
+                &forces,
+                &slopes,
+                &mut modified,
+                &mut flooded,
+                &mut beaches,
+            )
+            .unwrap();
+            super::edit_compact(&mut data).unwrap();
+            assert_eq!(&data[12..16], &level.to_le_bytes());
+            for i in 0..area {
+                assert_eq!(&data[64 + i * 4..68 + i * 4], &heights[i].to_le_bytes());
+                assert_eq!(
+                    data[64 + area * 20 + i],
+                    (modified[i] | flooded[i] << 1 | beaches[i] << 2) as u8
+                );
+            }
+            data[20..24].copy_from_slice(&3i32.to_le_bytes());
+            let before = data.clone();
+            assert!(super::edit_compact(&mut data).is_err());
+            assert_eq!(data, before);
+        }
+    }
+}

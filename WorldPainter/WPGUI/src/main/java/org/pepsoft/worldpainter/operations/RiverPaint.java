@@ -1,6 +1,7 @@
 package org.pepsoft.worldpainter.operations;
 
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.RiverAccess;
 import org.pepsoft.worldpainter.Terrain;
 import org.pepsoft.worldpainter.WorldPainterView;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
@@ -108,6 +109,26 @@ public class RiverPaint extends AbstractBrushOperation {
     }
 
     private boolean applyNativeRiverPaint(Dimension dimension, int centreX, int centreY, int radius) {
+        if (radius >= 0 && radius <= 255 && getFilter() == null && dimension.getClass() == Dimension.class
+                && (getBrush() instanceof org.pepsoft.worldpainter.brushes.SymmetricBrush
+                    || getBrush() instanceof org.pepsoft.worldpainter.brushes.RotatedBrush)
+                && Native.isGenEnabled() && NativeLoader.areSlicesAvailable()) {
+            int side = radius * 2 + 1, area = side * side;
+            if (nativeStrengths == null || nativeStrengths.length != area) {
+                nativeStrengths = new float[area]; nativeSlopeOffsets = new float[area];
+            }
+            for (int dx = 0; dx < side; dx++) for (int dy = 0; dy < side; dy++) {
+                int i = dx * side + dy; float strength = getFullStrength(centreX, centreY, centreX + dx - radius, centreY + dy - radius);
+                nativeStrengths[i] = strength;
+                nativeSlopeOffsets[i] = strength > 0 && strength <= .25f ? (float) (Math.tan(-strength * DOUBLE_PI + HALF_PI) / DOUBLE_PI) : 0;
+            }
+            dimension.setEventsInhibited(true);
+            try {
+                Integer level = RiverAccess.tryApply(dimension, centreX - radius, centreY - radius, side,
+                        nativeStrengths, nativeSlopeOffsets, previousWaterLevel, depth, lava);
+                if (level != null) { previousWaterLevel = level; return true; }
+            } finally { dimension.setEventsInhibited(false); }
+        }
         final long diameterLong = 2L * radius + 1L;
         if (radius < 0 || diameterLong > 255L || getFilter() != null
                 || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) {

@@ -425,6 +425,53 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    synchronized void copyRiverRegion(int x, int y, int width, int height, ByteBuffer data, int offset, int stride, int area) {
+        checkHeightRegion(x, y, width, height, area, offset, stride);
+        ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP); ensureReadable(tall ? TALL_WATERLEVEL : WATERLEVEL);
+        for (int dx = 0; dx < width; dx++) for (int dy = 0; dy < height; dy++) {
+            int cell = (x + dx) | ((y + dy) << TILE_SIZE_BITS), i = offset + dx * stride + dy;
+            float heightValue = (tall ? tallHeightMap[cell] : heightMap[cell] & 0xffff) / 256f + minHeight;
+            data.putFloat(64 + i * 4, heightValue).putInt(64 + area * 4 + i * 4, Math.round(heightValue))
+                    .putInt(64 + area * 8 + i * 4, (tall ? tallWaterLevel[cell] & 0xffff : waterLevel[cell] & 255) + minHeight);
+        }
+    }
+
+    synchronized void applyRiverRegion(int x, int y, int width, int height, ByteBuffer data, int offset, int stride,
+                                       int area, int level, boolean lava) {
+        checkHeightRegion(x, y, width, height, area, offset, stride);
+        if (eventInhibitionCounter == 0) throw new IllegalStateException("River editing requires inhibited events");
+        boolean heights = false, waters = false, terrains = false, lavaChanged = false;
+        ensureReadable(BIT_LAYER_DATA);
+        BitSet bits = bitLayerData.get(FloodWithLava.INSTANCE);
+        for (int dx = 0; dx < width; dx++) for (int dy = 0; dy < height; dy++) {
+            int input = offset + dx * stride + dy, flags = data.get(64 + area * 20 + input);
+            int cell = (x + dx) | ((y + dy) << TILE_SIZE_BITS);
+            if ((flags & 1) != 0) {
+                if (!heights) { ensureWriteable(tall ? TALL_HEIGHTMAP : HEIGHTMAP); heights = true; }
+                int raw = (int) ((data.getFloat(64 + input * 4) - minHeight) * 256);
+                if (tall) tallHeightMap[cell] = raw; else heightMap[cell] = (short) raw;
+            }
+            if ((flags & 2) != 0) {
+                if (!waters) { ensureWriteable(tall ? TALL_WATERLEVEL : WATERLEVEL); waters = true; }
+                if (tall) tallWaterLevel[cell] = (short) (level - minHeight); else waterLevel[cell] = (byte) (level - minHeight);
+                if (lava || bits != null) {
+                    if (!lavaChanged) {
+                        ensureWriteable(BIT_LAYER_DATA); bits = bitLayerData.get(FloodWithLava.INSTANCE);
+                        if (bits == null) { bits = new BitSet(16384); bitLayerData.put(FloodWithLava.INSTANCE, bits); cachedLayers = null; }
+                        lavaChanged = true;
+                    }
+                    bits.set(cell, lava);
+                }
+            }
+            if ((flags & 4) != 0) {
+                if (!terrains) { ensureWriteable(TERRAIN); terrains = true; }
+                terrain[cell] = (byte) Terrain.BEACHES.ordinal();
+            }
+        }
+        if (heights) heightMapChanged(); if (waters) waterLevelChanged(); if (terrains) terrainChanged();
+        if (lavaChanged) layerDataChanged(FloodWithLava.INSTANCE);
+    }
+
     synchronized void copyErosionRegion(int x, int y, int width, int height, ByteBuffer buffer, int offset, int stride, int types) {
         checkHeightRegion(x, y, width, height, (types - 32) / 4, offset, stride);
         ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
