@@ -112,6 +112,14 @@ public final class NativeSlices {
     }
     private static native int nativeFloodPaintRegion(ByteBuffer buffer, int length);
 
+    /** WLFH v1 : hauteurs et frontière d'une tuile dans un tampon exclusif. */
+    public static boolean floodHeightRegion(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()
+                || buffer.isReadOnly() || buffer.position() != 0 || buffer.limit() != 84032) return false;
+        try { return nativeFloodHeightRegion(buffer, buffer.limit()) == 0; } catch (UnsatisfiedLinkError e) { return false; }
+    }
+    private static native int nativeFloodHeightRegion(ByteBuffer buffer, int length);
+
     /** Une seule transition JNI pour l'exploration et les mutations fluides d'une zone. */
     public static boolean floodFluidRegion(ByteBuffer buffer) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()

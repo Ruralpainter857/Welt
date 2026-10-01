@@ -11,6 +11,7 @@ mod flood_frontier;
 pub mod fluid_brush;
 pub mod fluid_flood;
 pub mod height_edit;
+pub mod height_flood;
 pub mod jni;
 pub mod jni_export;
 pub mod jni_gen;

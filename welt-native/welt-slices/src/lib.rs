@@ -4328,6 +4328,29 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// # Safety
 /// Le tampon direct Java doit rester exclusif et accessible pendant cet appel.
 #[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFloodHeightRegion(
+    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if buffer.is_null() || length as usize != welt_core::height_flood::MAX_BYTES { return WeltError::IllegalArgument as jint; }
+            type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
+            type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
+            let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
+            let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
+            let pointer = address(env, buffer);
+            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
+            REGION_FLOOD_QUEUE.with(|queue| match welt_core::height_flood::edit(data, &mut queue.borrow_mut()) {
+                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+            })
+        })
+    }
+}
+
+/// # Safety
+/// Le tampon direct Java doit rester exclusif et accessible pendant cet appel.
+#[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFloodPaintRegion(
     env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
 ) -> jint {

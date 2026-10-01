@@ -10,6 +10,7 @@ import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.Terrain;
 import org.pepsoft.worldpainter.PaintFloodAccess;
 import org.pepsoft.worldpainter.PaintFloodSession;
+import org.pepsoft.worldpainter.HeightFloodSession;
 import org.pepsoft.util.ProgressReceiver;
 import org.pepsoft.util.swing.ProgressDialog;
 import org.pepsoft.util.swing.ProgressTask;
@@ -449,6 +450,7 @@ public final class DimensionPainter {
             };
         };
         if (! fillMethod.isFilled(x, y)) {
+            if (additionalAction == NONE && tryNativeHeightFill(dimension, x, y, parent)) return true;
             GeneralQueueLinearFloodFiller filler = new GeneralQueueLinearFloodFiller(fillMethod);
             filler.floodFill(x, y, parent);
             return ! filler.isBoundsHit();
@@ -676,6 +678,27 @@ public final class DimensionPainter {
     public static final int ANGLE_270_DEGREES = 3;
 
     private static final Brush MY_CONSTANT_CIRCLE = SymmetricBrush.CONSTANT_CIRCLE.clone();
+
+    /** Le parcours progressif conserve le comportement d'annulation de Fill. */
+    private boolean tryNativeHeightFill(Dimension dimension, int x, int y, Window parent) {
+        long started = System.nanoTime();
+        HeightFloodSession session = HeightFloodSession.tryStart(dimension, x, y);
+        if (session == null) return false;
+        while (!session.isComplete()) {
+            session.advance();
+            if (!session.isComplete() && System.nanoTime() - started > 2_000_000_000L) {
+                ProgressDialog.executeTask(parent, new ProgressTask<Boolean>() {
+                    @Override public String getName() { return "Raising Terrain"; }
+                    @Override public Boolean execute(ProgressReceiver progress) throws ProgressReceiver.OperationCancelled {
+                        while (!session.isComplete()) { progress.checkForCancellation(); session.advance(); }
+                        return true;
+                    }
+                });
+                return true;
+            }
+        }
+        return true;
+    }
 
     /** Les peintures personnalisées et le thème retiré conservent leur ordre historique. */
     private boolean tryNativePaintFill(Dimension dimension, int x, int y, Window parent, String description) {

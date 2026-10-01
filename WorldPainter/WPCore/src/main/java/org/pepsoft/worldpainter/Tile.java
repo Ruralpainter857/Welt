@@ -558,6 +558,26 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         if (changed) { if (layer == null) terrainChanged(); else layerDataChanged(layer); }
     }
 
+    /** Copie les hauteurs quantifiées sous un seul verrou, sans exposer le stockage interne. */
+    synchronized void copyHeightFlood(ByteBuffer data) {
+        ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+        for (int i = 0; i < TILE_SIZE * TILE_SIZE; i++)
+            data.putInt(64 + i * 4, Math.round((tall ? tallHeightMap[i] : heightMap[i] & 65535) / 256f + minHeight));
+    }
+
+    /** Écriture groupée du niveau constant, avec les mêmes conversions que setHeight. */
+    synchronized void applyHeightFlood(ByteBuffer data, int level) {
+        if (getClass() != Tile.class || eventInhibitionCounter == 0) throw new IllegalStateException("Inhibited plain tile required");
+        int raw = (int) (((float) level - minHeight) * 256f);
+        boolean changed = false;
+        for (int i = 0; i < TILE_SIZE * TILE_SIZE; i++) {
+            if (data.get(64 + TILE_SIZE * TILE_SIZE * 4 + i) == 0) continue;
+            if (!changed) { ensureWriteable(tall ? TALL_HEIGHTMAP : HEIGHTMAP); changed = true; }
+            if (tall) tallHeightMap[i] = raw; else heightMap[i] = (short) raw;
+        }
+        if (changed) heightMapChanged();
+    }
+
     /** Copie les trois plans nécessaires à l'inondation sous un seul verrou. */
     synchronized void copyFluidFlood(ByteBuffer data, int offset, int stride, int area) {
         ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP); ensureReadable(tall ? TALL_WATERLEVEL : WATERLEVEL); ensureReadable(BIT_LAYER_DATA);
