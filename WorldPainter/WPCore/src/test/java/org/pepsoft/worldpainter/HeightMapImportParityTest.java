@@ -8,6 +8,7 @@ import org.pepsoft.worldpainter.heightMaps.*;
 import org.pepsoft.worldpainter.importing.HeightMapImporter;
 import org.pepsoft.worldpainter.layers.Void;
 import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 
 import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
@@ -78,6 +79,90 @@ public class HeightMapImportParityTest {
         });
     }
 
+    @Test public void variedFactoryAndInitialRandomLayersMatch() throws Exception {
+        withConfiguration(() -> {
+            HeightMap map = translated(HeightMapImportBenchmark.image(1), -21, -31);
+            for (boolean constant : new boolean[] {true, false}) {
+                System.setProperty(Native.GEN_KEY, "false");
+                HeightMapImportBenchmark.State expected = HeightMapImportBenchmark.fixture(map, "fresh", true);
+                HeightMapImportBenchmark.State actual = HeightMapImportBenchmark.fixture(map, "fresh", true);
+                for (HeightMapImportBenchmark.State state : new HeightMapImportBenchmark.State[] {expected, actual}) {
+                    HeightMap initial = constant ? new ConstantHeightMap(105)
+                            : new SumHeightMap(new ConstantHeightMap(80), new NoiseHeightMap(70, .4, 3, 0));
+                    initial.setSeed(197);
+                    ((HeightMapTileFactory) state.importer().getTileFactory()).setHeightMap(initial);
+                }
+                HeightMapImportBenchmark.random().setSeed(77); scalar(expected);
+                long next = HeightMapImportBenchmark.random().nextLong();
+                HeightMapImportBenchmark.random().setSeed(77); System.setProperty(Native.GEN_KEY, "true"); actual.run();
+                assertEquals(next, HeightMapImportBenchmark.random().nextLong()); same(expected.dimension(), actual.dimension());
+                if (NativeLoader.areSlicesAvailable()) assertEquals(4, actual.importer().getLastNativeImportCalls());
+            }
+        });
+    }
+
+    @Test public void shortAndTallTilesHaveExactValuesAndCoalescedEvents() throws Exception {
+        withConfiguration(() -> {
+            for (int[] bounds : new int[][] {{0, 128}, {0, 256}, {-64, 320}, {-128, 1024}}) {
+                HeightMap map = HeightMapImportBenchmark.image(1);
+                for (String mode : new String[] {"fresh", "existing", "raise"}) {
+                    System.setProperty(Native.GEN_KEY, "false");
+                    HeightMapImportBenchmark.random().setSeed(23);
+                    HeightMapImportBenchmark.State expected = boundedFixture(map, mode, bounds[0], bounds[1]);
+                    HeightMapImportBenchmark.random().setSeed(23);
+                    HeightMapImportBenchmark.State actual = boundedFixture(map, mode, bounds[0], bounds[1]);
+                    java.util.Map<String, Integer> expectedEvents = events(expected.dimension());
+                    java.util.Map<String, Integer> actualEvents = events(actual.dimension());
+                    HeightMapImportBenchmark.random().setSeed(81); scalar(expected);
+                    long next = HeightMapImportBenchmark.random().nextLong();
+                    HeightMapImportBenchmark.random().setSeed(81); System.setProperty(Native.GEN_KEY, "true"); actual.run();
+                    assertEquals(next, HeightMapImportBenchmark.random().nextLong()); same(expected.dimension(), actual.dimension());
+                    assertEquals(expectedEvents, actualEvents);
+                    if (NativeLoader.areSlicesAvailable()) assertEquals(1, actual.importer().getLastNativeImportCalls());
+                }
+            }
+        });
+    }
+
+    @Test public void customThemeAndDisabledNativeKeepTheJavaPath() throws Exception {
+        withConfiguration(() -> {
+            HeightMap map = HeightMapImportBenchmark.image(1);
+            for (boolean enabled : new boolean[] {false, true}) {
+                System.setProperty(Native.GEN_KEY, "false");
+                HeightMapImportBenchmark.State expected = HeightMapImportBenchmark.fixture(map, "existing", true);
+                HeightMapImportBenchmark.State actual = HeightMapImportBenchmark.fixture(map, "existing", true);
+                for (HeightMapImportBenchmark.State state : new HeightMapImportBenchmark.State[] {expected, actual}) {
+                    state.importer().setTheme(new org.pepsoft.worldpainter.themes.SimpleTheme(197, 62,
+                            new java.util.TreeMap<>(java.util.Map.of(-65, Terrain.STONE)), null, -64, 320, false, false) {
+                        @Override public Terrain getTerrain(int x, int y, int height) {return (x+y)%2==0?Terrain.GRASS:Terrain.CUSTOM_3;}
+                    });
+                }
+                scalar(expected); System.setProperty(Native.GEN_KEY, Boolean.toString(enabled)); actual.run();
+                assertEquals(0, actual.importer().getLastNativeImportCalls()); same(expected.dimension(), actual.dimension());
+            }
+        });
+    }
+
+    private static HeightMapImportBenchmark.State boundedFixture(HeightMap map, String mode, int min, int max) {
+        World2 world = new World2(max == 128 ? DefaultPlugin.JAVA_MCREGION : DefaultPlugin.JAVA_ANVIL_1_19, min, max);
+        HeightMapTileFactory factory = new HeightMapTileFactory(197, new ConstantHeightMap(105), min, max, false,
+                HeightMapImportBenchmark.theme(min, max));
+        Dimension dimension = new Dimension(world, "Bounded import", 197, factory, Dimension.Anchor.NORMAL_DETAIL, false);
+        if (!mode.equals("fresh")) dimension.addTile(factory.createTile(0, 0));
+        HeightMapImporter importer = new HeightMapImporter(); importer.setHeightMap(map); importer.setTileFactory(factory);
+        importer.setMinHeight(min); importer.setMaxHeight(max); importer.setWorldLowLevel(min); importer.setWorldHighLevel(max-1);
+        importer.setWorldWaterLevel(62); importer.setImageLowLevel(0); importer.setImageHighLevel(65535);
+        importer.setOnlyRaise(mode.equals("raise")); importer.setVoidBelow(true); importer.setVoidBelowLevel(4096);
+        return new HeightMapImportBenchmark.State(dimension, importer, mode.equals("fresh"));
+    }
+    private static java.util.Map<String, Integer> events(Dimension dimension) {
+        java.util.Map<String, Integer> result = new java.util.TreeMap<>();
+        for (Tile tile : dimension.getTiles()) tile.addListener((Tile.Listener) java.lang.reflect.Proxy.newProxyInstance(
+                Tile.Listener.class.getClassLoader(), new Class<?>[] {Tile.Listener.class},
+                (p, m, a) -> {result.merge(m.getName(), 1, Integer::sum);return null;}));
+        return result;
+    }
+
     private static void compareImport(HeightMap map, String mode, boolean voidBelow, boolean themed,
                                       int conversion) throws Exception {
         System.setProperty(Native.GEN_KEY, "false");
@@ -103,6 +188,8 @@ public class HeightMapImportParityTest {
         HeightMapImportBenchmark.random().setSeed(197);
         System.setProperty(Native.GEN_KEY, "true"); actual.run();
         assertEquals("The theme must consume exactly the same random stream", next, HeightMapImportBenchmark.random().nextLong());
+        if (NativeLoader.areSlicesAvailable()) assertEquals("One JNI transaction per imported tile",
+                actual.dimension().getTileCount(), actual.importer().getLastNativeImportCalls());
         same(expected.dimension(), actual.dimension());
     }
 

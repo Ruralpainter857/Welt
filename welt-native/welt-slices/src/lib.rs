@@ -4393,3 +4393,32 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
         })
     }
 }
+
+thread_local! {
+    static HEIGHT_MAP_IMPORT: RefCell<welt_gen::height_map_import::ImportScratch> = RefCell::new(Default::default());
+}
+
+/// # Safety
+/// The writable direct buffer must remain exclusive and valid during this call.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeImportHeightMapTile(
+    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if buffer.is_null() || length < 256 || length as usize > welt_gen::height_map_import::MAX_BYTES {
+                return WeltError::IllegalArgument as jint;
+            }
+            type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
+            type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
+            let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
+            let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
+            let pointer = address(env, buffer);
+            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
+            HEIGHT_MAP_IMPORT.with(|scratch| match welt_gen::height_map_import::import(data, &mut scratch.borrow_mut()) {
+                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+            })
+        })
+    }
+}

@@ -15,6 +15,7 @@ import org.pepsoft.worldpainter.layers.Layer;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.nativeapi.NativeSlices;
+import org.pepsoft.worldpainter.nativeapi.SnapshotRandom;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -161,6 +162,73 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
         }
         public void apply(Tile tile, ByteBuffer data) {
             tile.applyHeightThemeFlood(data, layers, values);
+        }
+    }
+
+    /** Snapshot immutable theme inputs for a complete heightmap import action. */
+    public final ImportPlan prepareImport() {
+        int range = maxHeight - minHeight, count = getFreshTileLayerCount();
+        if (getClass() != SimpleTheme.class || range <= 0 || range > 8192 || count > 61) return null;
+        int numeric = layerCache == null ? 0 : layerCache.length;
+        Layer[] layers = new Layer[count]; int[][] levels = new int[count][];
+        Set<Layer> unique = new HashSet<>();
+        for (int l = 0; l < count; l++) {
+            Layer layer = l < numeric ? layerCache[l] : bitLayerCache[l - numeric];
+            Layer.DataSize size = layer.getDataSize();
+            if (!unique.add(layer) || size != Layer.DataSize.BIT && size != Layer.DataSize.BIT_PER_CHUNK
+                    && size != Layer.DataSize.NIBBLE && size != Layer.DataSize.BYTE
+                    || layer.getDefaultValue() < 0 || layer.getDefaultValue() > size.maxValue) return null;
+            int[] table = l < numeric ? layerLevelCache[l] : bitLayerLevelCache[l - numeric];
+            if (table.length != range) return null;
+            if (l < numeric) for (int level : table) if (level < 0 || level > size.maxValue) return null;
+            layers[l] = layer; levels[l] = table.clone();
+        }
+        for (Terrain terrain : terrainRangesTable) if (terrain == null) return null;
+        return new ImportPlan(minHeight, maxHeight, waterHeight, seed,
+                (randomise ? 1 : 0) | (beaches ? 2 : 0), getTerrainRangeOrdinals(), layers, levels);
+    }
+
+    /** Theme metadata and level tables are stable for the duration of an import. */
+    public static final class ImportPlan {
+        private final int min, max, water, flags;
+        private final long seed;
+        private final int[] terrains;
+        private final Layer[] layers;
+        private final int[][] levels;
+        private ImportPlan(int min, int max, int water, long seed, int flags, int[] terrains,
+                           Layer[] layers, int[][] levels) {
+            this.min = min; this.max = max; this.water = water; this.seed = seed; this.flags = flags;
+            this.terrains = terrains; this.layers = layers; this.levels = levels;
+        }
+        public Layer[] getLayers() { return layers.clone(); }
+        public boolean supportsFreshImport() {
+            for (int l = 0; l < layers.length; l++) if (layers[l].dataSize == Layer.DataSize.BIT
+                    || layers[l].dataSize == Layer.DataSize.BIT_PER_CHUNK)
+                for (int level : levels[l]) if (level > 15) return false;
+            return true;
+        }
+        public int bytes() { return 32 + terrains.length * 4 + layers.length * (4 + terrains.length * 4); }
+        public void write(ByteBuffer data, int offset, Layer[] outputLayers) {
+            data.putInt(offset, min).putInt(offset+4, max).putInt(offset+8, water).putInt(offset+12, flags)
+                    .putLong(offset+16, seed).putInt(offset+24, layers.length).putInt(offset+28, 0);
+            int p = offset + 32;
+            for (int terrain : terrains) { data.putInt(p, terrain); p += 4; }
+            for (int l = 0; l < layers.length; l++) {
+                int index = Arrays.asList(outputLayers).indexOf(layers[l]);
+                if (index < 3) throw new IllegalArgumentException("Missing theme output plane");
+                data.putInt(p, index); p += 4;
+                for (int level : levels[l]) { data.putInt(p, level); p += 4; }
+            }
+        }
+    }
+
+    /** Commit the shared random state only after a successful exclusive JNI transaction. */
+    public static boolean processHeightMapImport(ByteBuffer data) {
+        synchronized (random) {
+            data.putLong(104, random.snapshotState());
+            if (!NativeSlices.importHeightMapTile(data)) return false;
+            random.restoreState(data.getLong(104));
+            return true;
         }
     }
 
@@ -884,7 +952,7 @@ public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Clon
     private int[][] layerLevelCache, bitLayerLevelCache;
     private Map<Layer, Integer> discreteValues;
 
-    private static final Random random = new Random();
+    private static final SnapshotRandom random = new SnapshotRandom();
     private static final int[][] EMPTY_LEVEL_TABLES = new int[0][];
     private static final Logger logger = LoggerFactory.getLogger(SimpleTheme.class);
     private static final long serialVersionUID = 1L;

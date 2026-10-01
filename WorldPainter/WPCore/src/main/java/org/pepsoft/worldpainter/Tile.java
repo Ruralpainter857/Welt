@@ -3292,8 +3292,20 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
 
     /** Apply complete changed planes through undo-aware, copy-on-write storage. */
     synchronized void applySelectionPlanes(ByteBuffer data, int meta, Layer[] layers, int[] roles, int[] kinds, int[] offsets) {
+        applyPackedPlanes(data, meta, layers, roles, kinds, offsets, -1);
+    }
+
+    /** Preserve original map insertion order when applying a fused import transaction. */
+    synchronized void applyImportPlanes(ByteBuffer data, int meta, Layer[] layers, int[] roles, int[] kinds, int[] offsets) {
+        applyPackedPlanes(data, meta, layers, roles, kinds, offsets, 140);
+    }
+
+    private void applyPackedPlanes(ByteBuffer data, int meta, Layer[] layers, int[] roles, int[] kinds, int[] offsets, int order) {
         long changed = data.getLong(meta+16);
-        for (int p = 0; p < layers.length; p++) if ((changed & (1L << p)) != 0) {
+        int count = order < 0 ? layers.length : data.getInt(204);
+        for (int step = 0; step < count; step++) {
+            int p = order < 0 ? step : data.get(order+step) & 255;
+            if ((changed & (1L << p)) == 0) continue;
             int base = meta+32+offsets[p], role = roles[p], kind = kinds[p]; Layer layer = layers[p];
             if (role == 0) {
                 ensureWriteable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);

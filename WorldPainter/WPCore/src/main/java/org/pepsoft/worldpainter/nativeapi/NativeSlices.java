@@ -112,6 +112,15 @@ public final class NativeSlices {
     }
     private static native int nativeFloodPaintRegion(ByteBuffer buffer, int length);
 
+    /** WHIM v1: factory, relief and themes execute on one exclusive packed tile. */
+    public static boolean importHeightMapTile(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()
+                || buffer.isReadOnly() || buffer.position() != 0 || buffer.limit() < 256 || buffer.limit() > 4 * 1024 * 1024) return false;
+        try { return nativeImportHeightMapTile(buffer, buffer.limit()) == 0; }
+        catch (UnsatisfiedLinkError e) { return false; }
+    }
+    private static native int nativeImportHeightMapTile(ByteBuffer buffer, int length);
+
     /** WLCP v1: source and destination planes stay in one exclusive buffer. */
     public static boolean copySelectionPlanes(ByteBuffer buffer) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()

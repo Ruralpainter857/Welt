@@ -154,11 +154,25 @@ public class HeightMapImporter {
                 !Boolean.getBoolean("welt.import.disableBatchTileInitialisation");
         float[] batchTileHeights = null;
         int[] batchTileIntHeights = null;
+        final HeightMapImportAccess existingImport = HeightMapImportAccess.prepare(this, dimension, false);
+        final HeightMapImportAccess freshImport = createTiles ? HeightMapImportAccess.prepare(this, dimension, true) : null;
+        lastNativeImportCalls = 0;
         int tileCount = 0;
         for (int tileX = tileX1; tileX <= tileX2; tileX++) {
             for (int tileY = tileY1; tileY <= tileY2; tileY++) {
                 boolean tileIsNew;
                 Tile tile = dimension.getTileForEditing(tileX, tileY);
+                final HeightMapImportAccess nativeImport = tile == null ? freshImport : existingImport;
+                if (nativeImport != null) {
+                    final Tile imported = nativeImport.importTile(tile, tileX, tileY);
+                    if (imported != null) {
+                        if (tile == null) dimension.addTile(imported);
+                        lastNativeImportCalls++;
+                        tileCount++;
+                        if (progressReceiver != null) progressReceiver.setProgress((float) tileCount / totalTileCount);
+                        continue;
+                    }
+                }
                 if (tile == null) {
                     if (createTiles) {
                         tile = tileFactory.createTile(tileX, tileY);
@@ -295,6 +309,10 @@ public class HeightMapImporter {
             return null;
         }
     }
+
+    /** Number of successful whole-tile JNI transactions in the most recent import. */
+    public int getLastNativeImportCalls() { return lastNativeImportCalls; }
+    private int lastNativeImportCalls;
 
     // Properties
 
