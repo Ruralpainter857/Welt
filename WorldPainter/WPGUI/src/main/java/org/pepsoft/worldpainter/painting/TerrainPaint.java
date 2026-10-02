@@ -21,10 +21,15 @@ package org.pepsoft.worldpainter.painting;
 import org.pepsoft.worldpainter.ColourScheme;
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.MaskedPlaneAccess;
+import org.pepsoft.worldpainter.FilteredTerrainAccess;
+import org.pepsoft.worldpainter.panels.EditorFilterPlan;
 import org.pepsoft.worldpainter.Terrain;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.brushes.SymmetricBrush;
+import org.pepsoft.worldpainter.brushes.BitmapBrush;
+import org.pepsoft.worldpainter.brushes.RotatedBrush;
 
 import java.awt.*;
 import java.awt.image.BufferedImage;
@@ -217,7 +222,7 @@ public final class TerrainPaint extends AbstractPaint {
                                             boolean oneTile, boolean remove) {
         final long width = (long) x2 - x1 + 1L;
         final long height = (long) y2 - y1 + 1L;
-        if (remove || terrain == null || dither || filter != null || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+        if (remove || terrain == null || dither || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
                 || dimension.getClass() != Dimension.class || !dimension.isEventsInhibited()
                 || width <= 0 || height <= 0 || width > 65_536L || height > 65_536L
                 || width * height > 65_536L) {
@@ -225,6 +230,22 @@ public final class TerrainPaint extends AbstractPaint {
         }
         final int area = (int) (width * height);
         if (oneTile && dimension.getTile(x1 >> TILE_SIZE_BITS, y1 >> TILE_SIZE_BITS) == null) return true;
+        if (filterEnabled) {
+            // These getters read cached strengths; custom brushes may observe interleaved writes.
+            if (!(brush instanceof SymmetricBrush || brush instanceof BitmapBrush || brush instanceof RotatedBrush)) return false;
+            String enabled = System.getProperty("welt.native.filteredTerrain");
+            // Small footprints retain Java; the complete-operation gain is established for large strokes.
+            if (enabled == null ? area < 32768 : !Boolean.parseBoolean(enabled)) return false;
+            EditorFilterPlan plan = EditorFilterPlan.compile(filter, dimension);
+            if (plan == null) return false;
+            if (enabled == null && (plan.dependencies() & EditorFilterPlan.SLOPE) == 0) return false;
+            if (nativeStrengths == null || nativeStrengths.length != area) nativeStrengths = new float[area];
+            int index = 0;
+            for (int y = y1; y <= y2; y++) for (int x = x1; x <= x2; x++)
+                nativeStrengths[index++] = brush.getFullStrength(x - centreX, y - centreY);
+            return FilteredTerrainAccess.apply(dimension, terrain, plan, x1, y1,
+                    (int) width, (int) height, dynamicLevel, nativeStrengths);
+        }
         ensureNativeBuffers(area);
 
         int index = 0;
@@ -245,4 +266,5 @@ public final class TerrainPaint extends AbstractPaint {
 
     private final Terrain terrain;
     private byte[] nativeModified;
+    private float[] nativeStrengths;
 }

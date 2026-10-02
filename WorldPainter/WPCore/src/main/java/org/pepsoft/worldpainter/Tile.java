@@ -3352,7 +3352,14 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
-    /** Snapshot a compact layer plane for the combined-layer transaction; null denotes terrain. */
+    /** Snapshot absolute water levels under one lock for the filtered terrain transaction. */
+    synchronized void copyFilteredWater(ByteBuffer buffer, int offset) {
+        ensureReadable(tall ? TALL_WATERLEVEL : WATERLEVEL);
+        for (int i = 0; i < 16384; i++) buffer.putInt(offset + i * 4,
+                (tall ? tallWaterLevel[i] & 65535 : waterLevel[i] & 255) + minHeight);
+    }
+
+    /** Snapshot a compact layer plane; null denotes terrain. */
     synchronized boolean copyCombinedLayerPlane(Layer layer, int bits, ByteBuffer buffer, int offset) {
         if (layer == null) {
             ensureReadable(TERRAIN);

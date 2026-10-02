@@ -28,4 +28,6 @@ Without `-Pnative`, nothing changes: the build remains 100% Java and WorldPainte
 
 The native Frost and Resources exporters currently require an additional explicit switch (`-Dwp.native.export.frost=true` or `-Dwp.native.export.resources=true`, respectively) alongside `-Dwp.native.export=true`. Their measured export paths remain slower than Java, so the general export switch keeps them on Java while enabling the other native export operations.
 
+With `-Dwp.native.gen=true`, non-dithered terrain painting can filter and paint compact tile planes in a single native transaction. The automatic path currently selects cached built-in brushes with slope filters and bounding-box areas of at least 32,768 cells; brush rectangles are bounded to 256 by 256 cells. `-Dwelt.native.filteredTerrain=false` disables it, while `true` also selects smaller supported footprints and other built-in filter combinations for comparison. Custom filters, custom tile/dimension behavior, dithering, removal and missing native symbols keep the Java path. The direct buffer is reused per worker and capped at 4 MiB; the measured speed gain currently comes with increased allocations and process memory.
+
 For the Rust toolchain setup, exact build commands and details, see `docs/welt/` (start with `docs/welt/README.md` and `docs/welt/CHARTE-ORCHESTRATION.md`).
