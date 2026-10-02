@@ -5,6 +5,7 @@
 pub mod abi;
 pub mod auto_biome;
 pub mod erosion;
+pub mod editor_filter;
 pub mod error;
 pub mod flood_fill;
 mod flood_frontier;
