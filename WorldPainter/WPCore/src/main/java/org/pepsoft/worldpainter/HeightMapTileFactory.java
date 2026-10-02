@@ -1068,6 +1068,29 @@ public class HeightMapTileFactory extends AbstractTileFactory {
     private static final ThreadLocal<GenerationBuffers> GENERATION_BUFFERS =
             ThreadLocal.withInitial(GenerationBuffers::new);
 
+    /** Reuses the generation program compiler for one complete preview tile. */
+    public static boolean tryFillPreviewHeights(HeightMap map, int originX, int originY, int shift,
+                                                float[] xCoordinates, float[] yCoordinates, double[] output) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || map == null
+                || shift < 0 || shift > 31 || output == null || output.length != TILE_SIZE * TILE_SIZE
+                || !Boolean.getBoolean("welt.native.heightMapPreview")) return false;
+        // Tree children use float coordinates while a standalone noise map also
+        // has an integer overload. Only batch coordinates exact in both domains.
+        for (int i = 0; i < TILE_SIZE; i++) {
+            int x = originX + (i << shift), y = originY + (i << shift);
+            if (x < -(1 << 24) || x > (1 << 24) || y < -(1 << 24) || y > (1 << 24)) return false;
+        }
+        GenerationBuffers buffers = GENERATION_BUFFERS.get();
+        if (shift == 0) return buffers.fillNativeHeightMapTree(map, originX, originY, TILE_SIZE, TILE_SIZE, output);
+        if (xCoordinates == null || yCoordinates == null || xCoordinates.length != output.length
+                || yCoordinates.length != output.length) return false;
+        for (int y = 0; y < TILE_SIZE; y++) for (int x = 0; x < TILE_SIZE; x++) {
+            int cell = x + y * TILE_SIZE;
+            xCoordinates[cell] = originX + (x << shift); yCoordinates[cell] = originY + (y << shift);
+        }
+        return buffers.fillNativeHeightMapTreePoints(map, xCoordinates, yCoordinates, output);
+    }
+
     @Override
     public Rectangle getExtent() {
         Rectangle heightMapExtent = heightMap.getExtent();

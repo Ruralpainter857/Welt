@@ -10,10 +10,13 @@ import org.pepsoft.util.MathUtils;
 import org.pepsoft.util.swing.TileListener;
 import org.pepsoft.util.swing.TileProvider;
 import org.pepsoft.worldpainter.HeightMap;
+import org.pepsoft.worldpainter.HeightMapTileFactory;
+import org.pepsoft.worldpainter.nativeapi.Native;
 
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.awt.image.WritableRaster;
+import java.awt.image.DataBufferByte;
 
 /**
  *
@@ -48,7 +51,10 @@ public class HeightMapTileProvider implements TileProvider {
         final BufferedImage image = renderBufferRef.get();
         final WritableRaster raster = image.getRaster();
         final double vertScale = 255 / heightMap.getRange()[1];
-        if (zoom < 0) {
+        if (renderNative(image, x, y, vertScale)) {
+            // The raster remains TYPE_BYTE_GRAY: Graphics2D retains the same
+            // colour-space conversion and clipping as the original preview.
+        } else if (zoom < 0) {
             final int scale = -zoom;
             final int xOffset = x << 7 << scale, yOffset = y << 7 << scale;
             for (int dx = 0; dx < 128; dx++) {
@@ -72,6 +78,29 @@ public class HeightMapTileProvider implements TileProvider {
         }
         return true;
     }
+
+    private boolean renderNative(BufferedImage image, int tileX, int tileY, double vertScale) {
+        if (!Native.isGenEnabled() || !Boolean.getBoolean("welt.native.heightMapPreview")) return false;
+        PreviewBuffers buffers = previewBuffers.get();
+        int shift = zoom < 0 ? -zoom & 31 : 0;
+        if (shift != 0 && buffers.x == null) { buffers.x = new float[16384]; buffers.y = new float[16384]; }
+        if (!HeightMapTileFactory.tryFillPreviewHeights(heightMap, tileX << 7 << shift, tileY << 7 << shift,
+                shift, buffers.x, buffers.y, buffers.heights)) return false;
+        byte[] pixels = ((DataBufferByte) image.getRaster().getDataBuffer()).getData();
+        for (int i = 0; i < pixels.length; i++)
+            pixels[i] = (byte) MathUtils.clamp(0, Math.round(buffers.heights[i] * vertScale), 255);
+        buffers.completed++; return true;
+    }
+
+    /** Successful complete tile evaluations on the calling rendering worker. */
+    public long completedNativePreviewTiles() { return previewBuffers.get().completed; }
+
+    private static final class PreviewBuffers {
+        private final double[] heights = new double[16384];
+        private float[] x, y;
+        private long completed;
+    }
+    private final ThreadLocal<PreviewBuffers> previewBuffers = ThreadLocal.withInitial(PreviewBuffers::new);
 
     @Override
     public int getTilePriority(int x, int y) {
