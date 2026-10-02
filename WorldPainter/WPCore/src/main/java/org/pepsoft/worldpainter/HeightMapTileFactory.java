@@ -760,6 +760,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         private double[] nativeDisplacementAngleValues;
         private double[] nativeDisplacementDistanceValues;
         private float[] displacementXCoordinateValues;
+        private final double[] previewAffineMatrix = new double[6];
         private float[] displacementYCoordinateValues;
         private double[] freshFancyHeightNeighborhoodValues;
         private double[] freshFancyDisplacementAngleValues;
@@ -1081,6 +1082,22 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             if (x < -(1 << 24) || x > (1 << 24) || y < -(1 << 24) || y > (1 << 24)) return false;
         }
         GenerationBuffers buffers = GENERATION_BUFFERS.get();
+        if (map.getClass() == TransformingHeightMap.class) {
+            TransformingHeightMap transforming = (TransformingHeightMap) map;
+            if (transforming.getScaleX() == 1.0f && transforming.getScaleY() == 1.0f && transforming.getRotation() == 0) {
+                // Pure translation uses integer subtraction in the original map.
+                for (int i = 0; i < TILE_SIZE; i++) {
+                    long x = (long) (originX + (i << shift)) - transforming.getOffsetX();
+                    long y = (long) (originY + (i << shift)) - transforming.getOffsetY();
+                    if (x < -(1 << 24) || x > (1 << 24) || y < -(1 << 24) || y > (1 << 24)) return false;
+                }
+            }
+            if (!buffers.prepareHeightMapProgram(transforming.getBaseHeightMap())) return false;
+            createTransformingHeightMapTransform(transforming).getMatrix(buffers.previewAffineMatrix);
+            return NativeSlices.fillAffineHeightMapTree(originX, originY, TILE_SIZE, TILE_SIZE, shift,
+                    buffers.previewAffineMatrix, buffers.heightMapNodeCount, buffers.heightMapOpcodes, buffers.heightMapValues,
+                    buffers.heightMapScales, buffers.heightMapOctaves, buffers.heightMapSeeds, output);
+        }
         if (map.getClass() == SlopeHeightMap.class) {
             if (shift != 0 && !Boolean.getBoolean("welt.native.slopePreviewZoom")) return false;
             SlopeHeightMap slope = (SlopeHeightMap) map;

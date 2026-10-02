@@ -437,6 +437,25 @@ public final class NativeSlices {
             int shift, float scaling, int nodeCount, int[] opcodes, double[] values, double[] scales,
             int[] octaves, long[] seeds, double[] output);
 
+    /** Evaluates affine coordinates and the base map in one call without Java coordinate planes. */
+    public static boolean fillAffineHeightMapTree(int originX, int originY, int width, int height,
+            int shift, double[] matrix, int nodeCount, int[] opcodes, double[] values, double[] scales,
+            int[] octaves, long[] seeds, double[] output) {
+        long area = (long) width * height;
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || width <= 0 || height <= 0
+                || area > 16384 || shift < 0 || shift > 31 || matrix == null || matrix.length != 6
+                || nodeCount <= 0 || nodeCount > 64 || opcodes == null || opcodes.length < nodeCount
+                || values == null || values.length < nodeCount || scales == null || scales.length < nodeCount
+                || octaves == null || octaves.length < nodeCount || seeds == null || seeds.length < nodeCount
+                || output == null || output.length != area) return false;
+        try { return nativeFillAffineHeightMapTree(originX, originY, width, height, shift, matrix, nodeCount,
+                opcodes, values, scales, octaves, seeds, output) == 0; }
+        catch (UnsatisfiedLinkError e) { return false; }
+    }
+    private static native int nativeFillAffineHeightMapTree(int originX, int originY, int width, int height,
+            int shift, double[] matrix, int nodeCount, int[] opcodes, double[] values, double[] scales,
+            int[] octaves, long[] seeds, double[] output);
+
     /** Processes one erosion brush area in Rust and returns Java-ordered setter calls. */
     public static boolean erodeRawHeightRegion(final int radius, final int[] heights,
                                                final byte[] controls, final int[] writeLog,

@@ -9,6 +9,7 @@ import java.util.concurrent.Future;
 import javax.swing.Icon;
 import org.junit.Test;
 import org.pepsoft.worldpainter.HeightMap;
+import org.pepsoft.worldpainter.HeightMapTileFactory;
 import org.pepsoft.worldpainter.heightMaps.*;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import static org.junit.Assert.*;
@@ -59,7 +60,8 @@ public class HeightMapPreviewParityTest {
     }
     @Test public void parallelWorkersKeepIndependentPreviewBuffers() {
         HeightMap base = new SumHeightMap(new ConstantHeightMap(32), new NoiseHeightMap(100, .7, 3, -123));
-        for (HeightMap map : new HeightMap[] {base, new SlopeHeightMap(base, 3.7f)}) withFlags(() -> {
+        for (HeightMap map : new HeightMap[] {base, new SlopeHeightMap(base, 3.7f),
+                new TransformingHeightMap("Affine", base, 1.7f, .65f, 31, -47, .37f)}) withFlags(() -> {
             HeightMapTileProvider java = new HeightMapTileProvider(map), rust = new HeightMapTileProvider(map);
             List<int[]> expected = new ArrayList<>();
             System.setProperty(Native.GEN_KEY, "false");
@@ -102,6 +104,52 @@ public class HeightMapPreviewParityTest {
             java.setZoom(-3); rust.setZoom(-3);
             System.setProperty("welt.native.slopePreviewZoom", "false");
             renderPair(java, rust, -1, 0); assertEquals(0, rust.completedNativePreviewTiles());
+        });
+    }
+    @Test public void affineChainsPreserveTranslationScaleRotationAndZoom() {
+        HeightMap base = new SumHeightMap(new ConstantHeightMap(32), new NoiseHeightMap(100, .7, 3, -123));
+        float[][] transforms = {{1, 1, 0}, {2, 3, 0}, {-2, .65f, .37f},
+                {1, 1, (float) (Math.PI / 2)}, {1.7f, .65f, -.37f}};
+        for (float[] transform : transforms) for (int zoom : new int[] {0, -1, -3})
+            compare(new TransformingHeightMap("Affine", base, transform[0], transform[1], 31, -47, transform[2]), zoom, -1, 0, 1);
+        for (HeightMap other : new HeightMap[] {new FastNoiseLiteHeightMap(128, .7, 3, 17),
+                new BandedHeightMap(37, .1, 29, 1, true), new BandedHeightMap(37, .1, 29, 1, false)})
+            for (int zoom : new int[] {0, -1, -3})
+                compare(new TransformingHeightMap("Affine", other, -1.7f, .65f, 31, -47, .37f), zoom, -1, 0, 1);
+        compare(new TransformingHeightMap("Overflow", base, 1, 1, Integer.MIN_VALUE, 0, 0), 0, -1, 0, 0);
+        compare(new TransformingHeightMap("Invalid", base, Float.NaN, 1, 0, 0, 0), 0, -1, 0, 0);
+        compare(new TransformingHeightMap("Invalid", base, 0, 1, 0, 0, 0), 0, -1, 0, 0);
+    }
+    @Test public void affineProviderObservesReplacementAndSeedChanges() {
+        TransformingHeightMap map = new TransformingHeightMap("Affine", new NoiseHeightMap(128, 1, 3, 3), 1.7f, .65f, 31, -47, .37f);
+        HeightMapTileProvider java = new HeightMapTileProvider(map), rust = new HeightMapTileProvider(map);
+        withFlags(() -> {
+            renderPair(java, rust, -1, 0);
+            map.setSeed(-1234567); renderPair(java, rust, -1, 0);
+            map.setBaseHeightMap(new NoiseHeightMap(100, .7, 2, 17)); renderPair(java, rust, -1, 0);
+            assertEquals(3, rust.completedNativePreviewTiles());
+        });
+    }
+    @Test public void affineHeightValuesMatchBeforeRasterQuantisation() {
+        withFlags(() -> {
+            System.setProperty(Native.GEN_KEY, "true"); System.setProperty("welt.native.heightMapPreview", "true");
+            HeightMap[] bases = {new NoiseHeightMap(128, 1.7, 3, -123),
+                    new FastNoiseLiteHeightMap(128, .7, 3, 17), new BandedHeightMap(37, .1, 29, 1, true)};
+            for (HeightMap base : bases) for (float rotation : new float[] {0, .37f, (float) (Math.PI / 2)}) {
+                HeightMap map = new TransformingHeightMap("Affine", base, rotation == 0 ? 1 : -1.7f, rotation == 0 ? 1 : .65f, 31, -47, rotation);
+                for (int shift : new int[] {0, 3}) {
+                    double[] actual = new double[16384];
+                    assertTrue(HeightMapTileFactory.tryFillPreviewHeights(map, -128, 64, shift, null, null, actual));
+                    for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++) {
+                        String location = base.getClass().getSimpleName() + " rotation=" + rotation + " shift=" + shift + " x=" + x + " y=" + y;
+                        double expected = map.getHeight(-128 + (x << shift), 64 + (y << shift));
+                        // The existing smooth banded kernel uses the platform cosine implementation.
+                        // Check its numeric error separately from the exact rendered pixel comparison.
+                        if (base instanceof BandedHeightMap) assertEquals(location, expected, actual[x + y * 128], 2e-15);
+                        else assertEquals(location, Double.doubleToLongBits(expected), Double.doubleToLongBits(actual[x + y * 128]));
+                    }
+                }
+            }
         });
     }
     private static void compare(HeightMap map, int zoom, int tileX, int tileY, int expectedCalls) {

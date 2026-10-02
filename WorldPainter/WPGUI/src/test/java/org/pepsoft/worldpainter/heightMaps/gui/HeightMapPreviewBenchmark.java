@@ -9,6 +9,7 @@ import org.pepsoft.worldpainter.heightMaps.ConstantHeightMap;
 import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SlopeHeightMap;
+import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
 import org.pepsoft.worldpainter.nativeapi.Native;
 
 /** Complete height map preview redraws, including grey raster conversion and image writes. */
@@ -42,6 +43,8 @@ public final class HeightMapPreviewBenchmark {
         HeightMap map = new SumHeightMap(new ConstantHeightMap(32),
                 new SumHeightMap(new NoiseHeightMap(100, 1.7, 4, 17), new NoiseHeightMap(60, .7, 3, -123)));
         if (Boolean.getBoolean("welt.benchmark.previewSlope")) map = new SlopeHeightMap(map, 3.7f);
+        if (Boolean.getBoolean("welt.benchmark.previewTransform"))
+            map = new TransformingHeightMap("Preview", map, 1.7f, .65f, 31, -47, .37f);
         map.setSeed(123456789L);
         HeightMapTileProvider provider = new HeightMapTileProvider(map);
         provider.setZoom(Integer.getInteger("welt.benchmark.previewZoom", 0));

@@ -3,6 +3,7 @@
 pub mod fancy_theme;
 pub mod height_map_tree;
 pub mod height_map_slope;
+pub mod height_map_affine;
 pub mod height_map_import;
 pub mod mask_import;
 mod bitmap_import;
