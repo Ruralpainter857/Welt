@@ -34,4 +34,6 @@ Filtered nibble-layer painting and removal can use the same worker buffer with `
 
 The same explicit flag also enables non-dithered filtered bit-layer painting and removal, for both block bits and bits shared by a chunk. Predicates reading the output layer use the same packed plane as the writes. Removing an absent bit layer preserves its absent storage and notification behavior; dithering retains the Java random stream. WFPT v3 declares the bit output type without adding a new JNI entry point.
 
+Filtered discrete nibble/byte painting (including annotations and numbered biomes) also uses this explicit flag and shared transaction. WFPT v4 writes constant values independently of the terrain palette, preserving biome values through 255, adjacent annotation nibbles and the removal value captured by the paint constructor. Default writes to absent storage do not create a layer; invalid targets and dithering retain Java behavior.
+
 For the Rust toolchain setup, exact build commands and details, see `docs/welt/` (start with `docs/welt/README.md` and `docs/welt/CHARTE-ORCHESTRATION.md`).

@@ -1,4 +1,4 @@
-//! WFPT v1/v2/v3: shared filter and painting transactions for terrain, numeric and bit layers.
+//! WFPT v1..v4: shared filter and painting transactions for terrain, numeric and bit layers.
 use crate::editor_filter::{CellData, Levels, Node, Predicate, Program};
 use crate::error::WeltError;
 use crate::nibble_paint::{target as nibble_target, NibblePaintMode};
@@ -176,12 +176,13 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
     if data.len() < HEADER
         || data.len() > MAX_BYTES
         || int(data, 0) != 0x54504657
-        || !matches!(int(data, 4), 1..=3)
+        || !matches!(int(data, 4), 1..=4)
     {
         return bad();
     }
     let nibble = int(data, 4) == 2;
     let bit = int(data, 4) == 3;
+    let discrete = int(data, 4) == 4;
     let output = int(data, 152) as usize;
     let mode = match int(data, 156) {
         0 => NibblePaintMode::Apply,
@@ -197,6 +198,10 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
         if !matches!(int(data, 60), 0 | 1) || int(data, 156) > 1 {
             return bad();
         }
+    } else if discrete {
+        if !matches!(int(data, 60), 4 | 8) || int(data, 156) != 0 {
+            return bad();
+        }
     } else if int(data, 60) != 0 || int(data, 152) != 0 || int(data, 156) != 0 {
         return bad();
     }
@@ -210,7 +215,12 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
         || !(1..=9).contains(&tile_count)
         || !(1..=256).contains(&palette_count)
         || target < 0
-        || target as usize >= palette_count
+        || target as usize
+            >= if discrete {
+                1usize << int(data, 60)
+            } else {
+                palette_count
+            }
         || !(-1..=254).contains(&int(data, 36))
         || int(data, 56) < 0
         || int(data, 56) as usize >= palette_count
@@ -326,6 +336,9 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
     if bit && (output >= planes.len() || planes[output].0 != int(data, 60) as usize) {
         return bad();
     }
+    if discrete && (output >= planes.len() || planes[output].0 != int(data, 60) as usize) {
+        return bad();
+    }
     if cursor != int(data, 44) as usize || cursor + tile_count * 32 > data.len() {
         return bad();
     }
@@ -400,7 +413,17 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
                     };
                     dynamic * program.modify_strength(&context, strength)
                 };
-                if bit && filtered > 0.75 {
+                if discrete && filtered > 0.75 {
+                    let offset = frame.base + planes[output].1;
+                    if planes[output].0 == 8 {
+                        data[offset + cell] = target as u8;
+                    } else {
+                        let shift = (cell & 1) * 4;
+                        data[offset + cell / 2] =
+                            (data[offset + cell / 2] & !(15 << shift)) | ((target as u8) << shift);
+                    }
+                    writes += 1;
+                } else if bit && filtered > 0.75 {
                     let index = if planes[output].0 == 0 {
                         x / 16 + y / 16 * 8
                     } else {
@@ -432,7 +455,7 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
                         data[offset] = (data[offset] & !(15 << shift)) | ((next as u8) << shift);
                         writes += 1;
                     }
-                } else if !nibble && !bit && filtered > 0.75 {
+                } else if !nibble && !bit && !discrete && filtered > 0.75 {
                     data[frame.base + cell] = target as u8;
                     writes += 1;
                 }
@@ -561,6 +584,47 @@ mod tests {
         put(&mut valid, 264 + LAYERS + 2048, 1f32.to_bits() as i32);
         paint(&mut valid.clone()).unwrap();
         for (p, v) in [(60, 4), (152, 1), (156, 2), (224, 4)] {
+            let mut data = valid.clone();
+            put(&mut data, p, v);
+            let before = data.clone();
+            assert!(paint(&mut data).is_err());
+            assert_eq!(data, before);
+        }
+    }
+    fn discrete_fixture(bits: usize, value: i32, strength: f32) -> Vec<u8> {
+        let mut data = nibble_fixture(0, strength, 0);
+        data.resize(264 + LAYERS + bytes(bits) + 4, 0);
+        put(&mut data, 4, 4);
+        put(&mut data, 20, value);
+        put(&mut data, 60, bits as i32);
+        put(&mut data, 224, bits as i32);
+        put(
+            &mut data,
+            264 + LAYERS + bytes(bits),
+            strength.to_bits() as i32,
+        );
+        data[264 + LAYERS] = 0xa0;
+        data
+    }
+    #[test]
+    fn discrete_values_preserve_threshold_nan_palette_independence_and_adjacent_nibble() {
+        for (bits, value, expected) in [(4, 7, 0xa7), (8, 200, 200), (8, 255, 255)] {
+            for strength in [0.75, f32::NAN, 1.0] {
+                let mut data = discrete_fixture(bits, value, strength);
+                paint(&mut data).unwrap();
+                assert_eq!(
+                    data[264 + LAYERS],
+                    if strength > 0.75 { expected } else { 0xa0 }
+                );
+                assert_eq!(int(&data, 260), i32::from(strength > 0.75));
+            }
+        }
+    }
+    #[test]
+    fn invalid_discrete_descriptors_reject_before_writes() {
+        let valid = discrete_fixture(8, 200, 1.0);
+        paint(&mut valid.clone()).unwrap();
+        for (p, v) in [(60, 1), (152, 1), (156, 1), (224, 4), (20, -1), (20, 256)] {
             let mut data = valid.clone();
             put(&mut data, p, v);
             let before = data.clone();

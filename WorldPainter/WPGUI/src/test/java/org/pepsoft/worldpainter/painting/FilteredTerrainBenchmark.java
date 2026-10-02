@@ -8,6 +8,7 @@ import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.panels.DefaultFilter;
 import org.pepsoft.worldpainter.layers.Resources;
 import org.pepsoft.worldpainter.layers.Frost;
+import org.pepsoft.worldpainter.layers.Biome;
 
 /** Measures complete filtered paint strokes, including filter reads and output writes. */
 public final class FilteredTerrainBenchmark {
@@ -51,14 +52,15 @@ public final class FilteredTerrainBenchmark {
             tile.releaseEvents();
             dimension.addTile(tile);
         }
-        Paint paint = Boolean.getBoolean("welt.benchmark.bit") ? new BitLayerPaint(Frost.INSTANCE)
+        Paint paint = Boolean.getBoolean("welt.benchmark.discrete") ? new DiscreteLayerPaint(Biome.INSTANCE, 12)
+                : Boolean.getBoolean("welt.benchmark.bit") ? new BitLayerPaint(Frost.INSTANCE)
                 : Boolean.getBoolean("welt.benchmark.nibble") ? new NibbleLayerPaint(Resources.INSTANCE) : new TerrainPaint(Terrain.SAND);
         paint.setDither(false);
         paint.setBrush(SymmetricBrush.LINEAR_CIRCLE.clone());
         paint.getBrush().setRadius(96);
-        boolean bit = Boolean.getBoolean("welt.benchmark.bit");
-        paint.setFilter(new DefaultFilter(dimension, false, false, 60, 64, !bit,
-                false, null, false, null, bit ? 80 : 20, false));
+        boolean threshold = Boolean.getBoolean("welt.benchmark.bit") || Boolean.getBoolean("welt.benchmark.discrete");
+        paint.setFilter(new DefaultFilter(dimension, false, false, 60, 64, !threshold,
+                false, null, false, null, threshold ? 80 : 20, false));
         DimensionPainter painter = new DimensionPainter();
         painter.setPaint(paint);
         return new Setup(dimension, painter);
@@ -70,6 +72,8 @@ public final class FilteredTerrainBenchmark {
             for (Tile tile : setup.dimension.getTiles()) tile.clearLayerData(Resources.INSTANCE);
         if (Boolean.getBoolean("welt.benchmark.bit") && Boolean.getBoolean("welt.benchmark.freshLayer"))
             for (Tile tile : setup.dimension.getTiles()) tile.clearLayerData(Frost.INSTANCE);
+        if (Boolean.getBoolean("welt.benchmark.discrete") && Boolean.getBoolean("welt.benchmark.freshLayer"))
+            for (Tile tile : setup.dimension.getTiles()) tile.clearLayerData(Biome.INSTANCE);
         var bean = (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
         Dimension dimension = setup.dimension;
         DimensionPainter painter = setup.painter;
@@ -84,11 +88,14 @@ public final class FilteredTerrainBenchmark {
             }
             long elapsed = System.nanoTime() - start;
             allocated = bean.getThreadAllocatedBytes(Thread.currentThread().getId()) - allocated;
-            checksum ^= Boolean.getBoolean("welt.benchmark.bit") ? (dimension.getBitLayerValueAt(Frost.INSTANCE, 0, 0) ? 1 : 0)
+            checksum ^= Boolean.getBoolean("welt.benchmark.discrete") ? dimension.getLayerValueAt(Biome.INSTANCE, 0, 0)
+                    : Boolean.getBoolean("welt.benchmark.bit") ? (dimension.getBitLayerValueAt(Frost.INSTANCE, 0, 0) ? 1 : 0)
                     : Boolean.getBoolean("welt.benchmark.nibble") ? dimension.getLayerValueAt(Resources.INSTANCE, 0, 0)
                     : dimension.getTerrainAt(0, 0).ordinal();
             if (Boolean.getBoolean("welt.benchmark.bit") && dimension.getTiles().stream().noneMatch(tile -> tile.hasLayer(Frost.INSTANCE)))
                 throw new AssertionError("Filtered bit fixture did not paint any cells");
+            if (Boolean.getBoolean("welt.benchmark.discrete") && dimension.getTiles().stream().noneMatch(tile -> tile.hasLayer(Biome.INSTANCE)))
+                throw new AssertionError("Filtered biome fixture did not paint any cells");
         return new Sample(elapsed, allocated);
     }
     private static void compare() {

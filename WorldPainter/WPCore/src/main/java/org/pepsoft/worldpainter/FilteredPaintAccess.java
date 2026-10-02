@@ -16,7 +16,7 @@ import static org.pepsoft.worldpainter.biomeschemes.Minecraft1_21Biomes.*;
 
 /**
  * Complete filtering and packed painting in one JNI call, with one shared worker buffer.
- * WFPT v1/v2/v3 is little-endian: a 160-byte header, 48-byte program nodes with appended
+ * WFPT v1/v2/v3/v4 is little-endian: a 160-byte header, 48-byte program nodes with appended
  * combined-child indices, terrain biome palette, 8-byte packed-plane descriptors,
  * then 32-byte tile descriptors and contiguous tile payloads. Each payload contains
  * a full terrain plane, a 130x130 X-major float height halo, absolute water levels,
@@ -24,6 +24,7 @@ import static org.pepsoft.worldpainter.biomeschemes.Minecraft1_21Biomes.*;
  * Version 2 adds output bits at byte 60, output plane at byte 152 and numeric mode
  * at byte 156 (apply, rounded removal, truncated removal); version 1 keeps terrain output.
  * Version 3 uses output bits 0/1 for chunk/block bits and mode 0/1 for apply/remove.
+ * Version 4 writes constant nibble/byte values from byte 20, with mode 0.
  * Descriptor state is -1 for a missing tile, otherwise the number of requested
  * paint setters, including unchanged values. Application preserves Java's COW
  * and coalesced events. Painting touches each cell once; predicates only read that
@@ -65,6 +66,18 @@ public final class FilteredPaintAccess {
 
     private static boolean apply(Dimension dimension, Terrain target, Layer outputLayer, EditorFilterPlan plan,
                                   int ox, int oy, int width, int height, float dynamic, float[] strengths, int mode) {
+        return apply(dimension, target, outputLayer, plan, ox, oy, width, height, dynamic, strengths, mode, null);
+    }
+
+    public static boolean applyDiscrete(Dimension dimension, Layer layer, int value, EditorFilterPlan plan,
+                                        int ox, int oy, int width, int height, float dynamic, float[] strengths) {
+        if (layer == null || (layer.dataSize != Layer.DataSize.NIBBLE && layer.dataSize != Layer.DataSize.BYTE)
+                || value < 0 || value >= (1 << bits(layer))) return false;
+        return apply(dimension, null, layer, plan, ox, oy, width, height, dynamic, strengths, 0, value);
+    }
+
+    private static boolean apply(Dimension dimension, Terrain target, Layer outputLayer, EditorFilterPlan plan,
+                                  int ox, int oy, int width, int height, float dynamic, float[] strengths, int mode, Integer fixed) {
         if (plan == null || width <= 0 || height <= 0 || width > 256 || height > 256
                 || (long) width * height != strengths.length || TERRAINS.length > 256
                 || ox < Integer.MIN_VALUE + 256 || oy < Integer.MIN_VALUE + 256
@@ -119,8 +132,8 @@ public final class FilteredPaintAccess {
         data.clear().limit((int) required);
         for (int i = 0; i < HEADER; i += 8) data.putLong(i, 0);
         int outputBits = outputLayer == null ? 8 : bits(outputLayer);
-        data.putInt(0, 0x54504657).putInt(4, outputLayer == null ? 1 : outputBits == 4 ? 2 : 3).putInt(8, plan.nodes().size()).putInt(12, layers.size())
-                .putInt(16, tileCount).putInt(20, target == null ? 0 : target.ordinal()).putFloat(24, dynamic)
+        data.putInt(0, 0x54504657).putInt(4, fixed != null ? 4 : outputLayer == null ? 1 : outputBits == 4 ? 2 : 3).putInt(8, plan.nodes().size()).putInt(12, layers.size())
+                .putInt(16, tileCount).putInt(20, fixed != null ? fixed : target == null ? 0 : target.ordinal()).putFloat(24, dynamic)
                 .putInt(28, HEADER + programBytes).putInt(32, TERRAINS.length)
                 .putInt(36, dimension.getAnchor().dim == -1 ? BIOME_HELL : dimension.getAnchor().dim == 1 ? BIOME_SKY : -1)
                 .putInt(40, planeDefinitions).putInt(44, tileDefinitions).putInt(48, payload)
@@ -177,8 +190,10 @@ public final class FilteredPaintAccess {
             // The original one-tile path requests editing even when every strength is rejected.
             if (writes > 0 || tileCount == 1 && writes == 0) {
                 Tile tile = dimension.getTileForEditing(data.getInt(record), data.getInt(record + 4));
-                // False setters on absent bit storage neither allocate nor notify in Java.
-                if (writes > 0 && !(outputBits <= 1 && mode == 1 && !tile.hasLayer(outputLayer)))
+                // Default setters on absent layer storage neither allocate nor notify in Java.
+                boolean absentDefault = outputLayer != null && !tile.hasLayer(outputLayer)
+                        && (outputBits <= 1 && mode == 1 || fixed != null && fixed == outputLayer.getDefaultValue());
+                if (writes > 0 && !absentDefault)
                     tile.applyCombinedLayerPlane(outputLayer, outputBits, data,
                         data.getInt(record + 24) + (outputLayer == null ? 0 : data.getInt(planeDefinitions + outputPlane * 8 + 4)));
             }
