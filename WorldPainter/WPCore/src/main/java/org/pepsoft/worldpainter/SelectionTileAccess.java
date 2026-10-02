@@ -15,6 +15,26 @@ final class SelectionTileAccess {
 
     private SelectionTileAccess() { }
 
+    /** WSEL v3 is a read-only bounds query over the same two packed selection planes. */
+    static long bounds(BitSet chunks, BitSet blocks) {
+        if ((chunks == null || chunks.isEmpty()) && (blocks == null || blocks.isEmpty())) return 0L;
+        ByteBuffer buffer = BUFFERS.get(); buffer.clear();
+        for (int i = 0; i < buffer.capacity(); i += 8) buffer.putLong(i, 0L);
+        buffer.putInt(0, 0x4c455357).putInt(4, 3)
+                .putInt(16, chunks != null ? 1 : 0).putInt(20, blocks != null ? 1 : 0);
+        putBoundedBits(buffer, 88, 64, chunks);
+        putBoundedBits(buffer, 96, 16384, blocks);
+        return NativeSlices.selectionBounds(buffer);
+    }
+
+    private static void putBoundedBits(ByteBuffer buffer, int offset, int count, BitSet values) {
+        if (values == null) return;
+        for (int bit = values.nextSetBit(0); bit >= 0 && bit < count; bit = values.nextSetBit(bit + 1)) {
+            int index = offset + bit / 8;
+            buffer.put(index, (byte) (buffer.get(index) | (1 << (bit & 7))));
+        }
+    }
+
     static ByteBuffer edit(Tile tile, Shape shape, boolean add, BitSet chunks, BitSet blocks) {
         // Custom Shape implementations may have stateful predicates. Keep their
         // exact predicate order and callbacks in the existing Java implementation.

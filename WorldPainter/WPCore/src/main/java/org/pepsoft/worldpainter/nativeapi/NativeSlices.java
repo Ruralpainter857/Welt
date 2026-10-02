@@ -13,6 +13,14 @@ import java.nio.ByteBuffer;
 
 /** Bulk JNI entry points. A null result asks the caller to use its Java path. */
 public final class NativeSlices {
+    /** Query compact selection planes without writing either plane or retaining the direct address. */
+    public static long selectionBounds(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null
+                || !buffer.isDirect() || buffer.limit() != 4192) return Long.MIN_VALUE;
+        try { return nativeSelectionBounds(buffer); }
+        catch (UnsatisfiedLinkError e) { return Long.MIN_VALUE; }
+    }
+    private static native long nativeSelectionBounds(ByteBuffer buffer);
     /** Process all configured combined-layer passes in a single direct tile transaction. */
     public static boolean applyCombinedLayer(ByteBuffer buffer) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null

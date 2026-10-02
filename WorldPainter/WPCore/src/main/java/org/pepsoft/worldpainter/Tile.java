@@ -2921,6 +2921,13 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
 
     public void invertLayer(Layer layer) { editWholeLayer(layer, true, 0); }
 
+    /** Local selection bounds packed as four bytes plus a presence bit; unavailable asks for Java fallback. */
+    synchronized long getNativeSelectionBounds() {
+        if (getClass() != Tile.class || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return Long.MIN_VALUE;
+        ensureReadable(BIT_LAYER_DATA);
+        return SelectionTileAccess.bounds(bitLayerData.get(SelectionChunk.INSTANCE), bitLayerData.get(SelectionBlock.INSTANCE));
+    }
+
     public void fillTerrain(Terrain value) {
         Objects.requireNonNull(value);
         if (fillTerrainNative(value)) return;

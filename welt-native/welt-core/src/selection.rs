@@ -11,6 +11,59 @@ const CHUNKS: usize = 88;
 const BLOCKS: usize = 96;
 const MASK: usize = 2144;
 
+/// Read-only WSEL v3 bounds. Four local byte coordinates and bit 32 for a nonempty selection.
+/// Whole chunks and individual blocks form a union; absent planes remain explicitly absent.
+pub fn bounds(data: &[u8]) -> Option<i64> {
+    if data.len() != LENGTH
+        || word(data, 0) != MAGIC
+        || word(data, 4) != 3
+        || word(data, 16) > 1
+        || word(data, 20) > 1
+    {
+        return None;
+    }
+    let mut low_x = 128u32;
+    let mut high_x = 0u32;
+    let mut low_y = 128u32;
+    let mut high_y = 0u32;
+    if word(data, 16) != 0 {
+        let mut chunks = u64::from_le_bytes(data[CHUNKS..CHUNKS + 8].try_into().unwrap());
+        while chunks != 0 {
+            let chunk = chunks.trailing_zeros();
+            chunks &= chunks - 1;
+            let x = (chunk % 8) * 16;
+            let y = (chunk / 8) * 16;
+            low_x = low_x.min(x);
+            high_x = high_x.max(x + 15);
+            low_y = low_y.min(y);
+            high_y = high_y.max(y + 15);
+        }
+    }
+    if word(data, 20) != 0 && !(low_x == 0 && high_x == 127 && low_y == 0 && high_y == 127) {
+        // Each block row is two words. Bounds depend on the first and last set bits, not its density.
+        for y in 0..128u32 {
+            for half in 0..2u32 {
+                let offset = BLOCKS + y as usize * 16 + half as usize * 8;
+                let row = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
+                if row != 0 {
+                    low_x = low_x.min(half * 64 + row.trailing_zeros());
+                    high_x = high_x.max(half * 64 + 63 - row.leading_zeros());
+                    low_y = low_y.min(y);
+                    high_y = high_y.max(y);
+                }
+            }
+        }
+    }
+    Some(if low_x == 128 {
+        0
+    } else {
+        (1i64 << 32)
+            | i64::from(low_x)
+            | (i64::from(high_x) << 8)
+            | (i64::from(low_y) << 16)
+            | (i64::from(high_y) << 24)
+    })
+}
 fn word(data: &[u8], index: usize) -> u32 {
     u32::from_le_bytes(data[index..index + 4].try_into().unwrap())
 }
@@ -133,5 +186,77 @@ mod tests {
         data[4..8].copy_from_slice(&3u32.to_le_bytes());
         assert!(super::edit(&mut data).is_err());
         assert_eq!(&data[super::CHUNKS..], &before[super::CHUNKS..]);
+    }
+}
+
+#[cfg(test)]
+mod bounds_tests {
+    use super::*;
+    fn oracle(data: &[u8]) -> i64 {
+        let (mut lx, mut ly, mut hx, mut hy) = (128, 128, 0, 0);
+        for y in 0..128 {
+            for x in 0..128 {
+                let c = x / 16 + y / 16 * 8;
+                let b = x + y * 128;
+                if (word(data, 16) != 0 && data[CHUNKS + c / 8] & (1 << (c % 8)) != 0)
+                    || (word(data, 20) != 0 && data[BLOCKS + b / 8] & (1 << (b % 8)) != 0)
+                {
+                    lx = lx.min(x);
+                    hx = hx.max(x);
+                    ly = ly.min(y);
+                    hy = hy.max(y);
+                }
+            }
+        }
+        if lx == 128 {
+            0
+        } else {
+            (1i64 << 32)
+                | lx as i64
+                | ((hx as i64) << 8)
+                | ((ly as i64) << 16)
+                | ((hy as i64) << 24)
+        }
+    }
+    #[test]
+    fn bounds_match_cell_oracle_for_sparse_dense_mixed_and_absent_planes() {
+        let mut seed = 19u32;
+        for variant in 0..20 {
+            for chunks in 0..=1u32 {
+                for blocks in 0..=1u32 {
+                    let mut data = vec![0; LENGTH];
+                    data[..4].copy_from_slice(&MAGIC.to_le_bytes());
+                    data[4..8].copy_from_slice(&3u32.to_le_bytes());
+                    data[16..20].copy_from_slice(&chunks.to_le_bytes());
+                    data[20..24].copy_from_slice(&blocks.to_le_bytes());
+                    for value in &mut data[CHUNKS..MASK] {
+                        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                        *value = if variant == 0 {
+                            0
+                        } else if variant == 1 {
+                            255
+                        } else if variant % 3 == 0 {
+                            u8::from(seed.is_multiple_of(101))
+                        } else {
+                            seed as u8
+                        };
+                    }
+                    assert_eq!(bounds(&data), Some(oracle(&data)));
+                }
+            }
+        }
+        for bit in [0, 63, 64, 127, 128, 8191, 8192, 16383] {
+            let mut data = vec![0; LENGTH];
+            data[..4].copy_from_slice(&MAGIC.to_le_bytes());
+            data[4..8].copy_from_slice(&3u32.to_le_bytes());
+            data[20..24].copy_from_slice(&1u32.to_le_bytes());
+            data[BLOCKS + bit / 8] = 1 << (bit % 8);
+            assert_eq!(bounds(&data), Some(oracle(&data)));
+        }
+    }
+    #[test]
+    fn invalid_bounds_frames_are_rejected() {
+        assert_eq!(bounds(&[]), None);
+        assert_eq!(bounds(&vec![0; LENGTH]), None);
     }
 }

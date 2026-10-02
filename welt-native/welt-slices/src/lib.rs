@@ -4607,3 +4607,44 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
         })
     }
 }
+
+/// # Safety
+/// The WSEL buffer must remain accessible and unchanged for the duration of this read-only query.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeSelectionBounds(
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+) -> jlong {
+    let mut output = i64::MIN;
+    let status = unsafe {
+        jni_catch(env, || {
+            if buffer.is_null() {
+                return WeltError::IllegalArgument as jint;
+            }
+            type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
+            type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
+            let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
+            let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
+            let pointer = address(env, buffer);
+            if pointer.is_null() || capacity(env, buffer) < welt_core::selection::LENGTH as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
+            match welt_core::selection::bounds(slice::from_raw_parts(
+                pointer.cast::<u8>(),
+                welt_core::selection::LENGTH,
+            )) {
+                Some(value) => {
+                    output = value;
+                    WeltError::Ok as jint
+                }
+                None => WeltError::IllegalArgument as jint,
+            }
+        })
+    };
+    if status == WeltError::Ok as jint {
+        output
+    } else {
+        i64::MIN
+    }
+}
