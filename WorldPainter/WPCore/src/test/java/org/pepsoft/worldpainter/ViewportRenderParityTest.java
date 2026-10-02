@@ -4,8 +4,11 @@ import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.List;
+import java.util.Arrays;
 import org.junit.Test;
 import org.pepsoft.worldpainter.biomeschemes.CustomBiomeManager;
+import org.pepsoft.worldpainter.biomeschemes.CustomBiome;
 import org.pepsoft.worldpainter.layers.*;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import static org.junit.Assert.*;
@@ -20,6 +23,54 @@ public class ViewportRenderParityTest {
     @Test public void unsupportedMixedTerrainKeepsJavaFallback() { compare(TileRenderer.LightOrigin.NORTHWEST, false, false, false, true); }
     @Test public void unzoomedAndClippedDestinationPixelsMatch() {
         compare(TileRenderer.LightOrigin.SOUTHEAST, false, true, false, false, true);
+    }
+    @Test public void indexedBiomesAnnotationsAndLiveCustomPatternsMatch() {
+        String gen = System.getProperty(Native.GEN_KEY), render = System.getProperty(Native.RENDER_KEY), flag = System.getProperty("welt.native.viewport");
+        try {
+            System.setProperty(Native.GEN_KEY, "false");
+            Dimension d = fixture(false, false);
+            BufferedImage rgb = new BufferedImage(16, 16, BufferedImage.TYPE_INT_RGB);
+            BufferedImage alpha = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB_PRE);
+            for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) {
+                rgb.setRGB(x, y, 0x010305 + x * 257 + y * 65536);
+                alpha.setRGB(x, y, (x % 3 == 0 ? 0 : x % 3 == 1 ? 0x01000000 : 0xff000000) | 0x123456);
+            }
+            CustomBiome first = new CustomBiome("RGB", 200), second = new CustomBiome("Alpha", 201);
+            first.setPattern(rgb); second.setPattern(alpha);
+            CustomBiomeManager manager = new CustomBiomeManager(); manager.setCustomBiomes(List.of(first, second));
+            for (Tile tile : d.getTiles()) {
+                tile.inhibitEvents();
+                try {
+                    for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++) {
+                        tile.setLayerValue(Biome.INSTANCE, x, y, (x + y * 7) & 255);
+                        tile.setLayerValue(Annotations.INSTANCE, x, y, (x & 7) == 0 ? (x / 8 + y) & 15 : 0);
+                    }
+                } finally { tile.releaseEvents(); }
+            }
+            for (TileRenderer.LightOrigin light : TileRenderer.LightOrigin.values()) {
+                TileRenderer java = new TileRenderer(d, ColourScheme.DEFAULT, manager, 0, true, null);
+                TileRenderer rust = new TileRenderer(d, ColourScheme.DEFAULT, manager, 0, true, null);
+                java.setLightOrigin(light); rust.setLightOrigin(light);
+                BufferedImage expected = new BufferedImage(256, 256, BufferedImage.TYPE_INT_ARGB);
+                BufferedImage actual = new BufferedImage(256, 256, BufferedImage.TYPE_INT_ARGB);
+                int[] before = null;
+                for (int pass = 0; pass < 2; pass++) {
+                    for (Tile tile : d.getTiles()) {
+                        int dx = (tile.getX() + 1) << 7, dy = (tile.getY() + 1) << 7;
+                        System.setProperty(Native.RENDER_KEY, "false"); java.renderTile(tile, expected, dx, dy);
+                        System.setProperty(Native.RENDER_KEY, "true"); System.setProperty("welt.native.viewport", "true"); rust.renderTile(tile, actual, dx, dy);
+                    }
+                    int[] pixels = ((DataBufferInt) actual.getRaster().getDataBuffer()).getData();
+                    assertArrayEquals(((DataBufferInt) expected.getRaster().getDataBuffer()).getData(), pixels);
+                    if (pass == 0) {
+                        before = pixels.clone();
+                        for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) rgb.setRGB(x, y, rgb.getRGB(x, y) ^ 0x00ffffff);
+                        alpha.setRGB(5, 5, alpha.getRGB(5, 5) ^ 0x00ffffff);
+                    } else assertFalse("Live custom RGB pattern changes must be visible", Arrays.equals(before, pixels));
+                }
+                assertEquals(8L, rust.completedNativeViewportTiles());
+            }
+        } finally { restore(Native.GEN_KEY, gen); restore(Native.RENDER_KEY, render); restore("welt.native.viewport", flag); }
     }
     private static Dimension fixture(boolean masks, boolean unsupported) {
         Platform p = DefaultPlugin.JAVA_ANVIL_1_19;

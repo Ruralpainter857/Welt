@@ -1,4 +1,4 @@
-//! WVR1: complete tile colours, compact overlays, contours and terrain/fluid lighting.
+//! WVR versions 1 and 2: complete tile composition with compact overlay planes.
 use crate::shade::java_multiply;
 
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -16,6 +16,7 @@ struct Plane {
     offset: usize,
     pattern: u64,
     frost: bool,
+    lookup: usize,
 }
 impl Plane {
     const EMPTY: Self = Self {
@@ -25,6 +26,7 @@ impl Plane {
         offset: 0,
         pattern: 0,
         frost: false,
+        lookup: 0,
     };
     fn value(self, data: &[u8], x: usize, y: usize) -> i32 {
         let index = if self.bits == 0 {
@@ -35,6 +37,7 @@ impl Plane {
         match self.bits {
             0 | 1 => ((data[self.offset + index / 8] >> (index & 7)) & 1) as i32,
             4 => ((data[self.offset + index / 2] >> ((index & 1) * 4)) & 15) as i32,
+            8 => data[self.offset + index] as i32,
             _ => unreachable!(),
         }
     }
@@ -99,11 +102,15 @@ fn frost(colour: i32) -> i32 {
 
 pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
     let bad = RenderError::InvalidFrame;
-    if data.len() < 128 || data.len() > MAX_BYTES || int(data, 0) != 0x31525657 || int(data, 4) != 1
+    if data.len() < 128
+        || data.len() > MAX_BYTES
+        || int(data, 0) != 0x31525657
+        || !matches!(int(data, 4), 1 | 2)
     {
         return Err(bad);
     }
     let count = int(data, 8) as usize;
+    let version = int(data, 4);
     let palette_count = int(data, 12) as usize;
     let flags = int(data, 20);
     let separation = int(data, 24);
@@ -138,13 +145,16 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
         let p = table + i * 32;
         let bits = int(data, p) as usize;
         let kind = int(data, p + 4);
-        if !matches!(bits, 0 | 1 | 4)
-            || !(0..=4).contains(&kind)
+        if !matches!(bits, 0 | 1 | 4 | 8)
+            || !(0..=if version == 1 { 4 } else { 6 }).contains(&kind)
             || int(data, p + 12) as usize != cursor
             || !matches!(int(data, p + 24), 0 | 1)
-            || int(data, p + 28) != 0
+            || kind <= 4 && int(data, p + 28) != 0
             || matches!(kind, 2 | 3) && bits == 4
             || kind == 4 && bits != 4
+            || kind == 5 && bits != 4
+            || kind == 6 && bits != 8
+            || bits == 8 && kind != 6
             || i < visible && kind == 0
             || i >= visible && kind != 0
         {
@@ -157,8 +167,36 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
             offset: cursor,
             pattern: word(data, p + 16),
             frost: int(data, p + 24) != 0,
+            lookup: int(data, p + 28) as usize,
         };
         cursor += bytes(bits);
+    }
+    for plane in planes.iter().take(count) {
+        match plane.kind {
+            5 => {
+                if plane.lookup != cursor || cursor + 64 > data.len() {
+                    return Err(bad);
+                }
+                cursor += 64;
+            }
+            6 => {
+                if plane.lookup != cursor || cursor + 1024 > data.len() {
+                    return Err(bad);
+                }
+                cursor += 1024;
+                for value in 0..256 {
+                    let pattern = int(data, plane.lookup + value * 4) as usize;
+                    if pattern == 0 {
+                        continue;
+                    }
+                    if value == 255 || pattern != cursor || cursor + 1024 > data.len() {
+                        return Err(bad);
+                    }
+                    cursor += 1024;
+                }
+            }
+            _ => (),
+        }
     }
     let output = cursor;
     if int(data, 64) as usize != output
@@ -213,7 +251,7 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
                 if !contour {
                     for plane in planes.iter().take(visible) {
                         let value = plane.value(data, x, y);
-                        if value == 0 || hide_fluids && flooded && plane.frost {
+                        if value == 0 && plane.bits != 8 || hide_fluids && flooded && plane.frost {
                             continue;
                         }
                         rgb = match plane.kind {
@@ -231,6 +269,20 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
                                     mix(plane.colour, rgb, value * 256 / 15, false)
                                 } else {
                                     rgb
+                                }
+                            }
+                            5 => int(data, plane.lookup + value as usize * 4),
+                            6 => {
+                                let pattern = int(data, plane.lookup + value as usize * 4) as usize;
+                                if pattern == 0 {
+                                    rgb
+                                } else {
+                                    let pixel = int(data, pattern + ((x & 15) + (y & 15) * 16) * 4);
+                                    if pixel as u32 & 0xff000000 == 0 {
+                                        rgb
+                                    } else {
+                                        mix(pixel, rgb, 128, true)
+                                    }
                                 }
                             }
                             _ => unreachable!(),
@@ -301,7 +353,7 @@ mod tests {
             assert_eq!(int(&data, output + i * 4) as u32, 0xff123456);
         }
         for (p, v) in [
-            (4, 2_i32),
+            (4, 3_i32),
             (8, 129),
             (12, 257),
             (28, 5),
@@ -332,5 +384,74 @@ mod tests {
         assert_eq!(brighten([0, 0, 1, 0], 0), 288);
         assert_eq!(brighten([0, 0, 1, 0], 1), 224);
         assert_eq!(brighten([i32::MIN, 0, i32::MAX, 1], 0), 256);
+    }
+    #[test]
+    fn indexed_tables_preserve_biome_zero_alpha_and_annotation_priority() {
+        let terrain = 132 + 64;
+        let heights = terrain + AREA;
+        let wet = heights + HALO * 4;
+        let nibble = wet + HALO * 4;
+        let biome = nibble + AREA / 2;
+        let annotation_lookup = biome + AREA;
+        let biome_lookup = annotation_lookup + 64;
+        let pattern = biome_lookup + 1024;
+        let output = pattern + 1024;
+        let mut data = vec![0; output + AREA * 4];
+        for (p, v) in [
+            (0, 0x31525657),
+            (4, 2),
+            (8, 2),
+            (12, 1),
+            (28, 4),
+            (52, terrain as i32),
+            (56, heights as i32),
+            (60, wet as i32),
+            (64, output as i32),
+            (68, 128),
+            (72, 132),
+            (76, 2),
+            (80, -1),
+            (84, -1),
+            (88, -1),
+            (92, -1),
+            (128, 0x123456),
+            (132, 4),
+            (136, 5),
+            (144, nibble as i32),
+            (160, annotation_lookup as i32),
+            (164, 8),
+            (168, 6),
+            (176, biome as i32),
+            (192, biome_lookup as i32),
+            (annotation_lookup + 4, 0x010101),
+            (biome_lookup, pattern as i32),
+        ] {
+            data[p..p + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        for i in 0..HALO {
+            data[heights + i * 4..heights + i * 4 + 4].copy_from_slice(&64i32.to_le_bytes());
+            data[wet + i * 4..wet + i * 4 + 4].copy_from_slice(&i32::MIN.to_le_bytes());
+        }
+        data[nibble] = 1;
+        data[biome + 2] = 255;
+        data[pattern..pattern + 4].copy_from_slice(&0x01030507i32.to_le_bytes());
+        data[pattern + 4..pattern + 8].copy_from_slice(&0x00030507i32.to_le_bytes());
+        let valid = data.clone();
+        render(&mut data).unwrap();
+        assert_eq!(int(&data, output) as u32, 0xff010203);
+        assert_eq!(int(&data, output + 4) as u32, 0xff123456);
+        assert_eq!(int(&data, output + 8) as u32, 0xff123456);
+        for (p, v) in [
+            (160, 0),
+            (192, 0),
+            (biome_lookup, -1),
+            (biome_lookup + 255 * 4, pattern as i32),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[p..p + 4].copy_from_slice(&v.to_le_bytes());
+            let before = invalid.clone();
+            assert!(render(&mut invalid).is_err());
+            assert_eq!(invalid, before);
+        }
     }
 }

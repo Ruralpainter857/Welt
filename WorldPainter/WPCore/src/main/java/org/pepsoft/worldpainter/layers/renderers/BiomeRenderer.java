@@ -16,6 +16,7 @@ import java.awt.image.DataBuffer;
 import java.awt.image.DataBufferInt;
 import java.awt.image.SinglePixelPackedSampleModel;
 import java.lang.ref.SoftReference;
+import java.nio.ByteBuffer;
 import java.util.List;
 
 import static java.awt.image.BufferedImage.TYPE_INT_RGB;
@@ -73,6 +74,20 @@ public class BiomeRenderer implements ByteLayerRenderer {
             }
         }
         return underlyingColour;
+    }
+
+    /** Copies the live 16 by 16 ARGB pattern; 0 means absent, -1 requires Java. */
+    public final int copyViewportPattern(int value, ByteBuffer target, int offset) {
+        if (value == 255 || patterns[value] == null) return 0;
+        BufferedImage pattern = patterns[value];
+        if (pattern.getWidth() < 16 || pattern.getHeight() < 16) return -1;
+        int[] direct = directPixelData[value];
+        for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) {
+            int i = x + y * 16;
+            int rgb = direct == null ? pattern.getRGB(x, y) : direct[i] | 0xff000000;
+            target.putInt(offset + i * 4, rgb);
+        }
+        return 1024;
     }
 
     private static boolean isDirectIntRgbPattern(BufferedImage pattern) {

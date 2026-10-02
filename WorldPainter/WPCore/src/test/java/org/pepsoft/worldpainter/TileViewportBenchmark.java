@@ -32,7 +32,8 @@ public final class TileViewportBenchmark {
                 .filter(pool -> pool.getName().equals("direct")).mapToLong(java.lang.management.BufferPoolMXBean::getMemoryUsed).sum();
         System.out.printf("viewport mode=%s threeFullRedraws medianMs=%.3f allocatedBytes=%d directBytes=%d checksum=%d nativeTiles=%d%n",
                 fused ? "fused" : nativeShade ? "shade" : "java", times[4] / 1e6, allocations[4], direct, checksum, setup.renderer.completedNativeViewportTiles());
-        if (fused && setup.renderer.completedNativeViewportTiles() == 0) throw new AssertionError("Fused path did not execute");
+        if (fused && setup.renderer.completedNativeViewportTiles() != 14L * 3 * setup.tiles.length)
+            throw new AssertionError("Every tile redraw must use the fused path");
     }
     private static void select(boolean nativeShade) {
         System.setProperty(Native.RENDER_KEY, Boolean.toString(nativeShade));
@@ -103,7 +104,7 @@ public final class TileViewportBenchmark {
         Arrays.sort(jt); Arrays.sort(rt); Arrays.sort(ratios); Arrays.sort(ja); Arrays.sort(ra);
         System.out.printf("viewport paired javaMs=%.3f nativeMs=%.3f ratio=%.3f minRatio=%.3f maxRatio=%.3f javaAllocated=%d nativeAllocated=%d pixelParity=true nativeTiles=%d%n",
                 jt[4], rt[4], ratios[4], ratios[0], ratios[8], ja[4], ra[4], shade.renderer.completedNativeViewportTiles());
-        if (Boolean.getBoolean("welt.benchmark.viewportFused") && shade.renderer.completedNativeViewportTiles() == 0)
-            throw new AssertionError("Fused path did not execute");
+        if (Boolean.getBoolean("welt.benchmark.viewportFused") && shade.renderer.completedNativeViewportTiles() != 14L * 3 * shade.tiles.length)
+            throw new AssertionError("Every tile redraw must use the fused path");
     }
 }
