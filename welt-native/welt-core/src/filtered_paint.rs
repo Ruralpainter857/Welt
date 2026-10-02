@@ -1,4 +1,4 @@
-//! WFPT v1/v2: shared filter and painting transactions for terrain and numeric layers.
+//! WFPT v1/v2/v3: shared filter and painting transactions for terrain, numeric and bit layers.
 use crate::editor_filter::{CellData, Levels, Node, Predicate, Program};
 use crate::error::WeltError;
 use crate::nibble_paint::{target as nibble_target, NibblePaintMode};
@@ -176,11 +176,12 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
     if data.len() < HEADER
         || data.len() > MAX_BYTES
         || int(data, 0) != 0x54504657
-        || !matches!(int(data, 4), 1 | 2)
+        || !matches!(int(data, 4), 1..=3)
     {
         return bad();
     }
     let nibble = int(data, 4) == 2;
+    let bit = int(data, 4) == 3;
     let output = int(data, 152) as usize;
     let mode = match int(data, 156) {
         0 => NibblePaintMode::Apply,
@@ -190,6 +191,10 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
     };
     if nibble {
         if int(data, 60) != 4 {
+            return bad();
+        }
+    } else if bit {
+        if !matches!(int(data, 60), 0 | 1) || int(data, 156) > 1 {
             return bad();
         }
     } else if int(data, 60) != 0 || int(data, 152) != 0 || int(data, 156) != 0 {
@@ -318,6 +323,9 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
     if nibble && (output >= planes.len() || planes[output].0 != 4) {
         return bad();
     }
+    if bit && (output >= planes.len() || planes[output].0 != int(data, 60) as usize) {
+        return bad();
+    }
     if cursor != int(data, 44) as usize || cursor + tile_count * 32 > data.len() {
         return bad();
     }
@@ -392,7 +400,21 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
                     };
                     dynamic * program.modify_strength(&context, strength)
                 };
-                if nibble && filtered != 0.0 {
+                if bit && filtered > 0.75 {
+                    let index = if planes[output].0 == 0 {
+                        x / 16 + y / 16 * 8
+                    } else {
+                        cell
+                    };
+                    let offset = frame.base + planes[output].1 + index / 8;
+                    let mask = 1u8 << (index & 7);
+                    if matches!(mode, NibblePaintMode::Apply) {
+                        data[offset] |= mask;
+                    } else {
+                        data[offset] &= !mask;
+                    }
+                    writes += 1;
+                } else if nibble && filtered != 0.0 {
                     let next = nibble_target(mode, filtered);
                     let offset = frame.base + planes[output].1 + cell / 2;
                     let shift = (cell & 1) * 4;
@@ -410,7 +432,7 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
                         data[offset] = (data[offset] & !(15 << shift)) | ((next as u8) << shift);
                         writes += 1;
                     }
-                } else if !nibble && filtered > 0.75 {
+                } else if !nibble && !bit && filtered > 0.75 {
                     data[frame.base + cell] = target as u8;
                     writes += 1;
                 }
@@ -500,6 +522,46 @@ mod tests {
     fn invalid_nibble_output_descriptors_reject_before_writes() {
         for (p, v) in [(60, 8), (152, 1), (156, 3), (224, 8)] {
             let mut data = nibble_fixture(0, 1.0, 0);
+            put(&mut data, p, v);
+            let before = data.clone();
+            assert!(paint(&mut data).is_err());
+            assert_eq!(data, before);
+        }
+    }
+    #[test]
+    fn bit_outputs_preserve_threshold_nan_and_adjacent_bits() {
+        for bits in [0, 1] {
+            for (mode, strength, expected, writes) in [
+                (0, 0.75, 0xa0, 0),
+                (0, f32::from_bits(0.75f32.to_bits() + 1), 0xa1, 1),
+                (0, f32::NAN, 0xa0, 0),
+                (1, 1.0, 0xa0, 1),
+            ] {
+                let mut data = nibble_fixture(mode, strength, 0);
+                let length = bytes(bits);
+                data.resize(264 + LAYERS + length + 4, 0);
+                put(&mut data, 4, 3);
+                put(&mut data, 60, bits as i32);
+                put(&mut data, 224, bits as i32);
+                data[264 + LAYERS] = if mode == 1 { 0xa1 } else { 0xa0 };
+                put(&mut data, 264 + LAYERS + length, strength.to_bits() as i32);
+                paint(&mut data).unwrap();
+                assert_eq!(data[264 + LAYERS], expected);
+                assert_eq!(int(&data, 260), writes);
+            }
+        }
+    }
+    #[test]
+    fn invalid_bit_descriptors_reject_before_writes() {
+        let mut valid = nibble_fixture(0, 1.0, 0);
+        valid.resize(264 + LAYERS + 2048 + 4, 0);
+        put(&mut valid, 4, 3);
+        put(&mut valid, 60, 1);
+        put(&mut valid, 224, 1);
+        put(&mut valid, 264 + LAYERS + 2048, 1f32.to_bits() as i32);
+        paint(&mut valid.clone()).unwrap();
+        for (p, v) in [(60, 4), (152, 1), (156, 2), (224, 4)] {
+            let mut data = valid.clone();
             put(&mut data, p, v);
             let before = data.clone();
             assert!(paint(&mut data).is_err());

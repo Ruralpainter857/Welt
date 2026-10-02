@@ -32,4 +32,6 @@ With `-Dwp.native.gen=true`, non-dithered terrain painting can filter and paint 
 
 Filtered nibble-layer painting and removal can use the same worker buffer with `-Dwelt.native.filteredLayers=true` alongside `-Dwp.native.gen=true`. This path remains explicit because complete-operation measurements show higher memory use. It preserves the original distinction between rounded one-tile removal and truncated multi-tile removal, and replays unsupported unclamped values through Java. Terrain and numeric layers share the versioned WFPT protocol and one native entry point; the former terrain entry points remain compatible.
 
+The same explicit flag also enables non-dithered filtered bit-layer painting and removal, for both block bits and bits shared by a chunk. Predicates reading the output layer use the same packed plane as the writes. Removing an absent bit layer preserves its absent storage and notification behavior; dithering retains the Java random stream. WFPT v3 declares the bit output type without adding a new JNI entry point.
+
 For the Rust toolchain setup, exact build commands and details, see `docs/welt/` (start with `docs/welt/README.md` and `docs/welt/CHARTE-ORCHESTRATION.md`).

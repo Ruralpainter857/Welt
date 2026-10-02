@@ -20,6 +20,11 @@ package org.pepsoft.worldpainter.painting;
 
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.MaskedPlaneAccess;
+import org.pepsoft.worldpainter.FilteredPaintAccess;
+import org.pepsoft.worldpainter.panels.EditorFilterPlan;
+import org.pepsoft.worldpainter.brushes.SymmetricBrush;
+import org.pepsoft.worldpainter.brushes.BitmapBrush;
+import org.pepsoft.worldpainter.brushes.RotatedBrush;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.layers.Layer;
 import org.pepsoft.worldpainter.nativeapi.Native;
@@ -274,7 +279,7 @@ public final class BitLayerPaint extends LayerPaint {
                                              boolean oneTile, boolean value) {
         final long width = (long) x2 - x1 + 1L;
         final long height = (long) y2 - y1 + 1L;
-        if (dither || filter != null || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+        if (dither || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
                 || dimension.getClass() != Dimension.class || !dimension.isEventsInhibited()
                 || width <= 0 || height <= 0 || width > 65_536L || height > 65_536L
                 || width * height > 65_536L) {
@@ -282,6 +287,18 @@ public final class BitLayerPaint extends LayerPaint {
         }
         final int area = (int) (width * height);
         if (oneTile && dimension.getTile(x1 >> TILE_SIZE_BITS, y1 >> TILE_SIZE_BITS) == null) return true;
+        if (filterEnabled) {
+            if (!(brush instanceof SymmetricBrush || brush instanceof BitmapBrush || brush instanceof RotatedBrush)
+                    || !Boolean.parseBoolean(System.getProperty("welt.native.filteredLayers", "false"))) return false;
+            EditorFilterPlan plan = EditorFilterPlan.compile(filter, dimension);
+            if (plan == null) return false;
+            if (nativeStrengths == null || nativeStrengths.length != area) nativeStrengths = new float[area];
+            int index = 0;
+            for (int y = y1; y <= y2; y++) for (int x = x1; x <= x2; x++)
+                nativeStrengths[index++] = brush.getFullStrength(x - centreX, y - centreY);
+            return FilteredPaintAccess.applyBit(dimension, layer, plan, x1, y1,
+                    (int) width, (int) height, dynamicLevel, nativeStrengths, value);
+        }
         ensureNativeBuffers(area);
 
         int index = 0;
@@ -301,4 +318,5 @@ public final class BitLayerPaint extends LayerPaint {
     }
 
     private byte[] nativeModified;
+    private float[] nativeStrengths;
 }
