@@ -3345,6 +3345,56 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    /** Snapshot a compact layer plane for the combined-layer transaction; null denotes terrain. */
+    synchronized boolean copyCombinedLayerPlane(Layer layer, int bits, ByteBuffer buffer, int offset) {
+        if (layer == null) {
+            ensureReadable(TERRAIN);
+            buffer.position(offset); buffer.put(terrain);
+            return true;
+        }
+        int bytes = bits == 0 ? 8 : 16384 * bits / 8;
+        if (bits <= 1) {
+            ensureReadable(BIT_LAYER_DATA);
+            BitSet values = bitLayerData.get(layer);
+            for (int i = 0; i < bytes; i++) buffer.put(offset + i, (byte) 0);
+            if (values != null) for (int bit = values.nextSetBit(0); bit >= 0 && bit < bytes * 8; bit = values.nextSetBit(bit + 1)) {
+                int p = offset + bit / 8;
+                buffer.put(p, (byte) (buffer.get(p) | 1 << (bit & 7)));
+            }
+            return values != null;
+        }
+        ensureReadable(LAYER_DATA);
+        byte[] values = layerData.get(layer);
+        if (values != null) { buffer.position(offset); buffer.put(values); }
+        else {
+            int value = layer.getDefaultValue();
+            if (bits == 4) value |= value << 4;
+            for (int i = 0; i < bytes; i++) buffer.put(offset + i, (byte) value);
+        }
+        return values != null;
+    }
+
+    /** Apply a complete plane through undo-aware storage and normal coalesced notifications. */
+    synchronized void applyCombinedLayerPlane(Layer layer, int bits, ByteBuffer buffer, int offset) {
+        if (eventInhibitionCounter == 0) throw new IllegalStateException("Combined layers require inhibited events");
+        if (layer == null) {
+            ensureWriteable(TERRAIN);
+            buffer.position(offset); buffer.get(terrain);
+            terrainChanged();
+            return;
+        }
+        int bytes = bits == 0 ? 8 : 16384 * bits / 8;
+        if (bits <= 1) {
+            ensureWriteable(BIT_LAYER_DATA);
+            bitLayerData.put(layer, SelectionTileAccess.applyBits(buffer, offset, bytes, bitLayerData.get(layer)));
+        } else {
+            ensureWriteable(LAYER_DATA);
+            applyNumericLayerPlane(layer, buffer, offset, bytes);
+        }
+        cachedLayers = null;
+        layerDataChanged(layer);
+    }
+
     private void applyNumericLayerPlane(Layer layer, ByteBuffer buffer, int offset, int bytes) {
         byte[] values = layerData.get(layer);
         if (values == null) { values = new byte[bytes]; layerData.put(layer, values); }

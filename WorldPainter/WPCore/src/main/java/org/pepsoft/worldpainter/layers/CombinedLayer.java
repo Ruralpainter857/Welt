@@ -55,6 +55,10 @@ public class CombinedLayer extends CustomLayer implements LayerContainer {
     }
 
     public Set<Layer> apply(Tile tile) {
+        return apply(tile, Math::random);
+    }
+
+    Set<Layer> apply(Tile tile, java.util.function.DoubleSupplier random) {
         final boolean terrainConfigured = terrain != null;
         final int biome = getBiome();
         final boolean biomeConfigured = biome != -1;
@@ -64,15 +68,20 @@ public class CombinedLayer extends CustomLayer implements LayerContainer {
         }
         tile.inhibitEvents();
         try {
+            CombinedLayerAccess.Result nativeResult = CombinedLayerAccess.apply(tile, this, random);
+            if (nativeResult != null) {
+                if (nativeResult.layers() != null) return nativeResult.layers();
+                random = nativeResult.random();
+            }
             if (applyTerrainAndBiomeOnExport && (terrainConfigured || biomeConfigured)) {
                 for (int x = 0; x < TILE_SIZE; x++) {
                     for (int y = 0; y < TILE_SIZE; y++) {
                         final float strength = tile.getLayerValue(this, x, y) / 15.0f;
                         if (strength > 0.0f) {
-                            if (terrainConfigured && ((strength >= 0.5f) || ((Math.random() / 2) < strength))) {
+                            if (terrainConfigured && ((strength >= 0.5f) || ((random.getAsDouble() / 2) < strength))) {
                                 tile.setTerrain(x, y, terrain);
                             }
-                            if (biomeConfigured && ((strength >= 0.5f) || ((Math.random() / 2) < strength))) {
+                            if (biomeConfigured && ((strength >= 0.5f) || ((random.getAsDouble() / 2) < strength))) {
                                 tile.setLayerValue(Biome.INSTANCE, x, y, biome);
                             }
                         }
@@ -87,7 +96,7 @@ public class CombinedLayer extends CustomLayer implements LayerContainer {
                     for (int x = 0; x < TILE_SIZE; x++) {
                         for (int y = 0; y < TILE_SIZE; y++) {
                             final float strength = Math.min(tile.getLayerValue(this, x, y) / 15.0f * factor, 1.0f);
-                            if ((strength > 0.95f) || (Math.random() < strength)) {
+                            if ((strength > 0.95f) || (random.getAsDouble() < strength)) {
                                 tile.setBitLayerValue(layer, x, y, true);
                                 layerAdded = true;
                             }

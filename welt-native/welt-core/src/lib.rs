@@ -38,3 +38,4 @@ pub mod vertical_resize;
 pub mod glyph_paint;
 
 pub mod height_statistics;
+pub mod combined_layer;

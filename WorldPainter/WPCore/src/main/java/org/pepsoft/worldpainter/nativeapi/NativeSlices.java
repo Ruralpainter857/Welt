@@ -13,6 +13,15 @@ import java.nio.ByteBuffer;
 
 /** Bulk JNI entry points. A null result asks the caller to use its Java path. */
 public final class NativeSlices {
+    /** Process all configured combined-layer passes in a single direct tile transaction. */
+    public static boolean applyCombinedLayer(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null
+                || !buffer.isDirect() || buffer.isReadOnly() || buffer.limit() < 32
+                || buffer.limit() > 4 * 1024 * 1024) return false;
+        try { return nativeCombinedLayer(buffer, buffer.limit()) == 0; }
+        catch (UnsatisfiedLinkError e) { return false; }
+    }
+    private static native int nativeCombinedLayer(ByteBuffer buffer, int length);
     static final int ABI_VERSION = 1;
     public static final String TUNNEL_EDGE_RENDER_KEY = "wp.native.render.tunnelEdges";
 
