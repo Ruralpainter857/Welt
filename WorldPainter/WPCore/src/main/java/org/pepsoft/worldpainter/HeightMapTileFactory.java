@@ -1081,6 +1081,18 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             if (x < -(1 << 24) || x > (1 << 24) || y < -(1 << 24) || y > (1 << 24)) return false;
         }
         GenerationBuffers buffers = GENERATION_BUFFERS.get();
+        if (map.getClass() == SlopeHeightMap.class) {
+            if (shift != 0 && !Boolean.getBoolean("welt.native.slopePreviewZoom")) return false;
+            SlopeHeightMap slope = (SlopeHeightMap) map;
+            for (int i = 0; i < TILE_SIZE; i++) {
+                int x = originX + (i << shift), y = originY + (i << shift);
+                if (x <= -(1 << 24) || x >= (1 << 24) || y <= -(1 << 24) || y >= (1 << 24)) return false;
+            }
+            return buffers.prepareHeightMapProgram(slope.getBaseHeightMap())
+                    && NativeSlices.fillSlopeHeightMapTree(originX, originY, TILE_SIZE, TILE_SIZE, shift, slope.getVerticalScaling(),
+                    buffers.heightMapNodeCount, buffers.heightMapOpcodes, buffers.heightMapValues, buffers.heightMapScales,
+                    buffers.heightMapOctaves, buffers.heightMapSeeds, output);
+        }
         if (shift == 0) return buffers.fillNativeHeightMapTree(map, originX, originY, TILE_SIZE, TILE_SIZE, output);
         if (xCoordinates == null || yCoordinates == null || xCoordinates.length != output.length
                 || yCoordinates.length != output.length) return false;

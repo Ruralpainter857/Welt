@@ -2401,12 +2401,35 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// All array references must be valid JNI references from this JVM frame.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFillHeightMapTree(
+    env: *mut JNIEnv, class: jclass, origin_x: jint, origin_y: jint, width: jint, height: jint,
+    node_count: jint, opcodes: jobject, values: jobject, scales: jobject, octaves: jobject, seeds: jobject, output: jobject,
+) -> jint {
+    unsafe { fill_height_map_tree_jni(env, class, origin_x, origin_y, width, height, None,
+        node_count, opcodes, values, scales, octaves, seeds, output) }
+}
+
+/// Evaluate the base map and slope in one transition, without a Java halo buffer.
+/// # Safety
+/// All array references must be valid JNI references from this JVM frame.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFillSlopeHeightMapTree(
+    env: *mut JNIEnv, class: jclass, origin_x: jint, origin_y: jint, width: jint, height: jint,
+    shift: jint, vertical_scaling: f32, node_count: jint, opcodes: jobject, values: jobject,
+    scales: jobject, octaves: jobject, seeds: jobject, output: jobject,
+) -> jint {
+    unsafe { fill_height_map_tree_jni(env, class, origin_x, origin_y, width, height, Some((shift, vertical_scaling)),
+        node_count, opcodes, values, scales, octaves, seeds, output) }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn fill_height_map_tree_jni(
     env: *mut JNIEnv,
     _class: jclass,
     origin_x: jint,
     origin_y: jint,
     width: jint,
     height: jint,
+    slope: Option<(jint, f32)>,
     node_count: jint,
     opcodes: jobject,
     values: jobject,
@@ -2429,6 +2452,9 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 return WeltError::IllegalArgument as jint;
             };
             if area > 1_048_576 {
+                return WeltError::IllegalArgument as jint;
+            }
+            if slope.is_some_and(|(shift, _)| !(0..=31).contains(&shift) || area > 16384) {
                 return WeltError::IllegalArgument as jint;
             }
             type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
@@ -2532,16 +2558,15 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 values: output_ptr,
                 length: area,
             };
-            let result = fill_height_map_tree(
-                &nodes,
-                origin_x,
-                origin_y,
-                width as usize,
-                height as usize,
-                output_values.as_mut_slice(),
-            );
+            let failed = if let Some((shift, scaling)) = slope {
+                welt_gen::height_map_slope::fill_slope_height_map_tree(&nodes, origin_x, origin_y,
+                    width as usize, height as usize, shift as u32, scaling, output_values.as_mut_slice()).is_err()
+            } else {
+                fill_height_map_tree(&nodes, origin_x, origin_y, width as usize, height as usize,
+                    output_values.as_mut_slice()).is_err()
+            };
             drop(output_values);
-            if result.is_err() {
+            if failed {
                 return WeltError::IllegalArgument as jint;
             }
             WeltError::Ok as jint

@@ -8,6 +8,7 @@ import org.pepsoft.worldpainter.HeightMap;
 import org.pepsoft.worldpainter.heightMaps.ConstantHeightMap;
 import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
+import org.pepsoft.worldpainter.heightMaps.SlopeHeightMap;
 import org.pepsoft.worldpainter.nativeapi.Native;
 
 /** Complete height map preview redraws, including grey raster conversion and image writes. */
@@ -35,10 +36,12 @@ public final class HeightMapPreviewBenchmark {
     private static void select(boolean nativeMode) {
         System.setProperty(Native.GEN_KEY, Boolean.toString(nativeMode));
         System.setProperty("welt.native.heightMapPreview", Boolean.toString(nativeMode));
+        System.setProperty("welt.native.slopePreviewZoom", Boolean.toString(nativeMode));
     }
     private static Setup fixture() {
         HeightMap map = new SumHeightMap(new ConstantHeightMap(32),
                 new SumHeightMap(new NoiseHeightMap(100, 1.7, 4, 17), new NoiseHeightMap(60, .7, 3, -123)));
+        if (Boolean.getBoolean("welt.benchmark.previewSlope")) map = new SlopeHeightMap(map, 3.7f);
         map.setSeed(123456789L);
         HeightMapTileProvider provider = new HeightMapTileProvider(map);
         provider.setZoom(Integer.getInteger("welt.benchmark.previewZoom", 0));

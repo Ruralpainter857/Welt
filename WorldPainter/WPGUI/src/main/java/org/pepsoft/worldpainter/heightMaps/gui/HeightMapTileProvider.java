@@ -12,6 +12,7 @@ import org.pepsoft.util.swing.TileProvider;
 import org.pepsoft.worldpainter.HeightMap;
 import org.pepsoft.worldpainter.HeightMapTileFactory;
 import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.heightMaps.SlopeHeightMap;
 
 import java.awt.*;
 import java.awt.image.BufferedImage;
@@ -83,7 +84,9 @@ public class HeightMapTileProvider implements TileProvider {
         if (!Native.isGenEnabled() || !Boolean.getBoolean("welt.native.heightMapPreview")) return false;
         PreviewBuffers buffers = previewBuffers.get();
         int shift = zoom < 0 ? -zoom & 31 : 0;
-        if (shift != 0 && buffers.x == null) { buffers.x = new float[16384]; buffers.y = new float[16384]; }
+        if (shift != 0 && heightMap.getClass() != SlopeHeightMap.class && buffers.x == null) {
+            buffers.x = new float[16384]; buffers.y = new float[16384];
+        }
         if (!HeightMapTileFactory.tryFillPreviewHeights(heightMap, tileX << 7 << shift, tileY << 7 << shift,
                 shift, buffers.x, buffers.y, buffers.heights)) return false;
         byte[] pixels = ((DataBufferByte) image.getRaster().getDataBuffer()).getData();

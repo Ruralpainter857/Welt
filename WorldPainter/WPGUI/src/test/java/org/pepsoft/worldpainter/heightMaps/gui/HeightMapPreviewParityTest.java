@@ -58,8 +58,8 @@ public class HeightMapPreviewParityTest {
         });
     }
     @Test public void parallelWorkersKeepIndependentPreviewBuffers() {
-        withFlags(() -> {
-            HeightMap map = new SumHeightMap(new ConstantHeightMap(32), new NoiseHeightMap(100, .7, 3, -123));
+        HeightMap base = new SumHeightMap(new ConstantHeightMap(32), new NoiseHeightMap(100, .7, 3, -123));
+        for (HeightMap map : new HeightMap[] {base, new SlopeHeightMap(base, 3.7f)}) withFlags(() -> {
             HeightMapTileProvider java = new HeightMapTileProvider(map), rust = new HeightMapTileProvider(map);
             List<int[]> expected = new ArrayList<>();
             System.setProperty(Native.GEN_KEY, "false");
@@ -87,6 +87,23 @@ public class HeightMapPreviewParityTest {
             finally { workers.shutdownNow(); }
         });
     }
+    @Test public void slopeChainsMatchAtNormalAndZoomedCoordinates() {
+        HeightMap[] bases = {new NoiseHeightMap(128, 1.7, 3, -123),
+                new SumHeightMap(new ConstantHeightMap(32), new FastNoiseLiteHeightMap(100, .7, 3, 17))};
+        for (HeightMap base : bases) for (float scaling : new float[] {1, 3.7f, 0, -2, Float.NaN})
+            for (int zoom : new int[] {0, -1, -3}) compare(new SlopeHeightMap(base, scaling), zoom, -1, 0, 1);
+        compare(new SlopeHeightMap(bases[0]), -31, -1, 0, 0);
+        compare(new SlopeHeightMap(bases[0]), 0, 131072, 0, 0);
+    }
+    @Test public void slowerZoomedSlopePathRequiresAnExplicitOverride() {
+        withFlags(() -> {
+            HeightMap map = new SlopeHeightMap(new NoiseHeightMap(128, 1, 3, -123));
+            HeightMapTileProvider java = new HeightMapTileProvider(map), rust = new HeightMapTileProvider(map);
+            java.setZoom(-3); rust.setZoom(-3);
+            System.setProperty("welt.native.slopePreviewZoom", "false");
+            renderPair(java, rust, -1, 0); assertEquals(0, rust.completedNativePreviewTiles());
+        });
+    }
     private static void compare(HeightMap map, int zoom, int tileX, int tileY, int expectedCalls) {
         withFlags(() -> {
             HeightMapTileProvider java = new HeightMapTileProvider(map), rust = new HeightMapTileProvider(map);
@@ -103,9 +120,10 @@ public class HeightMapPreviewParityTest {
         assertArrayEquals(((DataBufferInt) expected.getRaster().getDataBuffer()).getData(), ((DataBufferInt) actual.getRaster().getDataBuffer()).getData());
     }
     private static void withFlags(Runnable action) {
-        String gen = System.getProperty(Native.GEN_KEY), preview = System.getProperty("welt.native.heightMapPreview");
-        try { action.run(); } finally {
+        String gen = System.getProperty(Native.GEN_KEY), preview = System.getProperty("welt.native.heightMapPreview"), slopeZoom = System.getProperty("welt.native.slopePreviewZoom");
+        try { System.setProperty("welt.native.slopePreviewZoom", "true"); action.run(); } finally {
             restore(Native.GEN_KEY, gen); restore("welt.native.heightMapPreview", preview);
+            restore("welt.native.slopePreviewZoom", slopeZoom);
         }
     }
     private static void restore(String key, String value) { if (value == null) System.clearProperty(key); else System.setProperty(key, value); }

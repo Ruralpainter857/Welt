@@ -419,6 +419,24 @@ public final class NativeSlices {
         }
     }
 
+    /** Evaluates one base-map program and its slope without returning the intermediate halo. */
+    public static boolean fillSlopeHeightMapTree(int originX, int originY, int width, int height,
+                                                int shift, float scaling, int nodeCount, int[] opcodes,
+                                                double[] values, double[] scales, int[] octaves, long[] seeds, double[] output) {
+        long area = (long) width * height;
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || width <= 0 || height <= 0
+                || area > 16384 || shift < 0 || shift > 31 || nodeCount <= 0 || nodeCount > 64
+                || opcodes == null || opcodes.length < nodeCount || values == null || values.length < nodeCount
+                || scales == null || scales.length < nodeCount || octaves == null || octaves.length < nodeCount
+                || seeds == null || seeds.length < nodeCount || output == null || output.length != area) return false;
+        try { return nativeFillSlopeHeightMapTree(originX, originY, width, height, shift, scaling, nodeCount,
+                opcodes, values, scales, octaves, seeds, output) == 0; }
+        catch (UnsatisfiedLinkError e) { return false; }
+    }
+    private static native int nativeFillSlopeHeightMapTree(int originX, int originY, int width, int height,
+            int shift, float scaling, int nodeCount, int[] opcodes, double[] values, double[] scales,
+            int[] octaves, long[] seeds, double[] output);
+
     /** Processes one erosion brush area in Rust and returns Java-ordered setter calls. */
     public static boolean erodeRawHeightRegion(final int radius, final int[] heights,
                                                final byte[] controls, final int[] writeLog,
