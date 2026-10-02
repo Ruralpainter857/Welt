@@ -4488,3 +4488,94 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
         })
     })}
 }
+
+/// # Safety
+/// Exactly one primitive height array is supplied by the typed Java bridge and remains locked by Tile.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeHeightStatistics(
+    env: *mut JNIEnv,
+    _class: jclass,
+    heights: jobject,
+    tall_heights: jobject,
+    max_raw: jint,
+    mode: jint,
+) -> jlong {
+    let mut output = welt_core::height_statistics::UNAVAILABLE;
+    let status = unsafe {
+        jni_catch(env, || {
+            if heights.is_null() == tall_heights.is_null() || !(0..=2).contains(&mode) {
+                return WeltError::IllegalArgument as jint;
+            }
+            let array = if heights.is_null() {
+                tall_heights
+            } else {
+                heights
+            };
+            type Length = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            type Pin = unsafe extern "system" fn(*mut JNIEnv, jobject, *mut u8) -> *mut c_void;
+            type Release = unsafe extern "system" fn(*mut JNIEnv, jobject, *mut c_void, jint);
+            let length: Length = std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            if length(env, array) != welt_core::height_statistics::AREA as jint {
+                return WeltError::IllegalArgument as jint;
+            }
+            // Indices 222/223 come from the installed JDK's JNINativeInterface table.
+            let pin: Pin = std::mem::transmute(function(env, 222));
+            let release: Release = std::mem::transmute(function(env, 223));
+            let pointer = pin(env, array, std::ptr::null_mut());
+            if pointer.is_null() {
+                return WeltError::IllegalArgument as jint;
+            }
+            struct Pinned {
+                env: *mut JNIEnv,
+                array: jobject,
+                pointer: *mut c_void,
+                release: Release,
+            }
+            impl Drop for Pinned {
+                fn drop(&mut self) {
+                    unsafe {
+                        (self.release)(self.env, self.array, self.pointer, JNI_ABORT);
+                    }
+                }
+            }
+            let _guard = Pinned {
+                env,
+                array,
+                pointer,
+                release,
+            };
+            // No allocation, blocking, JVM call or escaping reference is permitted while pinned.
+            let result = if heights.is_null() {
+                welt_core::height_statistics::tall_bounds(
+                    slice::from_raw_parts(
+                        pointer.cast::<i32>(),
+                        welt_core::height_statistics::AREA,
+                    ),
+                    max_raw,
+                    mode as u32,
+                )
+            } else {
+                welt_core::height_statistics::short_bounds(
+                    slice::from_raw_parts(
+                        pointer.cast::<u16>(),
+                        welt_core::height_statistics::AREA,
+                    ),
+                    max_raw,
+                    mode as u32,
+                )
+            };
+            match result {
+                Some(value) => {
+                    output = value;
+                    WeltError::Ok as jint
+                }
+                None => WeltError::IllegalArgument as jint,
+            }
+        })
+    };
+    if status == WeltError::Ok as jint {
+        output
+    } else {
+        welt_core::height_statistics::UNAVAILABLE
+    }
+}

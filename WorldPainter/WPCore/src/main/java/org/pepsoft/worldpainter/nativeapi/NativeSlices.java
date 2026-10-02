@@ -20,6 +20,20 @@ public final class NativeSlices {
         throw new AssertionError("Non instanciable");
     }
 
+    /**
+     * Read-only tile storage; modes are range, minimum and maximum.
+     * Callers must exclude concurrent writes for the duration of this call.
+     * The JVM may pin or copy the array; this bridge creates no staging buffer.
+     */
+    public static long heightStatistics(short[] heights, int[] tallHeights, int maxRaw, int mode) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || mode < 0 || mode > 2
+                || (heights == null) == (tallHeights == null)
+                || (heights != null ? heights.length : tallHeights.length) != 16384) return Long.MIN_VALUE;
+        try { return nativeHeightStatistics(heights, tallHeights, maxRaw, mode); }
+        catch (UnsatisfiedLinkError e) { return Long.MIN_VALUE; }
+    }
+    private static native long nativeHeightStatistics(short[] heights, int[] tallHeights, int maxRaw, int mode);
+
     /** Rotates the complete v1 tile-plane buffer in place with no JNI array copies. */
     public static boolean rotateTilePlanes(ByteBuffer buffer) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()

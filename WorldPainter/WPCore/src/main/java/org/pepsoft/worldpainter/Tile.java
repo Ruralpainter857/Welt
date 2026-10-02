@@ -16,6 +16,7 @@ import org.pepsoft.worldpainter.layers.Layer;
 import org.pepsoft.worldpainter.layers.Layer.DataSize;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import org.pepsoft.worldpainter.selection.SelectionBlock;
 import org.pepsoft.worldpainter.selection.SelectionChunk;
 
@@ -1153,6 +1154,12 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     }
 
     public synchronized int getLowestRawHeight() {
+        if (getClass() == Tile.class && Native.isGenEnabled() && NativeLoader.areSlicesAvailable()) {
+            ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+            long nativeBounds = NativeSlices.heightStatistics(tall ? null : heightMap, tall ? tallHeightMap : null,
+                    (maxHeight - 1 - minHeight) * 256, 1);
+            if (nativeBounds != Long.MIN_VALUE) { return (int) nativeBounds; }
+        }
         int lowestRawHeight = Integer.MAX_VALUE;
         if (tall) {
             ensureReadable(TALL_HEIGHTMAP);
@@ -1179,6 +1186,12 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     }
 
     public synchronized int getHighestRawHeight() {
+        if (getClass() == Tile.class && Native.isGenEnabled() && NativeLoader.areSlicesAvailable()) {
+            ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+            long nativeBounds = NativeSlices.heightStatistics(tall ? null : heightMap, tall ? tallHeightMap : null,
+                    (maxHeight - 1 - minHeight) * 256, 2);
+            if (nativeBounds != Long.MIN_VALUE) { return (int) nativeBounds; }
+        }
         int highestRawHeight = Integer.MIN_VALUE;
         final int maxRawHeight = (maxHeight - 1 - minHeight) * 256;
         if (tall) {
@@ -1206,6 +1219,12 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     }
 
     public synchronized int[] getRawHeightRange() {
+        if (getClass() == Tile.class && Native.isGenEnabled() && NativeLoader.areSlicesAvailable()) {
+            ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+            long nativeBounds = NativeSlices.heightStatistics(tall ? null : heightMap, tall ? tallHeightMap : null,
+                    (maxHeight - 1 - minHeight) * 256, 0);
+            if (nativeBounds != Long.MIN_VALUE) { return new int[] {(int) nativeBounds, (int) (nativeBounds >>> 32)}; }
+        }
         int lowestRawHeight = Integer.MAX_VALUE;
         int highestRawHeight = Integer.MIN_VALUE;
         final int maxRawHeight = (maxHeight - 1 - minHeight) * 256;
