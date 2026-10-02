@@ -4,6 +4,25 @@
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::slice;
+
+/// # Safety
+/// The writable direct frame is borrowed exclusively for this call.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeRenderViewportTile(
+    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+) -> jint {
+    unsafe { jni_catch(env, || {
+        if buffer.is_null() || length < 128 || length as usize > welt_render::viewport::MAX_BYTES { return WeltError::IllegalArgument as jint; }
+        type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
+        type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
+        let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
+        let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
+        let pointer = address(env, buffer);
+        if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+        let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
+        match welt_render::viewport::render(data) { Ok(()) => WeltError::Ok as jint, Err(_) => WeltError::IllegalArgument as jint }
+    }) }
+}
 use welt_core::erosion::erode_raw_height_region;
 use welt_core::error::WeltError;
 use welt_core::flood_fill::linear_flood_fill;

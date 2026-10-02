@@ -16,6 +16,9 @@ public class TransparentColourRenderer implements NibbleLayerRenderer, BitLayerR
         this.colour = colour;
     }
 
+    /** Immutable colour used by grouped rendering plans. */
+    public final int getColour() { return colour; }
+
     @Override
     public int getPixelColour(int x, int y, int underlyingColour, int value) {
         if (value > 0) {

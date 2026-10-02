@@ -297,6 +297,23 @@ public final class TileRenderer {
         for (int i = 0; i < layers.length; i++) {
             renderers[i] = getRenderer(layers[i]);
         }
+        if (zoom == 0 && !hideTerrain && !renderCeilingIntersection && !renderTunnelRoofIntersection
+                && colourScheme == ColourScheme.DEFAULT && Native.isRenderEnabled()
+                && Boolean.parseBoolean(System.getProperty("welt.native.viewport", "false"))
+                && NativeLoader.areSlicesAvailable()) {
+            if (viewportRenderAccess == null) viewportRenderAccess = new ViewportRenderAccess(platform);
+            if (viewportRenderAccess.render(tile, tileProvider, layers, renderers, intHeightCache, intFluidHeightCache,
+                    terrainOrdinalCache, contourLines, contourSeparation, lightOrigin.ordinal(), hideFluids, bottomless,
+                    _void, notAllBlocksPresent, !hideFluids && tileLayers.contains(FloodWithLava.INSTANCE),
+                    waterColour, lavaColour, bedrockColour, voidColour, notPresentColour, renderBuffer)) {
+                if (!copyRenderBufferToArgbImage(image, dx, dy)) {
+                    Graphics2D graphics = (Graphics2D) image.getGraphics();
+                    try { graphics.setComposite(AlphaComposite.Src); graphics.drawImage(bufferedImage, dx, dy, null); }
+                    finally { graphics.dispose(); }
+                }
+                return;
+            }
+        }
         layerValueSnapshot.prepare(tile, layers, _void, notAllBlocksPresent,
                 (!hideFluids) && tileLayers.contains(FloodWithLava.INSTANCE));
 
@@ -747,6 +764,9 @@ public final class TileRenderer {
     private final BufferedImage bufferedImage;
     private final int[] renderBuffer;
     private final TileLayerSnapshot layerValueSnapshot = new TileLayerSnapshot();
+    private ViewportRenderAccess viewportRenderAccess;
+    /** Diagnostics for complete-render parity and performance measurements. */
+    public long completedNativeViewportTiles() { return viewportRenderAccess == null ? 0L : viewportRenderAccess.completed; }
     private final int[][] heights = new int[3][3], deltas = new int[3][3], fluidHeights = new int[3][3], fluidDeltas = new int[3][3];
     private final boolean[] oppositesOverlap = new boolean[TILE_SIZE * TILE_SIZE];
     private final int zoom, waterColour, lavaColour, bedrockColour, notPresentColour, voidColour;;

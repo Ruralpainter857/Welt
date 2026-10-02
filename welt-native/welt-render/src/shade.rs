@@ -53,7 +53,7 @@ pub enum ShadeError {
 
 /// Exact integer behavior of `org.pepsoft.util.ColourUtils.multiply`.
 #[inline]
-fn java_multiply(colour: i32, amount: i32) -> i32 {
+pub(crate) fn java_multiply(colour: i32, amount: i32) -> i32 {
     if amount == 256 {
         return colour;
     }

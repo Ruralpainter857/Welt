@@ -274,6 +274,15 @@ public final class NativeSlices {
     }
     private static native int nativePaintFilteredTerrain(ByteBuffer buffer, int length);
 
+    /** Complete compact viewport tile; Java retains its original path when unsupported. */
+    public static boolean renderViewportTile(ByteBuffer buffer) {
+        if (!Native.isRenderEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()
+                || buffer.isReadOnly() || buffer.position() != 0 || buffer.limit() < 128 || buffer.limit() > 4194304) return false;
+        try { return nativeRenderViewportTile(buffer, buffer.limit()) == 0; }
+        catch (UnsatisfiedLinkError e) { return false; }
+    }
+    private static native int nativeRenderViewportTile(ByteBuffer buffer, int length);
+
     /**
      * Returns whether native tunnel edge caches are enabled. This specialised path is enabled by
      * default when its kernel is available; the dedicated property can disable it without changing
