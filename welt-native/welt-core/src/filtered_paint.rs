@@ -1,6 +1,7 @@
-//! WFPT v1: a filter program and compact tile planes, filtered and painted together.
+//! WFPT v1/v2: shared filter and painting transactions for terrain and numeric layers.
 use crate::editor_filter::{CellData, Levels, Node, Predicate, Program};
 use crate::error::WeltError;
+use crate::nibble_paint::{target as nibble_target, NibblePaintMode};
 
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
 const HEADER: usize = 160;
@@ -175,11 +176,23 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
     if data.len() < HEADER
         || data.len() > MAX_BYTES
         || int(data, 0) != 0x54504657
-        || int(data, 4) != 1
-        || int(data, 60) != 0
-        || int(data, 152) != 0
-        || int(data, 156) != 0
+        || !matches!(int(data, 4), 1 | 2)
     {
+        return bad();
+    }
+    let nibble = int(data, 4) == 2;
+    let output = int(data, 152) as usize;
+    let mode = match int(data, 156) {
+        0 => NibblePaintMode::Apply,
+        1 => NibblePaintMode::RemoveRounded,
+        2 => NibblePaintMode::RemoveTruncated,
+        _ => return bad(),
+    };
+    if nibble {
+        if int(data, 60) != 4 {
+            return bad();
+        }
+    } else if int(data, 60) != 0 || int(data, 152) != 0 || int(data, 156) != 0 {
         return bad();
     }
     let count = int(data, 8) as usize;
@@ -302,6 +315,9 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
         end += bytes(bits);
     }
     cursor += plane_count * 8;
+    if nibble && (output >= planes.len() || planes[output].0 != 4) {
+        return bad();
+    }
     if cursor != int(data, 44) as usize || cursor + tile_count * 32 > data.len() {
         return bad();
     }
@@ -364,7 +380,7 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
                 let y = frame.y + dy;
                 let cell = y * 128 + x;
                 let strength = float(data, frame.base + end + (dy * frame.w + dx) * 4);
-                let selected = {
+                let filtered = {
                     let context = Cell {
                         data,
                         frame: &frame,
@@ -374,9 +390,27 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
                         x,
                         y,
                     };
-                    dynamic * program.modify_strength(&context, strength) > 0.75
+                    dynamic * program.modify_strength(&context, strength)
                 };
-                if selected {
+                if nibble && filtered != 0.0 {
+                    let next = nibble_target(mode, filtered);
+                    let offset = frame.base + planes[output].1 + cell / 2;
+                    let shift = (cell & 1) * 4;
+                    let current = ((data[offset] >> shift) & 15) as i32;
+                    if if matches!(mode, NibblePaintMode::Apply) {
+                        next > current
+                    } else {
+                        next < current
+                    } {
+                        // Java must replay invalid unclamped setters on its live
+                        // world; no result planes are applied after this failure.
+                        if !(0..=15).contains(&next) {
+                            return bad();
+                        }
+                        data[offset] = (data[offset] & !(15 << shift)) | ((next as u8) << shift);
+                        writes += 1;
+                    }
+                } else if !nibble && filtered > 0.75 {
                     data[frame.base + cell] = target as u8;
                     writes += 1;
                 }
@@ -421,6 +455,56 @@ mod tests {
         }
         put(&mut data, 256 + LAYERS, 1f32.to_bits() as i32);
         data
+    }
+    fn nibble_fixture(mode: i32, strength: f32, current: u8) -> Vec<u8> {
+        let mut data = fixture();
+        data.resize(264 + LAYERS + 8192 + 4, 0);
+        for (p, v) in [
+            (4, 2),
+            (12, 1),
+            (44, 232),
+            (48, 264),
+            (60, 4),
+            (156, mode),
+            (224, 4),
+            (228, LAYERS as i32),
+            (232, 0),
+            (236, 0),
+            (240, 0),
+            (244, 0),
+            (248, 1),
+            (252, 1),
+            (256, 264),
+            (260, 0),
+        ] {
+            put(&mut data, p, v);
+        }
+        data[264 + LAYERS] = 0xa0 | current;
+        put(&mut data, 264 + LAYERS + 8192, strength.to_bits() as i32);
+        data
+    }
+    #[test]
+    fn nibble_modes_preserve_java_rounding_nan_and_neighbor_nibble() {
+        for (mode, strength, current, expected) in [
+            (0, 1.0, 0, 15),
+            (1, 0.825, 15, 2),
+            (2, 0.825, 15, 3),
+            (0, f32::NAN, 0, 1),
+        ] {
+            let mut data = nibble_fixture(mode, strength, current);
+            paint(&mut data).unwrap();
+            assert_eq!(data[264 + LAYERS], 0xa0 | expected);
+        }
+    }
+    #[test]
+    fn invalid_nibble_output_descriptors_reject_before_writes() {
+        for (p, v) in [(60, 8), (152, 1), (156, 3), (224, 8)] {
+            let mut data = nibble_fixture(0, 1.0, 0);
+            put(&mut data, p, v);
+            let before = data.clone();
+            assert!(paint(&mut data).is_err());
+            assert_eq!(data, before);
+        }
     }
     #[test]
     fn filters_and_threshold_write_only_requested_cells() {

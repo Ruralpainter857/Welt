@@ -55,7 +55,7 @@ pub fn apply_nibble_layer_brush(
     Ok(())
 }
 
-fn target(mode: NibblePaintMode, strength: f32) -> i32 {
+pub(crate) fn target(mode: NibblePaintMode, strength: f32) -> i32 {
     match mode {
         NibblePaintMode::Apply => 1_i32.wrapping_add(java_round_f32(strength * 14.0_f32)),
         NibblePaintMode::RemoveRounded => 14_i32.wrapping_sub(java_round_f32(strength * 14.0_f32)),

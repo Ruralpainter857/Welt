@@ -20,6 +20,11 @@ package org.pepsoft.worldpainter.painting;
 
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.NibbleBrushAccess;
+import org.pepsoft.worldpainter.FilteredPaintAccess;
+import org.pepsoft.worldpainter.panels.EditorFilterPlan;
+import org.pepsoft.worldpainter.brushes.SymmetricBrush;
+import org.pepsoft.worldpainter.brushes.BitmapBrush;
+import org.pepsoft.worldpainter.brushes.RotatedBrush;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.layers.Layer;
 import org.pepsoft.worldpainter.nativeapi.Native;
@@ -156,7 +161,7 @@ public class NibbleLayerPaint extends LayerPaint {
                                            boolean oneTile, int mode) {
         final long widthLong = (long) x2 - x1 + 1L;
         final long heightLong = (long) y2 - y1 + 1L;
-        if (filter != null || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
                 || dimension.getClass() != Dimension.class || !dimension.isEventsInhibited()
                 || widthLong <= 0 || heightLong <= 0 || widthLong > 65_536L
                 || heightLong > 65_536L || widthLong * heightLong > 65_536L) {
@@ -164,6 +169,19 @@ public class NibbleLayerPaint extends LayerPaint {
         }
         final int area = (int) (widthLong * heightLong);
         if (oneTile && dimension.getTile(x1 >> TILE_SIZE_BITS, y1 >> TILE_SIZE_BITS) == null) return true;
+        if (filterEnabled) {
+            if (!(brush instanceof SymmetricBrush || brush instanceof BitmapBrush || brush instanceof RotatedBrush)) return false;
+            if (!Boolean.parseBoolean(System.getProperty("welt.native.filteredLayers", "false"))) return false;
+            EditorFilterPlan plan = EditorFilterPlan.compile(filter, dimension);
+            if (plan == null) return false;
+            ensureNativeBuffers(area);
+            int index = 0;
+            for (int y = y1; y <= y2; y++) for (int x = x1; x <= x2; x++)
+                nativeStrengths[index++] = mode == 0 ? brush.getStrength(x - centreX, y - centreY)
+                        : brush.getFullStrength(x - centreX, y - centreY);
+            return FilteredPaintAccess.applyNibble(dimension, layer, plan, x1, y1,
+                    (int) widthLong, (int) heightLong, dynamicLevel, nativeStrengths, mode);
+        }
         ensureNativeBuffers(area);
 
         int index = 0;

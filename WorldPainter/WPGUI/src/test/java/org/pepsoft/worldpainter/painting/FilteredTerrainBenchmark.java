@@ -6,6 +6,7 @@ import org.pepsoft.worldpainter.*;
 import org.pepsoft.worldpainter.brushes.SymmetricBrush;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.panels.DefaultFilter;
+import org.pepsoft.worldpainter.layers.Resources;
 
 /** Measures complete filtered terrain strokes, including filter reads and terrain writes. */
 public final class FilteredTerrainBenchmark {
@@ -17,6 +18,7 @@ public final class FilteredTerrainBenchmark {
         Setup setup = fixture();
         System.setProperty(Native.GEN_KEY, Boolean.toString(rust));
         System.setProperty("welt.native.filteredTerrain", "true");
+        System.setProperty("welt.native.filteredLayers", "true");
         long[] times = new long[9], allocations = new long[9];
         for (int sample = -5; sample < times.length; sample++) {
             Sample result = stroke(setup);
@@ -48,7 +50,7 @@ public final class FilteredTerrainBenchmark {
             tile.releaseEvents();
             dimension.addTile(tile);
         }
-        TerrainPaint paint = new TerrainPaint(Terrain.SAND);
+        Paint paint = Boolean.getBoolean("welt.benchmark.nibble") ? new NibbleLayerPaint(Resources.INSTANCE) : new TerrainPaint(Terrain.SAND);
         paint.setDither(false);
         paint.setBrush(SymmetricBrush.LINEAR_CIRCLE.clone());
         paint.getBrush().setRadius(96);
@@ -59,6 +61,10 @@ public final class FilteredTerrainBenchmark {
         return new Setup(dimension, painter);
     }
     private static Sample stroke(Setup setup) {
+        // Reset outside the measured operation to compare painting a fresh layer,
+        // rather than only revisiting already saturated values after warm-up.
+        if (Boolean.getBoolean("welt.benchmark.nibble") && Boolean.getBoolean("welt.benchmark.freshLayer"))
+            for (Tile tile : setup.dimension.getTiles()) tile.clearLayerData(Resources.INSTANCE);
         var bean = (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
         Dimension dimension = setup.dimension;
         DimensionPainter painter = setup.painter;
@@ -73,12 +79,14 @@ public final class FilteredTerrainBenchmark {
             }
             long elapsed = System.nanoTime() - start;
             allocated = bean.getThreadAllocatedBytes(Thread.currentThread().getId()) - allocated;
-            checksum ^= dimension.getTerrainAt(0, 0).ordinal();
+            checksum ^= Boolean.getBoolean("welt.benchmark.nibble") ? dimension.getLayerValueAt(Resources.INSTANCE, 0, 0)
+                    : dimension.getTerrainAt(0, 0).ordinal();
         return new Sample(elapsed, allocated);
     }
     private static void compare() {
         Setup java = fixture(), rust = fixture();
         System.setProperty("welt.native.filteredTerrain", "true");
+        System.setProperty("welt.native.filteredLayers", "true");
         double[] javaTimes = new double[9], rustTimes = new double[9], ratios = new double[9];
         long[] javaAlloc = new long[9], rustAlloc = new long[9];
         for (int sample = -5; sample < 9; sample++) {
