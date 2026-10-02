@@ -46,6 +46,8 @@ public final class TileViewportBenchmark {
                 p.minZ, p.standardMaxHeight, 62, 62, false, false);
         Dimension d = new Dimension(new World2(p, p.minZ, p.standardMaxHeight), "Surface", 17L, factory, Dimension.Anchor.NORMAL_DETAIL);
         Terrain[] terrains = {Terrain.GRASS, Terrain.SAND, Terrain.DIRT, Terrain.STONE};
+        boolean indexed = Boolean.getBoolean("welt.benchmark.viewportIndexed");
+        int[] biomes = {1, 4, 6, 21, 255};
         Tile[] tiles = new Tile[16]; int next = 0;
         for (int ty = -2; ty < 2; ty++) for (int tx = -2; tx < 2; tx++) {
             Tile tile = factory.createTile(tx, ty); tile.inhibitEvents();
@@ -60,6 +62,10 @@ public final class TileViewportBenchmark {
                 tile.setBitLayerValue(Frost.INSTANCE, x, y, ((x + y) & 7) == 0);
                 tile.setBitLayerValue(ReadOnly.INSTANCE, x, y, (x / 16 + y / 16) % 7 == 0);
                 tile.setBitLayerValue(FloodWithLava.INSTANCE, x, y, x < 32 && y < 32);
+                if (indexed) {
+                    tile.setLayerValue(Biome.INSTANCE, x, y, biomes[(x / 16 + y / 16) % biomes.length]);
+                    tile.setLayerValue(Annotations.INSTANCE, x, y, (x + y * 3) & 15);
+                }
             }
             tile.releaseEvents(); d.addTile(tile); tiles[next++] = tile;
         }
