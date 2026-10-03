@@ -56,7 +56,7 @@ public class ThemedFlattenBrushParityTest {
             ThemeResetParityTest.random().setSeed(141);assertTrue(HeightBrushAccess.tryApplyThemed(b,0,0,side,side,forces,2,target,-64,319));assertEquals(next,ThemeResetParityTest.random().nextLong());
             a.setEventsInhibited(false);b.setEventsInhibited(false);ThemedFlattenBrushBenchmark.same(a,b);
             b.setEventsInhibited(true);ThemeResetParityTest.random().setSeed(161);long unchanged=ThemeResetParityTest.random().nextLong();ThemeResetParityTest.random().setSeed(161);
-            assertFalse(ThemedHeightBrushAccess.apply(b,0,0,side,side,forces,5,target,-64,319));assertFalse(HeightBrushAccess.tryApplyThemed(b,0,0,3,3,new float[9],2,target,-64,319));
+            assertFalse(ThemedHeightBrushAccess.apply(b,0,0,side,side,forces,6,target,-64,319));assertFalse(HeightBrushAccess.tryApplyThemed(b,0,0,3,3,new float[9],2,target,-64,319));
             assertEquals(unchanged,ThemeResetParityTest.random().nextLong());b.setEventsInhibited(false);ThemedFlattenBrushBenchmark.same(a,b);
         }finally{restore(old);}
     }

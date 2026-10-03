@@ -5,12 +5,12 @@ import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import static org.pepsoft.worldpainter.Constants.*;
 
 /**
- * Shared compact height and flatten brush operations, including exact SimpleTheme transactions.
+ * Shared compact height, flatten and smooth brush operations, including exact SimpleTheme transactions.
  * Mutating filters retain Java. The caller serialises dimension edits and supplies X-major forces.
  * Unthemed operations use one call per tile; themed operations share one frame across all tiles.
  */
 public final class HeightBrushAccess {
-    public static final int RAISE = 0, LOWER = 1, FLATTEN = 2, FLATTEN_RAISE = 3, FLATTEN_LOWER = 4;
+    public static final int RAISE = 0, LOWER = 1, FLATTEN = 2, FLATTEN_RAISE = 3, FLATTEN_LOWER = 4, SMOOTH = 5;
     private HeightBrushAccess() { }
     private static final ThreadLocal<Scratch> BUFFER = ThreadLocal.withInitial(Scratch::new);
 

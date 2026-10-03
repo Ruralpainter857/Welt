@@ -2,6 +2,7 @@ package org.pepsoft.worldpainter;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
 import java.util.Arrays;
 import org.pepsoft.worldpainter.layers.Layer;
 import org.pepsoft.worldpainter.themes.SimpleTheme;
@@ -13,11 +14,27 @@ final class ThemedHeightBrushAccess {
     static long completedCalls(){return COMPLETED.get();}
     private static final ThreadLocal<Scratch> SCRATCH=ThreadLocal.withInitial(Scratch::new);
     private static final class Scratch {ByteBuffer data;final Tile[] tiles=new Tile[9];}
+    /** Copy only the border: interior heights already belong to the shared packed tile planes. */
+    private static void copyBorder(Dimension dimension,int ox,int oy,int width,int height,FloatBuffer out,int offset){
+        for(int x=0;x<width;){
+            int wx=ox+x,lx=wx&127,rw=Math.min(width-x,128-lx);
+            for(int y=0;y<height;){
+                int wy=oy+y,ly=wy&127,rh=Math.min(height-y,128-ly);Tile tile=dimension.getTile(wx>>7,wy>>7);
+                if(tile!=null)tile.copyHeightRegionDirect(lx,ly,rw,rh,out,offset+x*height+y,height);
+                else for(int dx=0;dx<rw;dx++)for(int dy=0;dy<rh;dy++)out.put(offset+(x+dx)*height+y+dy,-Float.MAX_VALUE);
+                y+=rh;
+            }
+            x+=rw;
+        }
+    }
     static boolean apply(Dimension dimension,int ox,int oy,int width,int height,float[] forces,int mode,float value,float low,float high) {
-        if(width<=0||height<=0||width>256||height>256||forces==null||(long)width*height!=forces.length||mode<0||mode>4
+        if(width<=0||height<=0||width>256||height>256||forces==null||(long)width*height!=forces.length||mode<0||mode>5
                 ||(long)ox+width-1>Integer.MAX_VALUE||(long)oy+height-1>Integer.MAX_VALUE
                 ||!TileRegionAccess.canBatch(dimension,ox,oy,width,height)
                 ||dimension.getTileFactory().getClass()!=HeightMapTileFactory.class)return false;
+        if(mode==5&&(width>246||height>246||(long)ox-5<Integer.MIN_VALUE||(long)oy-5<Integer.MIN_VALUE
+                ||(long)ox+width+4>Integer.MAX_VALUE||(long)oy+height+4>Integer.MAX_VALUE
+                ||!TileRegionAccess.canBatch(dimension,ox-5,oy-5,width+10,height+10)))return false;
         HeightMapTileFactory factory=(HeightMapTileFactory)dimension.getTileFactory();
         if(factory.getTheme().getClass()!=SimpleTheme.class)return false;
         SimpleTheme.ImportPlan plan=((SimpleTheme)factory.getTheme()).prepareImport();if(plan==null)return false;
@@ -34,14 +51,23 @@ final class ThemedHeightBrushAccess {
         for(int tx=ox>>7;tx<=((ox+width-1)>>7);tx++)for(int ty=oy>>7;ty<=((oy+height-1)>>7);ty++) {
             Tile t=dimension.getTile(tx,ty);if(t!=null){if(t.getMinHeight()!=dimension.getMinHeight()||t.getMaxHeight()!=dimension.getMaxHeight())return false;scratch.tiles[count++]=t;}
         }
-        int forceBase=128+n*16,themeBase=forceBase+forces.length*4,start=themeBase+plan.bytes(),step=288+bytes;
+        int forceBase=128+n*16,haloBase=forceBase+forces.length*4,haloCount=mode==5?10*(width+height+10):0,themeBase=haloBase+haloCount*4,start=themeBase+plan.bytes(),step=288+bytes;
         long sizeLong=(long)start+(long)step*count;if(sizeLong>MAX_BYTES)return false;int size=(int)sizeLong;
         ByteBuffer d=scratch.data;if(d==null||d.capacity()<size){d=ByteBuffer.allocateDirect(size).order(ByteOrder.LITTLE_ENDIAN);scratch.data=d;}
         d.clear().limit(size);for(int i=0;i<128;i+=8)d.putLong(i,0);
-        d.putInt(0,0x42544857).putInt(4,mode<2?1:2).putInt(8,size).putInt(12,n).putInt(16,count)
+        d.putInt(0,0x42544857).putInt(4,mode==5?3:mode<2?1:2).putInt(8,size).putInt(12,n).putInt(16,count)
                 .putInt(20,dimension.getMinHeight()).putInt(24,dimension.getMaxHeight()).putInt(28,mode).putFloat(32,value)
                 .putFloat(36,low).putFloat(40,high).putInt(44,ox).putInt(48,oy).putInt(52,width).putInt(56,height)
                 .putInt(60,forceBase).putInt(64,themeBase).putInt(68,start).putInt(72,step).putInt(76,Terrain.BEACHES.ordinal());
+        if(mode==5){
+            d.putInt(88,haloBase).putInt(92,haloCount);
+            d.position(haloBase);FloatBuffer halo=d.slice().order(d.order()).asFloatBuffer();
+            int left=5*(height+10),top=2*left,bottom=top+width*5;
+            copyBorder(dimension,ox-5,oy-5,5,height+10,halo,0);
+            copyBorder(dimension,ox+width,oy-5,5,height+10,halo,left);
+            copyBorder(dimension,ox,oy-5,width,5,halo,top);
+            copyBorder(dimension,ox,oy+height,width,5,halo,bottom);
+        }
         for(int p=0;p<n;p++)d.putInt(128+p*16,kinds[p]).putInt(132+p*16,roles[p]).putInt(136+p*16,layers[p]==null?0:layers[p].getDefaultValue()).putInt(140+p*16,offsets[p]);
         d.position(forceBase);d.slice().order(d.order()).asFloatBuffer().put(forces);plan.write(d,themeBase,layers);
         for(int t=0;t<count;t++){int base=start+t*step;for(int i=0;i<256;i+=8)d.putLong(base+i,0);scratch.tiles[t].copySelectionPlanes(d,base+256,layers,roles,kinds,offsets);}

@@ -8,6 +8,7 @@ package org.pepsoft.worldpainter.operations;
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.TerrainHeightAccess;
 import org.pepsoft.worldpainter.SmoothHeightAccess;
+import org.pepsoft.worldpainter.HeightBrushAccess;
 import org.pepsoft.worldpainter.WorldPainter;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
@@ -75,6 +76,9 @@ public class Smooth extends AbstractBrushOperation {
             }
         }
 
+        if (applyTheme && HeightBrushAccess.tryApplyThemed(dimension, centreX - radius, centreY - radius,
+                diameter, diameter, nativeStrengths, HeightBrushAccess.SMOOTH, 0,
+                dimension.getMinHeight(), dimension.getMaxHeight() - 1)) return true;
         if (!applyTheme && SmoothHeightAccess.isEnabled() && SmoothHeightAccess.tryApply(dimension, centreX - radius, centreY - radius,
                 diameter, diameter, nativeStrengths)) return true;
         ensureNativeBuffers(inputSide, inputArea, outputArea);

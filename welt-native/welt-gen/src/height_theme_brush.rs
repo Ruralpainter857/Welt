@@ -1,5 +1,9 @@
-//! WHTB v1/v2 groups all intersecting tiles to preserve the global X/Y theme RNG order.
+//! WHTB v1/v2/v3 groups all intersecting tiles to preserve the global X/Y theme RNG order.
 //! One frame carries forces, a theme, and compact planes reused by both passes.
+//! V3 adds mode 5 (smooth), border offset/count at bytes 88/92, and reserves bytes 96..128.
+//! Border floats precede the theme: left/right are 5 x (height + 10), top/bottom width x 5,
+//! each in X-major order. Interior heights are captured from packed planes, never recopied by Java.
+//! All neighbourhood sums retain Java's X/Y addition order; the worker snapshot is reused.
 use crate::height_map_import::{Plane, Theme, TileState};
 use welt_core::{error::WeltError, rng::JavaRandom};
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -53,6 +57,7 @@ impl Default for TileWork {
 pub struct BrushScratch {
     theme: Theme,
     tiles: Vec<TileWork>,
+    input: Vec<f32>,
 }
 /// Reject the complete frame before changing packed planes or advancing the RNG.
 pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
@@ -60,9 +65,11 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     if d.len() < 128
         || d.len() > MAX_BYTES
         || word(d, 0) != 0x42544857
-        || !matches!(word(d, 4), 1 | 2)
+        || !matches!(word(d, 4), 1..=3)
         || word(d, 8) as usize != d.len()
-        || d[88..128].iter().any(|v| *v != 0)
+        || d[if word(d, 4) == 3 { 96 } else { 88 }..128]
+            .iter()
+            .any(|v| *v != 0)
     {
         return Err(bad);
     }
@@ -83,15 +90,38 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     let start = word(d, 68) as usize;
     let step = word(d, 72) as usize;
     let beach = word(d, 76) as i32;
+    let smooth = word(d, 4) == 3;
+    let halo_count = if smooth && w <= 246 && h <= 246 {
+        10 * (w + h + 10)
+    } else {
+        0
+    };
     if !(3..=64).contains(&n)
         || nt > 9
-        || mode > if word(d, 4) == 1 { 1 } else { 4 }
+        || mode
+            > if word(d, 4) == 1 {
+                1
+            } else if smooth {
+                5
+            } else {
+                4
+            }
         || !(1..=256).contains(&w)
         || !(1..=256).contains(&h)
         || !(1..=65536).contains(&(i64::from(max) - i64::from(min)))
         || !(0..=255).contains(&beach)
         || forces != 128 + n * 16
-        || theme != forces + w * h * 4
+        || smooth
+            && (mode != 5
+                || w > 246
+                || h > 246
+                || i64::from(ox) - 5 < i64::from(i32::MIN)
+                || i64::from(oy) - 5 < i64::from(i32::MIN)
+                || i64::from(ox) + w as i64 + 4 > i64::from(i32::MAX)
+                || i64::from(oy) + h as i64 + 4 > i64::from(i32::MAX)
+                || word(d, 88) as usize != forces + w * h * 4
+                || word(d, 92) as usize != halo_count)
+        || theme != forces + w * h * 4 + halo_count * 4
         || theme + 32 > d.len()
         || i64::from(ox) + w as i64 - 1 > i64::from(i32::MAX)
         || i64::from(oy) + h as i64 - 1 > i64::from(i32::MAX)
@@ -182,6 +212,45 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     }
     let mut random = JavaRandom::from_lcg_state(long(d, 80)).ok_or(bad)?;
     let tall = i64::from(max) - i64::from(min) > 256;
+    if smooth {
+        let iw = w + 10;
+        let ih = h + 10;
+        let halo = word(d, 88) as usize;
+        let left = 5 * ih;
+        s.input.resize(iw * ih, -f32::MAX);
+        // Capture the immutable neighbourhood before any output plane changes.
+        for x in 0..iw {
+            for y in 0..ih {
+                let border = if x < 5 {
+                    Some(x * ih + y)
+                } else if x >= w + 5 {
+                    Some(left + (x - w - 5) * ih + y)
+                } else if y < 5 {
+                    Some(2 * left + (x - 5) * 5 + y)
+                } else if y >= h + 5 {
+                    Some(2 * left + w * 5 + (x - 5) * 5 + y - h - 5)
+                } else {
+                    None
+                };
+                s.input[x * ih + y] = if let Some(i) = border {
+                    f32::from_bits(word(d, halo + i * 4))
+                } else {
+                    let wx = ox + (x - 5) as i32;
+                    let wy = oy + (y - 5) as i32;
+                    s.tiles[..nt]
+                        .iter()
+                        .find(|t| t.tx == wx >> 7 && t.ty == wy >> 7)
+                        .map(|t| {
+                            t.planes[0].get(d, (wx & 127) as usize + (wy & 127) as usize * 128)
+                                as i32 as f32
+                                / 256.0
+                                + min as f32
+                        })
+                        .unwrap_or(-f32::MAX)
+                };
+            }
+        }
+    }
     // Height decisions use exactly the scalar float expression before quantization.
     for x in 0..w {
         for y in 0..h {
@@ -202,11 +271,25 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
             let target = match mode {
                 0 => java_min(current + value, high),
                 1 => java_max(current - value, low),
+                5 => {
+                    let mut total = 0.0f32;
+                    let mut count = 0;
+                    for sx in x..=x + 10 {
+                        for sy in y..=y + 10 {
+                            let sample = s.input[sx * (h + 10) + sy];
+                            if sample != -f32::MAX {
+                                total += sample;
+                                count += 1;
+                            }
+                        }
+                    }
+                    total / count as f32
+                }
                 _ => value,
             };
             let edited = force * target + (1.0 - force) * current;
             let write = match mode {
-                2 => true,
+                2 | 5 => true,
                 0 | 3 => edited > current,
                 _ => edited < current,
             };
@@ -404,6 +487,74 @@ mod tests {
             let before = legacy.clone();
             assert!(apply(&mut legacy, &mut BrushScratch::default()).is_err());
             assert_eq!(before, legacy);
+        }
+    }
+    fn smooth_frame() -> Vec<u8> {
+        let old = frame();
+        let forces = word(&old, 60) as usize;
+        let old_theme = word(&old, 64) as usize;
+        let old_start = word(&old, 68) as usize;
+        let halo_count = 140;
+        let mut data = vec![0; old.len() + halo_count * 4];
+        data[..old_theme].copy_from_slice(&old[..old_theme]);
+        data[old_theme + halo_count * 4..].copy_from_slice(&old[old_theme..]);
+        let size = data.len() as u32;
+        for (p, v) in [
+            (4, 3),
+            (8, size),
+            (28, 5),
+            (64, (old_theme + halo_count * 4) as u32),
+            (68, (old_start + halo_count * 4) as u32),
+            (88, (forces + 16) as u32),
+            (92, halo_count as u32),
+        ] {
+            put(&mut data, p, v);
+        }
+        for i in 0..halo_count {
+            put(&mut data, old_theme + i * 4, 61.0f32.to_bits());
+        }
+        data
+    }
+    #[test]
+    fn smoothing_shares_planes_theme_rng_and_reuses_the_snapshot() {
+        let original = smooth_frame();
+        let mut data = original.clone();
+        let mut scratch = BrushScratch::default();
+        apply(&mut data, &mut scratch).unwrap();
+        let start = word(&data, 68) as usize;
+        let step = word(&data, 72) as usize;
+        for t in 0..4 {
+            let i = if t / 2 == 0 { 127 } else { 0 } + if t % 2 == 0 { 127 * 128 } else { 0 };
+            assert_eq!(word(&data, start + t * step + 288 + i * 4), 32000);
+        }
+        let mut random = JavaRandom::new(9);
+        for _ in 0..4 {
+            random.next_int_bound(15);
+        }
+        assert_eq!(long(&data, 80), random.lcg_state());
+        let capacity = scratch.input.capacity();
+        let expected = data;
+        let mut repeated = original;
+        apply(&mut repeated, &mut scratch).unwrap();
+        assert_eq!(expected, repeated);
+        assert_eq!(capacity, scratch.input.capacity());
+    }
+    #[test]
+    fn malformed_smoothing_border_is_atomic() {
+        for (p, v) in [
+            (4, 2),
+            (28, 4),
+            (52, 247),
+            (88, 0),
+            (92, 139),
+            (96, 1),
+            (44, i32::MIN as u32),
+        ] {
+            let mut data = smooth_frame();
+            put(&mut data, p, v);
+            let before = data.clone();
+            assert!(apply(&mut data, &mut BrushScratch::default()).is_err());
+            assert_eq!(before, data);
         }
     }
     #[test]
