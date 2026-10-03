@@ -41,6 +41,9 @@ final class BitmapImportSource {
         if (map.getClass() == BicubicHeightMap.class) {
             BicubicHeightMap b = (BicubicHeightMap) map;
             cubic = true; repeat = b.isRepeat(); map = b.getHeightMap(0);
+            java.awt.Rectangle extent = b.getExtent();
+            if (extent != null && map.getClass() == BitmapHeightMap.class
+                    && (extent.width != ((BitmapHeightMap) map).getWidth() || extent.height != ((BitmapHeightMap) map).getHeight())) return null;
         }
         if (map.getClass() != BitmapHeightMap.class) return null;
         BitmapHeightMap bitmap = (BitmapHeightMap) map;

@@ -170,7 +170,7 @@ public final class NativeSlices {
     }
     private static native int nativePaintGlyphTile(ByteBuffer buffer, int length);
 
-    /** WHIM v1: factory, relief and themes execute on one exclusive packed tile. */
+    /** WHIM v1/v2/v3: factory generation, relief and themes share one exclusive packed tile. */
     public static boolean importHeightMapTile(ByteBuffer buffer) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()
                 || buffer.isReadOnly() || buffer.position() != 0 || buffer.limit() < 256 || buffer.limit() > 4 * 1024 * 1024) return false;

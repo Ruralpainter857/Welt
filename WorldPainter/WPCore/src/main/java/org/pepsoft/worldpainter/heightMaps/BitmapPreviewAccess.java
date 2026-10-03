@@ -25,6 +25,10 @@ public final class BitmapPreviewAccess {
         if (bicubic.getHeightMap(0).getClass() != BitmapHeightMap.class) return false;
         BitmapHeightMap bitmap = (BitmapHeightMap) bicubic.getHeightMap(0);
         if (bitmap.getWidth() > (1 << 24) || bitmap.getHeight() > (1 << 24)) return false;
+        var raster = bitmap.getImage().getRaster();
+        // Custom raster callbacks retain their original per-sample access order.
+        if (!raster.getClass().getName().startsWith("sun.awt.image.")
+                || !raster.getSampleModel().getClass().getName().startsWith("java.awt.image.")) return false;
         java.awt.Rectangle extent = bicubic.getExtent();
         if (extent != null && (extent.width != bitmap.getWidth() || extent.height != bitmap.getHeight())) return false;
         AffineTransform transform = new AffineTransform();

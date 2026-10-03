@@ -1,7 +1,8 @@
-//! WHIM v1/v2: factory initialization, image height conversion and both themes share
+//! WHIM v1/v2/v3: factory initialization, image height conversion and both themes share
 //! one packed tile. Integers are little endian; cells are x + y * 128.
 //! The 256-byte header contains offsets into the frame, followed by 16-byte
 //! plane descriptors (kind, role, default, payload offset), image samples,
+//! v3 factory-only generation shares the bitmap sampler and ordered theme application.
 //! optional factory samples, a 32-byte tile record and packed output planes.
 //! Theme records contain a 32-byte header, terrain ordinals and ordered level
 //! tables. The raw 48-bit Java random state is committed only after success.
@@ -306,7 +307,7 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
     if d.len() < HEADER
         || d.len() > MAX_BYTES
         || word(d, 0) != 0x4d49_4857
-        || !(1..=2).contains(&word(d, 4))
+        || !(1..=3).contains(&word(d, 4))
         || word(d, 8) as usize != d.len()
         || word(d, 124) as usize != HEADER
         || d[if word(d, 4) == 1 { 208 } else { 212 }..HEADER]
@@ -320,11 +321,16 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
     let max = word(d, 20) as i32;
     let flags = word(d, 24);
     let fresh = flags & 1 != 0;
+    let factory_only = word(d, 4) == 3;
     let raise = flags & 2 != 0;
     let void = flags & 4 != 0;
     let tall = i64::from(max) - i64::from(min) > 256;
     if !(3..=64).contains(&n)
-        || flags > 63
+        || (if factory_only {
+            flags != 65
+        } else {
+            flags > 63
+        })
         || !(1..=65536).contains(&(i64::from(max) - i64::from(min)))
     {
         return Err(bad);
@@ -334,7 +340,7 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
     let meta = word(d, 120) as usize;
     if samples != HEADER + n * 16
         || initial != samples + AREA * 8
-        || meta != initial + if fresh { AREA * 8 } else { 0 }
+        || meta != initial + if fresh && !factory_only { AREA * 8 } else { 0 }
         || meta + 32 > d.len()
         || long(d, meta + 24) != 0
     {
@@ -386,13 +392,16 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
         }
         end = s.factory.read(d, factory, &planes[..n], beach)?;
     }
+    if factory_only && imported != 0 {
+        return Err(bad);
+    }
     if imported != 0 {
         if imported != end {
             return Err(bad);
         }
         end = s.imported.read(d, imported, &planes[..n], beach)?;
     }
-    let source = if word(d, 4) == 2 {
+    let source = if word(d, 4) >= 2 {
         if word(d, 208) as usize != end {
             return Err(bad);
         }
@@ -422,6 +431,9 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
     }
     let x0 = word(d, 40) as i32;
     let y0 = word(d, 44) as i32;
+    if factory_only && (long(d, meta + 8) != 7 || long(d, meta + 16) != 0) {
+        return Err(bad);
+    }
     if let Some(source) = source {
         for y in 0..128 {
             for x in 0..128 {
@@ -444,6 +456,20 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
             }
         }
     }
+    if factory_only {
+        // Fresh output is initialized in Rust, without reading empty Java tile arrays.
+        for (p, plane) in planes[..n].iter().enumerate() {
+            let default = word(d, HEADER + p * 16 + 8) as u8;
+            let value = if p < 3 || plane.kind >= 3 {
+                0
+            } else if plane.kind == 2 {
+                default | (default << 4)
+            } else {
+                default
+            };
+            d[plane.base..plane.base + length(plane.kind) as usize].fill(value);
+        }
+    }
     s.heights.resize(AREA, 0);
     s.selected.resize(AREA, true);
     s.terrains.resize(AREA, 0);
@@ -458,7 +484,8 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
     if fresh {
         s.selected.fill(true);
         for i in 0..AREA {
-            let h = (double(d, initial + i * 8) as f32).clamp(min as f32, (max - 1) as f32);
+            let h = (double(d, (if factory_only { samples } else { initial }) + i * 8) as f32)
+                .clamp(min as f32, (max - 1) as f32);
             let raw = raw_height(h, min, tall);
             state.set(d, &planes, 0, i, raw, true);
             state.set(d, &planes, 1, i, factory_water, true);
@@ -485,106 +512,108 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
             }
         }
     }
-    let seed = long(d, 96) as i64;
-    if let Some(p) = &mut s.border {
-        p.set_seed(seed);
-    } else {
-        s.border = Some(PerlinNoise::new(seed));
-    }
-    let floor = (water as i32).wrapping_sub(20).max(min);
-    let variation = 15.min((water as i32).wrapping_sub(floor) / 2);
-    let low = double(d, 64);
-    let scale = double(d, 72);
-    let world_low = word(d, 80) as i32;
-    let threshold = double(d, 88);
-    for x in 0..128 {
-        for y in 0..128 {
-            let i = x + y * 128;
-            let wx = x0.wrapping_add(x as i32);
-            let wy = y0.wrapping_add(y as i32);
-            let covered = i64::from(wx) >= i64::from(ex)
-                && i64::from(wx) < i64::from(ex) + i64::from(ew)
-                && i64::from(wy) >= i64::from(ey)
-                && i64::from(wy) < i64::from(ey) + i64::from(eh);
-            s.selected[i] = false;
-            if covered {
-                let level = double(d, samples + i * 8);
-                let h = (if flags & 8 == 0 && flags & 16 != 0 {
-                    if flags & 32 != 0 {
-                        level
+    if !factory_only {
+        let seed = long(d, 96) as i64;
+        if let Some(p) = &mut s.border {
+            p.set_seed(seed);
+        } else {
+            s.border = Some(PerlinNoise::new(seed));
+        }
+        let floor = (water as i32).wrapping_sub(20).max(min);
+        let variation = 15.min((water as i32).wrapping_sub(floor) / 2);
+        let low = double(d, 64);
+        let scale = double(d, 72);
+        let world_low = word(d, 80) as i32;
+        let threshold = double(d, 88);
+        for x in 0..128 {
+            for y in 0..128 {
+                let i = x + y * 128;
+                let wx = x0.wrapping_add(x as i32);
+                let wy = y0.wrapping_add(y as i32);
+                let covered = i64::from(wx) >= i64::from(ex)
+                    && i64::from(wx) < i64::from(ex) + i64::from(ew)
+                    && i64::from(wy) >= i64::from(ey)
+                    && i64::from(wy) < i64::from(ey) + i64::from(eh);
+                s.selected[i] = false;
+                if covered {
+                    let level = double(d, samples + i * 8);
+                    let h = (if flags & 8 == 0 && flags & 16 != 0 {
+                        if flags & 32 != 0 {
+                            level
+                        } else {
+                            level - 0.4375
+                        }
                     } else {
-                        level - 0.4375
+                        (level - low) * scale + f64::from(world_low)
+                    } as f32)
+                        .clamp(min as f32, (max - 1) as f32);
+                    let old = planes[0].get(d, i) as i32 as f32 / 256f32 + min as f32;
+                    if raise && !fresh && h.partial_cmp(&old) != Some(std::cmp::Ordering::Greater) {
+                        continue;
                     }
-                } else {
-                    (level - low) * scale + f64::from(world_low)
-                } as f32)
-                    .clamp(min as f32, (max - 1) as f32);
-                let old = planes[0].get(d, i) as i32 as f32 / 256f32 + min as f32;
-                if raise && !fresh && h.partial_cmp(&old) != Some(std::cmp::Ordering::Greater) {
-                    continue;
-                }
-                let raw = raw_height(h, min, tall);
-                state.set(d, &planes, 0, i, raw, true);
-                s.heights[i] = quantised(raw, min);
-                s.selected[i] = true;
-                if !raise || fresh {
+                    let raw = raw_height(h, min, tall);
+                    state.set(d, &planes, 0, i, raw, true);
+                    s.heights[i] = quantised(raw, min);
+                    s.selected[i] = true;
+                    if !raise || fresh {
+                        state.set(d, &planes, 1, i, water, true);
+                        // Void may also occur in the theme: its final mutation stays ordered per cell below.
+                    }
+                } else if fresh {
+                    let noise = s.border.as_ref().unwrap().get_perlin_noise_2d(
+                        f64::from(wx as f32 / MEDIUM_BLOBS),
+                        f64::from(wy as f32 / MEDIUM_BLOBS),
+                    );
+                    let h = floor as f32 + (noise + 0.5f32) * variation as f32;
+                    state.set(d, &planes, 0, i, raw_height(h, min, tall), true);
                     state.set(d, &planes, 1, i, water, true);
-                    // Void may also occur in the theme: its final mutation stays ordered per cell below.
-                }
-            } else if fresh {
-                let noise = s.border.as_ref().unwrap().get_perlin_noise_2d(
-                    f64::from(wx as f32 / MEDIUM_BLOBS),
-                    f64::from(wy as f32 / MEDIUM_BLOBS),
-                );
-                let h = floor as f32 + (noise + 0.5f32) * variation as f32;
-                state.set(d, &planes, 0, i, raw_height(h, min, tall), true);
-                state.set(d, &planes, 1, i, water, true);
-                state.set(d, &planes, 2, i, beach as u32, true);
-                if void {
-                    state.set(d, &planes, void_plane, i, 1, true);
+                    state.set(d, &planes, 2, i, beach as u32, true);
+                    if void {
+                        state.set(d, &planes, void_plane, i, 1, true);
+                    }
                 }
             }
         }
-    }
-    // Apply each cell's Void mutation immediately before that cell's theme layers.
-    if imported != 0 {
-        s.imported
-            .terrain
-            .as_ref()
-            .unwrap()
-            .fill_bulk_compact_with_scratch(
-                0,
-                0,
-                128,
-                128,
-                &s.heights,
-                &mut s.terrains,
-                &mut s.imported.axes,
-            )
-            .unwrap();
-    }
-    for x in 0..128 {
-        for y in 0..128 {
-            let i = x + y * 128;
-            if !s.selected[i] {
-                continue;
-            }
-            if void && (!raise || fresh) && double(d, samples + i * 8) <= threshold {
-                state.set(d, &planes, void_plane, i, 1, true);
-            }
-            if imported == 0 {
-                continue;
-            }
-            state.set(d, &planes, 2, i, s.terrains[i] as u32, false);
-            let h = s.heights[i].clamp(s.imported.min, s.imported.max - 1);
-            for l in &s.imported.layers {
-                let level = l.values[(h - s.imported.min) as usize];
-                let value = if planes[l.plane].kind >= 3 {
-                    u32::from(level > 0 && (level == 15 || random.next_int_bound(15) < level))
-                } else {
-                    level as u32
-                };
-                state.set(d, &planes, l.plane, i, value, false);
+        // Apply each cell's Void mutation immediately before that cell's theme layers.
+        if imported != 0 {
+            s.imported
+                .terrain
+                .as_ref()
+                .unwrap()
+                .fill_bulk_compact_with_scratch(
+                    0,
+                    0,
+                    128,
+                    128,
+                    &s.heights,
+                    &mut s.terrains,
+                    &mut s.imported.axes,
+                )
+                .unwrap();
+        }
+        for x in 0..128 {
+            for y in 0..128 {
+                let i = x + y * 128;
+                if !s.selected[i] {
+                    continue;
+                }
+                if void && (!raise || fresh) && double(d, samples + i * 8) <= threshold {
+                    state.set(d, &planes, void_plane, i, 1, true);
+                }
+                if imported == 0 {
+                    continue;
+                }
+                state.set(d, &planes, 2, i, s.terrains[i] as u32, false);
+                let h = s.heights[i].clamp(s.imported.min, s.imported.max - 1);
+                for l in &s.imported.layers {
+                    let level = l.values[(h - s.imported.min) as usize];
+                    let value = if planes[l.plane].kind >= 3 {
+                        u32::from(level > 0 && (level == 15 || random.next_int_bound(15) < level))
+                    } else {
+                        level as u32
+                    };
+                    state.set(d, &planes, l.plane, i, value, false);
+                }
             }
         }
     }
@@ -664,6 +693,85 @@ mod tests {
         }
         d
     }
+    fn factory_frame() -> Vec<u8> {
+        let mut data = frame(true);
+        let theme = word(&data, 132);
+        put(&mut data, 128, theme);
+        put(&mut data, 132, 0);
+        put(&mut data, 24, 65);
+        put(&mut data, 36, 62);
+        put(&mut data, 4, 3);
+        let source = data.len();
+        data.resize(source + 112 + AREA * 8, 0);
+        let size = data.len();
+        put(&mut data, 8, size as u32);
+        put(&mut data, 208, source as u32);
+        for (p, value) in [
+            (0, 0x4d53_4257),
+            (4, 1),
+            (8, (112 + AREA * 8) as u32),
+            (12, 1),
+            (24, 128),
+            (28, 128),
+            (32, 128),
+            (36, 128),
+        ] {
+            put(&mut data, source + p, value);
+        }
+        number(&mut data, source + 48, 1.0);
+        number(&mut data, source + 56, 1.0);
+        for i in 0..AREA {
+            number(&mut data, source + 112 + i * 8, (i * 31 % 256) as f64);
+        }
+        data
+    }
+    #[test]
+    fn factory_only_sampling_quantisation_and_stochastic_theme_share_the_tile() {
+        let mut data = factory_frame();
+        let meta = word(&data, 120) as usize;
+        let mut random = JavaRandom::new(42);
+        import(&mut data, &mut ImportScratch::default()).unwrap();
+        let bits = meta + 32 + AREA * 9;
+        for x in 0..128 {
+            for y in 0..128 {
+                let i = x + y * 128;
+                assert_eq!(word(&data, meta + 32 + i * 4), (i * 31 % 256 * 256) as u32);
+                assert_eq!(word(&data, meta + 32 + AREA * 4 + i * 4), 62);
+                assert_eq!(data[meta + 32 + AREA * 8 + i], 3);
+                assert_eq!(
+                    (data[bits + i / 8] >> (i & 7)) & 1,
+                    u8::from(random.next_int_bound(15) < 7)
+                );
+            }
+        }
+        assert_eq!(long(&data, 104), random.lcg_state());
+        assert_eq!(long(&data, meta + 8), 15);
+        assert_eq!(&data[140..144], &[0, 1, 2, 3]);
+    }
+    #[test]
+    fn malformed_factory_only_frames_do_not_change_samples_or_output() {
+        let valid = factory_frame();
+        let meta = word(&valid, 120) as usize;
+        for (p, value) in [
+            (4, 2),
+            (24, 1),
+            (128, 0),
+            (132, 1),
+            (208, 0),
+            (meta + 8, 0),
+            (meta + 16, 1),
+        ] {
+            let mut data = valid.clone();
+            put(&mut data, p, value);
+            let before = data.clone();
+            assert_eq!(
+                import(&mut data, &mut ImportScratch::default()),
+                Err(WeltError::IllegalArgument)
+            );
+            assert_eq!(data, before);
+        }
+    }
+
     #[test]
     fn fused_raster_sampling_matches_legacy_samples_and_rejects_bad_sources_atomically() {
         let mut legacy = frame(true);

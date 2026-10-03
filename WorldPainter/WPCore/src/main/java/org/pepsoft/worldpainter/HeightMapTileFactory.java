@@ -133,6 +133,9 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         return (extent == null) || extent.contains(x, y);
     }
 
+    /** Successful factory-only native transactions on the calling worker. */
+    public static long completedNativeBitmapTiles() { return BitmapTileGenerationAccess.completed(); }
+
     @Override
     public Tile createTile(int tileX, int tileY) {
         final int maxZ = maxHeight - 1, myWaterHeight = getWaterHeight();
@@ -140,6 +143,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         tile.inhibitEvents();
         final int worldTileX = tileX * TILE_SIZE, worldTileY = tileY * TILE_SIZE;
         try {
+            if (BitmapTileGenerationAccess.fill(this, tile, tileX, tileY)) return tile;
             final TransformingHeightMap translatedHeightMap = getBatchSafeTranslation(heightMap);
             final HeightMap batchHeightMap = (translatedHeightMap != null)
                     ? translatedHeightMap.getBaseHeightMap() : heightMap;
