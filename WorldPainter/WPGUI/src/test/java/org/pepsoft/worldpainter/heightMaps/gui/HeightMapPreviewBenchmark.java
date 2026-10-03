@@ -11,6 +11,8 @@ import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.heightMaps.SlopeHeightMap;
 import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
 import org.pepsoft.worldpainter.heightMaps.DisplacementHeightMap;
+import org.pepsoft.worldpainter.heightMaps.BitmapHeightMap;
+import org.pepsoft.worldpainter.heightMaps.BicubicHeightMap;
 import org.pepsoft.worldpainter.nativeapi.Native;
 
 /** Complete height map preview redraws, including grey raster conversion and image writes. */
@@ -25,7 +27,7 @@ public final class HeightMapPreviewBenchmark {
         Setup setup = fixture();
         select(nativeMode);
         long[] times = new long[9], allocations = new long[9];
-        for (int sample = -5; sample < 9; sample++) {
+        for (int sample = -warmups(); sample < 9; sample++) {
             Sample result = redraw(setup);
             if (sample >= 0) { times[sample] = result.nanos; allocations[sample] = result.allocated; }
         }
@@ -33,7 +35,12 @@ public final class HeightMapPreviewBenchmark {
         long nativeTiles = nativeMode ? setup.provider.completedNativePreviewTiles() : 0;
         System.out.printf("heightMapPreview mode=%s twoFullRedraws medianMs=%.3f allocatedBytes=%d checksum=%d nativeTiles=%d%n",
                 nativeMode ? "rust" : "java", times[4] / 1e6, allocations[4], checksum, nativeTiles);
-        if (nativeMode && nativeTiles != 448) throw new AssertionError("Every preview tile must use Rust");
+        if (nativeMode && nativeTiles != (warmups() + 9L) * 32) throw new AssertionError("Every preview tile must use Rust");
+    }
+    private static int warmups() {
+        int count = Integer.getInteger("welt.benchmark.previewWarmups", 5);
+        if (count < 5 || count > 100) throw new IllegalArgumentException("Warmups must be 5..100");
+        return count;
     }
     private static void select(boolean nativeMode) {
         System.setProperty(Native.GEN_KEY, Boolean.toString(nativeMode));
@@ -43,6 +50,16 @@ public final class HeightMapPreviewBenchmark {
     private static Setup fixture() {
         HeightMap map = new SumHeightMap(new ConstantHeightMap(32),
                 new SumHeightMap(new NoiseHeightMap(100, 1.7, 4, 17), new NoiseHeightMap(60, .7, 3, -123)));
+        if (Boolean.getBoolean("welt.benchmark.previewBitmap")) {
+            BufferedImage source = new BufferedImage(512, 512, BufferedImage.TYPE_USHORT_GRAY);
+            int[] samples = new int[512 * 512];
+            for (int y = 0; y < 512; y++) for (int x = 0; x < 512; x++)
+                samples[x + y * 512] = (x * 193 + y * 79 + (x * y * 13)) & 65535;
+            source.getRaster().setSamples(0, 0, 512, 512, 0, samples);
+            map = new BicubicHeightMap(BitmapHeightMap.build().withImage(source).now(),
+                    Boolean.parseBoolean(System.getProperty("welt.benchmark.previewBitmapRepeat", "true")));
+            map = new TransformingHeightMap("Bitmap preview", map, 1.7f, .65f, 31, -47, .37f);
+        }
         if (Boolean.getBoolean("welt.benchmark.previewSlope")) map = new SlopeHeightMap(map, 3.7f);
         if (Boolean.getBoolean("welt.benchmark.previewTransform"))
             map = new TransformingHeightMap("Preview", map, 1.7f, .65f, 31, -47, .37f);
@@ -68,7 +85,7 @@ public final class HeightMapPreviewBenchmark {
         Setup java = fixture(), rust = fixture();
         double[] jt = new double[9], rt = new double[9], ratios = new double[9];
         long[] ja = new long[9], ra = new long[9];
-        for (int sample = -5; sample < 9; sample++) {
+        for (int sample = -warmups(); sample < 9; sample++) {
             Sample j = null, r = null;
             for (int pass = 0; pass < 2; pass++) {
                 boolean nativePass = ((sample + pass) & 1) != 0; select(nativePass);
@@ -83,7 +100,7 @@ public final class HeightMapPreviewBenchmark {
         }
         Arrays.sort(jt); Arrays.sort(rt); Arrays.sort(ratios); Arrays.sort(ja); Arrays.sort(ra);
         long calls = rust.provider.completedNativePreviewTiles();
-        if (calls != 448) throw new AssertionError("Every preview tile must use Rust");
+        if (calls != (warmups() + 9L) * 32) throw new AssertionError("Every preview tile must use Rust");
         System.out.printf("heightMapPreview paired javaMs=%.3f rustMs=%.3f ratio=%.3f minRatio=%.3f maxRatio=%.3f javaAllocated=%d rustAllocated=%d pixelParity=true nativeTiles=%d%n",
                 jt[4], rt[4], ratios[4], ratios[0], ratios[8], ja[4], ra[4], calls);
     }
