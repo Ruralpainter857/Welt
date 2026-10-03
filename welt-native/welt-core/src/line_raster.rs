@@ -62,5 +62,19 @@ pub fn rasterize_line_centers(
 }
 
 fn java_round_f32(value: f32) -> i32 {
-    (value + 0.5_f32).floor() as i32
+    (f64::from(value) + 0.5).floor() as i32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn java_round_keeps_values_immediately_below_a_half_below_the_tie() {
+        assert_eq!(java_round_f32(f32::from_bits(0x3eff_ffff)), 0);
+        assert_eq!(java_round_f32(0.5), 1);
+        assert_eq!(java_round_f32(-0.5), 0);
+        assert_eq!(java_round_f32(f32::NAN), 0);
+        assert_eq!(java_round_f32(f32::INFINITY), i32::MAX);
+        assert_eq!(java_round_f32(f32::NEG_INFINITY), i32::MIN);
+    }
 }

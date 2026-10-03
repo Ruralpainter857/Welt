@@ -30,6 +30,16 @@ public final class NativeSlices {
         catch (UnsatisfiedLinkError e) { return false; }
     }
     private static native int nativeCombinedLayer(ByteBuffer buffer, int length);
+    /** Apply a complete nibble-layer line to one compact tile without retaining its direct address. */
+    public static boolean paintLineStrokeTile(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null
+                || !buffer.isDirect() || buffer.isReadOnly() || buffer.limit() < 256
+                || buffer.limit() > 256 + 256 * 256 * 4 + 32 + 8192) return false;
+        try { return nativePaintLineStrokeTile(buffer, buffer.limit()) == 0; }
+        catch (UnsatisfiedLinkError e) { return false; }
+    }
+    private static native int nativePaintLineStrokeTile(ByteBuffer buffer, int length);
+
     static final int ABI_VERSION = 1;
     public static final String TUNNEL_EDGE_RENDER_KEY = "wp.native.render.tunnelEdges";
 
