@@ -8,10 +8,11 @@ import org.pepsoft.worldpainter.brushes.SymmetricBrush;
 import org.pepsoft.worldpainter.layers.*;
 import org.pepsoft.worldpainter.nativeapi.Native;
 
-/** Complete terrain/bit-layer line operation with exact Math.random stream checks. */
+/** Complete constant-target line operation with exact Math.random stream checks. */
 public final class LineSetStrokeBenchmark {
     static final Layer CHUNK=new Layer("welt.test.stroke.chunk", "Chunk", "", Layer.DataSize.BIT_PER_CHUNK, false, 30) { };
     static String mode(){return System.getProperty("welt.benchmark.strokePaint","terrain");}
+    static Layer numericLayer(){return switch(mode()) {case "biome" -> Biome.INSTANCE;case "annotations" -> Annotations.INSTANCE;default -> null;};}
     static boolean dither(){return Boolean.getBoolean("welt.benchmark.strokeDither");}
     static Random mathRandom() throws Exception {
         // Test-only access to the existing stream; production keeps ordinary Math.random calls.
@@ -27,6 +28,10 @@ public final class LineSetStrokeBenchmark {
         for(Tile tile:d.getTiles()){
             tile.inhibitEvents();tile.initializeLayerValues(Frost.INSTANCE,values,0);tile.initializeLayerValues(CHUNK,values,0);tile.releaseEvents();
         }
+        Layer numeric=numericLayer();if(numeric!=null){
+            for(int i=0;i<values.length;i++)values[i]=(byte)(numeric==Biome.INSTANCE?i&255:i%16);
+            for(Tile tile:d.getTiles()){tile.inhibitEvents();tile.initializeLayerValues(numeric,values,0);tile.releaseEvents();}
+        }
         return d;
     }
     static Paint paint(boolean reverse){
@@ -34,6 +39,8 @@ public final class LineSetStrokeBenchmark {
             case "terrain" -> new TerrainPaint(reverse?Terrain.CUSTOM_3:Terrain.SAND);
             case "bit" -> new BitLayerPaint(Frost.INSTANCE);
             case "chunk-bit" -> new BitLayerPaint(CHUNK);
+            case "biome" -> new DiscreteLayerPaint(Biome.INSTANCE,254);
+            case "annotations" -> new DiscreteLayerPaint(Annotations.INSTANCE,12);
             default -> throw new IllegalArgumentException("Unknown stroke paint");
         };
         SymmetricBrush brush=SymmetricBrush.LINEAR_CIRCLE.clone();brush.setRadius(Integer.getInteger("welt.benchmark.strokeRadius",16));brush.setLevel(.63f);
@@ -57,8 +64,10 @@ public final class LineSetStrokeBenchmark {
         long calls=LineStrokeAccess.completedCalls()-callsBefore,next=random.nextLong(),hash=1;
         for(int ty=-2;ty<2;ty++)for(int tx=-2;tx<2;tx++){
             Tile tile=d.getTile(tx,ty);if(tile==null)continue;
+            if(numericLayer()!=null)hash=hash*31+(tile.hasLayer(numericLayer())?1:0);
             hash=hash*31+(tile.hasLayer(Frost.INSTANCE)?1:0);hash=hash*31+(tile.hasLayer(CHUNK)?1:0);
             for(int y=0;y<128;y++)for(int x=0;x<128;x++){
+                if(numericLayer()!=null)hash=hash*31+tile.getLayerValue(numericLayer(),x,y);
                 hash=hash*31+tile.getTerrain(x,y).ordinal();hash=hash*31+(tile.getBitLayerValue(Frost.INSTANCE,x,y)?1:0);
                 hash=hash*31+(tile.getBitLayerValue(CHUNK,x,y)?1:0);
             }

@@ -23,7 +23,7 @@ fn float(d: &[u8], p: usize) -> f32 {
 
 /// Validates the complete frame before changing any layer values or metadata.
 pub fn paint(d: &mut [u8]) -> Result<(), WeltError> {
-    if d.len() >= 256 && word(d, 4) == 2 {
+    if d.len() >= 256 && matches!(word(d, 4), 2 | 3) {
         return crate::line_set_stroke::paint(d);
     }
     let bad = WeltError::IllegalArgument;

@@ -71,7 +71,7 @@ public final class LineStrokeAccess {
         return calls;
     }
 
-    /** Applies terrain or binary-layer lines; prepared dither selections survive a rejected JNI entry. */
+    /** Applies terrain, binary or discrete numeric lines; prepared dither selections survive a rejected JNI entry. */
     public static int paintSet(Dimension dimension,Terrain terrain,Layer layer,int target,int x1,int y1,int x2,int y2,
                                int bx,int by,int width,int height,float dynamic,boolean pixel,boolean dither,float[] strengths) {
         return paintSet(dimension,terrain,layer,target,x1,y1,x2,y2,bx,by,width,height,dynamic,pixel,dither,strengths,
@@ -81,12 +81,26 @@ public final class LineStrokeAccess {
                         int bx,int by,int width,int height,float dynamic,boolean pixel,boolean dither,float[] strengths,
                         java.util.function.Predicate<ByteBuffer> nativeEdit) {
         if(!isEnabled() || !isSetEnabled())return -1;
-        int kind,role;
-        if(terrain!=null){if(layer!=null || terrain.ordinal()>255)return -1;kind=1;role=2;target=terrain.ordinal();}
-        else {if(layer==null || target<0 || target>1)return -1;
-            kind=layer.dataSize==Layer.DataSize.BIT?3:layer.dataSize==Layer.DataSize.BIT_PER_CHUNK?4:-1;
-            if(kind<0)return -1;role=3;
+        int kind, role, fallback=0;
+        if (terrain!=null) {
+            if (layer!=null || terrain.ordinal()>255) return -1;
+            kind=1; role=2; target=terrain.ordinal();
+        } else {
+            if (layer==null) return -1;
+            kind=switch (layer.dataSize) {
+                case BYTE -> 1;
+                case NIBBLE -> 2;
+                case BIT -> 3;
+                case BIT_PER_CHUNK -> 4;
+                default -> -1;
+            };
+            if (kind<0) return -1;
+            int max=kind==1?255:kind==2?15:1;
+            fallback=kind<3?layer.getDefaultValue():0;
+            if (target<0 || target>max || fallback<0 || fallback>max) return -1;
+            role=3;
         }
+        boolean numeric=role==3 && kind<3;
         Bounds b=bounds(dimension,x1,y1,x2,y2,bx,by,width,height,dynamic,pixel,strengths);if(b==null)return -1;
         dither=dither&&!pixel;
         int maskBytes=dither?(int)(((long)b.width*b.height+7)/8):0;
@@ -95,8 +109,8 @@ public final class LineStrokeAccess {
         Scratch scratch=SCRATCH.get();scratch.layers[0]=layer;scratch.roles[0]=role;scratch.kinds[0]=kind;
         if(scratch.data==null || scratch.data.capacity()<size)scratch.data=ByteBuffer.allocateDirect(size).order(ByteOrder.LITTLE_ENDIAN);
         ByteBuffer data=scratch.data;data.clear().limit(size);for(int p=0;p<256;p+=8)data.putLong(p,0);
-        data.putInt(0,0x50545357).putInt(4,2).putInt(8,size).putInt(12,x1).putInt(16,y1).putInt(20,x2).putInt(24,y2)
-                .putInt(36,bx).putInt(40,by).putInt(44,width).putInt(48,height).putFloat(52,dynamic).putInt(64,meta)
+        data.putInt(0,0x50545357).putInt(4,numeric?3:2).putInt(8,size).putInt(12,x1).putInt(16,y1).putInt(20,x2).putInt(24,y2)
+                .putInt(36,bx).putInt(40,by).putInt(44,width).putInt(48,height).putFloat(52,dynamic).putInt(60,fallback).putInt(64,meta)
                 .putInt(68,pixel?1:0).putInt(72,kind).putInt(76,role).putInt(80,target).putInt(84,dither?1:0);
         for(int p=0;p<strengths.length;p++)data.putFloat(256+p*4,strengths[p]);
         if(dither){
@@ -147,7 +161,8 @@ public final class LineStrokeAccess {
         int ox=tile.getX()*128,oy=tile.getY()*128;
         for(int y=Math.max(oy,b.y);y<Math.min(oy+128,b.y+b.height);y++)for(int x=Math.max(ox,b.x);x<Math.min(ox+128,b.x+b.width);x++){
             int p=x-b.x+(y-b.y)*b.width;if((mask[p>>3]&(1<<(p&7)))==0)continue;
-            if(terrain!=null)tile.setTerrain(x-ox,y-oy,terrain);else tile.setBitLayerValue(layer,x-ox,y-oy,target!=0);
+            if(terrain!=null)tile.setTerrain(x-ox,y-oy,terrain);else if(layer.dataSize==Layer.DataSize.BIT || layer.dataSize==Layer.DataSize.BIT_PER_CHUNK)tile.setBitLayerValue(layer,x-ox,y-oy,target!=0);
+            else tile.setLayerValue(layer,x-ox,y-oy,target);
         }
     }
 }

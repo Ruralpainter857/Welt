@@ -29,6 +29,7 @@ public class LineSetStrokeParityTest {
             Tile b=right.getTile(a.getX(),a.getY());assertEquals(a.getLayers(),b.getLayers());
             for(int y=0;y<128;y++)for(int x=0;x<128;x++){
                 assertEquals(a.getTerrain(x,y),b.getTerrain(x,y));
+                if(LineSetStrokeBenchmark.numericLayer()!=null)assertEquals(a.getLayerValue(LineSetStrokeBenchmark.numericLayer(),x,y),b.getLayerValue(LineSetStrokeBenchmark.numericLayer(),x,y));
                 assertEquals(a.getBitLayerValue(org.pepsoft.worldpainter.layers.Frost.INSTANCE,x,y),b.getBitLayerValue(org.pepsoft.worldpainter.layers.Frost.INSTANCE,x,y));
                 assertEquals(a.getBitLayerValue(LineSetStrokeBenchmark.CHUNK,x,y),b.getBitLayerValue(LineSetStrokeBenchmark.CHUNK,x,y));
             }
@@ -40,7 +41,7 @@ public class LineSetStrokeParityTest {
         Random random=LineSetStrokeBenchmark.mathRandom();
         try{
             int[][] lines={{-190,-130,190,130},{190,130,-190,-130},{-64,-190,64,190},{0,0,0,0},{120,64,130,64},{-70,-70,-65,-65}};
-            for(String mode:new String[]{"terrain","bit","chunk-bit"})for(boolean dither:new boolean[]{false,true}){
+            for(String mode:new String[]{"terrain","bit","chunk-bit","biome","annotations"})for(boolean dither:new boolean[]{false,true}){
                 System.setProperty("welt.benchmark.strokePaint",mode);System.setProperty("welt.benchmark.strokeDither",Boolean.toString(dither));
                 for(int radius:new int[]{0,3,17})for(boolean reverse:new boolean[]{false,true})for(int[] line:lines){
                     Dimension a=LineSetStrokeBenchmark.fixture(),b=LineSetStrokeBenchmark.fixture();
@@ -57,7 +58,7 @@ public class LineSetStrokeParityTest {
         String[] saved=new String[keys.length];for(int i=0;i<keys.length;i++)saved[i]=System.getProperty(keys[i]);
         Random random=LineSetStrokeBenchmark.mathRandom();
         try{
-            for(String mode:new String[]{"terrain","bit","chunk-bit"}){
+            for(String mode:new String[]{"terrain","bit","chunk-bit","biome","annotations"}){
                 System.setProperty("welt.benchmark.strokePaint",mode);System.setProperty("welt.benchmark.strokeDither","true");
                 int[] line={120,64,130,64};Dimension expected=LineSetStrokeBenchmark.fixture(),actual=LineSetStrokeBenchmark.fixture();
                 random.setSeed(3);draw(expected,false,false,line,17,true);long next=random.nextLong();

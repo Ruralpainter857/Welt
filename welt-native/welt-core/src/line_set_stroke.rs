@@ -1,4 +1,5 @@
-//! WSTP v2: complete constant-target terrain and binary-layer lines.
+//! WSTP v2/v3: complete constant-target terrain, binary and discrete numeric lines.
+//! Version 3 adds byte/nibble layer planes and their current absent-plane default at 60.
 //! The v1 geometry header is followed by kind/role/target/flags at 72/76/80/84.
 //! Flags 1 selects an exact Java Math.random selection mask. Its x/y/width/height,
 //! offset and length occupy 88..108. Strengths start at 256, then tile metadata
@@ -37,7 +38,7 @@ pub fn paint(d: &mut [u8]) -> Result<(), WeltError> {
     if d.len() < 256
         || d.len() > crate::line_stroke::MAX_BYTES
         || word(d, 0) != 0x50545357
-        || word(d, 4) != 2
+        || !matches!(word(d, 4), 2 | 3)
         || word(d, 8) as usize != d.len()
         || d[112..140]
             .iter()
@@ -57,6 +58,15 @@ pub fn paint(d: &mut [u8]) -> Result<(), WeltError> {
     let role = word(d, 76);
     let target = word(d, 80) as u32;
     let flags = word(d, 84);
+    let fallback = word(d, 60) as u32;
+    let numeric = word(d, 4) == 3 && role == 3 && matches!(kind, 1 | 2);
+    let max_value = if kind == 2 {
+        15
+    } else if kind == 1 {
+        255
+    } else {
+        1
+    };
     let points = (i64::from(x2) - i64::from(x1))
         .abs()
         .max((i64::from(y2) - i64::from(y1)).abs()) as usize
@@ -76,9 +86,10 @@ pub fn paint(d: &mut [u8]) -> Result<(), WeltError> {
         || !(0..=1).contains(&undo)
         || !(0..=1).contains(&pixel)
         || pixel == 1 && (bx != 0 || by != 0 || bw != 1 || bh != 1)
-        || word(d, 60) != 0
-        || !matches!((kind, role), (1, 2) | (3, 3) | (4, 3))
-        || target > if kind == 1 { 255 } else { 1 }
+        || !numeric && fallback != 0
+        || numeric && fallback > max_value
+        || !(numeric || matches!((kind, role), (1, 2) | (3, 3) | (4, 3)))
+        || target > max_value
         || !(0..=1).contains(&flags)
         || flags == 1 && pixel == 1
         || meta != 256 + bw as usize * bh as usize * 4
@@ -93,7 +104,7 @@ pub fn paint(d: &mut [u8]) -> Result<(), WeltError> {
     if word(d, meta) != tx
         || word(d, meta + 4) != ty
         || present > 1
-        || kind == 1 && present != 1
+        || role == 2 && present != 1
         || d[meta + 16..meta + 32].iter().any(|v| *v != 0)
     {
         return Err(bad);
@@ -179,7 +190,7 @@ pub fn paint(d: &mut [u8]) -> Result<(), WeltError> {
             }
         }
         let mut changed = false;
-        if kind == 1 || present != 0 || target != 0 {
+        if role == 2 || present != 0 || target != fallback {
             for (b, bits) in selected.iter().enumerate() {
                 let mut bits = *bits;
                 while bits != 0 {
@@ -296,6 +307,52 @@ mod tests {
                 let selected = matches!((x, y), (63, 64) | (65, 64) | (65, 66));
                 assert_eq!(d[292 + x + y * 128], if selected { 117 } else { 0 });
             }
+        }
+    }
+    #[test]
+    fn numeric_defaults_and_adjacent_nibbles_preserve_java_storage() {
+        for (kind, fallback, target) in [(1, 255u32, 254u32), (2, 3, 12)] {
+            let mut d = frame(kind, 3, target);
+            d[4..8].copy_from_slice(&3i32.to_le_bytes());
+            d[60..64].copy_from_slice(&fallback.to_le_bytes());
+            d[268..276].fill(0);
+            d[292..].fill(if kind == 2 {
+                (fallback | fallback << 4) as u8
+            } else {
+                fallback as u8
+            });
+            paint(&mut d).unwrap();
+            assert_eq!(word(&d, 204), 1);
+            for y in 0..128 {
+                for x in 0..128 {
+                    let selected = y == 64 && (64..=70).contains(&x);
+                    assert_eq!(
+                        crate::selection_copy::get(&d, 292, kind, index(kind, x, y)),
+                        if selected { target } else { fallback }
+                    );
+                }
+            }
+            let mut absent = frame(kind, 3, fallback);
+            absent[4..8].copy_from_slice(&3i32.to_le_bytes());
+            absent[60..64].copy_from_slice(&fallback.to_le_bytes());
+            absent[268..276].fill(0);
+            paint(&mut absent).unwrap();
+            assert_eq!(word(&absent, 204), 0);
+            assert_eq!(absent[268], 0);
+            absent[268] = 1;
+            paint(&mut absent).unwrap();
+            assert_eq!(word(&absent, 204), 1);
+        }
+    }
+    #[test]
+    fn invalid_numeric_defaults_are_rejected_before_any_write() {
+        for (kind, fallback, target) in [(1, 256u32, 1), (2, 16, 1), (2, 3, 16)] {
+            let mut d = frame(kind, 3, target);
+            d[4..8].copy_from_slice(&3i32.to_le_bytes());
+            d[60..64].copy_from_slice(&fallback.to_le_bytes());
+            let before = d.clone();
+            assert_eq!(paint(&mut d), Err(WeltError::IllegalArgument));
+            assert_eq!(d, before);
         }
     }
 }

@@ -36,7 +36,8 @@ public class LineSetStrokeFallbackTest {
             Tile b=actual.getTile(a.getX(),a.getY());assertEquals(a.getLayers(),b.getLayers());
             for(int y=0;y<128;y++)for(int x=0;x<128;x++){
                 assertEquals(a.getTerrain(x,y),b.getTerrain(x,y));
-                if(layer!=null)assertEquals(a.getBitLayerValue(layer,x,y),b.getBitLayerValue(layer,x,y));
+                if(layer!=null){if(layer.dataSize==Layer.DataSize.BIT || layer.dataSize==Layer.DataSize.BIT_PER_CHUNK)assertEquals(a.getBitLayerValue(layer,x,y),b.getBitLayerValue(layer,x,y));
+                    else assertEquals(a.getLayerValue(layer,x,y),b.getLayerValue(layer,x,y));}
             }
         }
     }
@@ -46,7 +47,7 @@ public class LineSetStrokeFallbackTest {
             System.setProperty(Native.GEN_KEY,"true");System.setProperty("welt.native.lineSetStroke","true");System.setProperty("welt.native.lineStroke","true");
             float[] strengths=new float[33*33];for(int i=0;i<strengths.length;i++)strengths[i]=i%3==0?0:i%3==1?.4f:.97f;
             Random random=random();
-            for(Layer layer:new Layer[]{null,Frost.INSTANCE,CHUNK})for(int target:new int[]{0,1})for(int successes:new int[]{0,1}){
+            for(Layer layer:new Layer[]{null,Frost.INSTANCE,CHUNK,org.pepsoft.worldpainter.layers.Biome.INSTANCE,org.pepsoft.worldpainter.layers.Annotations.INSTANCE})for(int target:layer==org.pepsoft.worldpainter.layers.Biome.INSTANCE?new int[]{0,254,255}:layer==org.pepsoft.worldpainter.layers.Annotations.INSTANCE?new int[]{0,12,15}:new int[]{0,1})for(int successes:new int[]{0,1}){
                 Terrain terrain=layer==null?Terrain.CUSTOM_3:null;Dimension expected=fixture(),actual=fixture();
                 random.setSeed(44);assertTrue(draw(expected,terrain,layer,target,NativeSlices::paintLineStrokeTile,strengths)>1);long next=random.nextLong();
                 AtomicInteger attempts=new AtomicInteger();
