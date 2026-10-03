@@ -1,4 +1,4 @@
-//! WHTB v1 groups all intersecting tiles to preserve the global X/Y theme RNG order.
+//! WHTB v1/v2 groups all intersecting tiles to preserve the global X/Y theme RNG order.
 //! One frame carries forces, a theme, and compact planes reused by both passes.
 use crate::height_map_import::{Plane, Theme, TileState};
 use welt_core::{error::WeltError, rng::JavaRandom};
@@ -60,7 +60,7 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     if d.len() < 128
         || d.len() > MAX_BYTES
         || word(d, 0) != 0x42544857
-        || word(d, 4) != 1
+        || !matches!(word(d, 4), 1 | 2)
         || word(d, 8) as usize != d.len()
         || d[88..128].iter().any(|v| *v != 0)
     {
@@ -85,7 +85,7 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     let beach = word(d, 76) as i32;
     if !(3..=64).contains(&n)
         || nt > 9
-        || mode > 1
+        || mode > if word(d, 4) == 1 { 1 } else { 4 }
         || !(1..=256).contains(&w)
         || !(1..=256).contains(&h)
         || !(1..=65536).contains(&(i64::from(max) - i64::from(min)))
@@ -199,17 +199,18 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
                 continue;
             }
             let current = t.planes[0].get(d, i) as i32 as f32 / 256.0 + min as f32;
-            let target = if mode == 0 {
-                java_min(current + value, high)
-            } else {
-                java_max(current - value, low)
+            let target = match mode {
+                0 => java_min(current + value, high),
+                1 => java_max(current - value, low),
+                _ => value,
             };
             let edited = force * target + (1.0 - force) * current;
-            if if mode == 0 {
-                edited > current
-            } else {
-                edited < current
-            } {
+            let write = match mode {
+                2 => true,
+                0 | 3 => edited > current,
+                _ => edited < current,
+            };
+            if write {
                 let raw = ((edited - min as f32) * 256.0) as i32;
                 t.state.set(
                     d,
@@ -389,6 +390,21 @@ mod tests {
                 ))
                 .collect::<Vec<_>>()
         );
+    }
+    #[test]
+    fn flatten_modes_and_legacy_rejection_preserve_the_frame_contract() {
+        for mode in 2..=4 {
+            let mut data = frame();
+            put(&mut data, 4, 2);
+            put(&mut data, 28, mode);
+            put(&mut data, 32, 64.0f32.to_bits());
+            assert!(apply(&mut data, &mut BrushScratch::default()).is_ok());
+            let mut legacy = frame();
+            put(&mut legacy, 28, mode);
+            let before = legacy.clone();
+            assert!(apply(&mut legacy, &mut BrushScratch::default()).is_err());
+            assert_eq!(before, legacy);
+        }
     }
     #[test]
     fn malformed_group_is_atomic() {

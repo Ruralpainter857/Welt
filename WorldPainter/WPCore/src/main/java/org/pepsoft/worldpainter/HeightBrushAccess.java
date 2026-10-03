@@ -5,9 +5,9 @@ import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import static org.pepsoft.worldpainter.Constants.*;
 
 /**
- * Frontière commune des pinceaux de hauteur et d'aplanissement sans thème ni filtre dépendant des mutations.
- * Un appel JNI par tuile ; les hauteurs restent compactes et le tampon est réutilisé par worker.
- * Le demandeur sérialise les éditions de la dimension. Les forces suivent le parcours X puis Y.
+ * Shared compact height and flatten brush operations, including exact SimpleTheme transactions.
+ * Mutating filters retain Java. The caller serialises dimension edits and supplies X-major forces.
+ * Unthemed operations use one call per tile; themed operations share one frame across all tiles.
  */
 public final class HeightBrushAccess {
     public static final int RAISE = 0, LOWER = 1, FLATTEN = 2, FLATTEN_RAISE = 3, FLATTEN_LOWER = 4;
@@ -31,6 +31,9 @@ public final class HeightBrushAccess {
         }
         return true;
     }
+
+    /** Successful grouped height/theme transactions, including themed flattening. */
+    public static long completedThemedCalls(){return ThemedHeightBrushAccess.completedCalls();}
 
     /** Apply heights and an exact SimpleTheme together without per-cell Java setters. */
     public static boolean tryApplyThemed(Dimension dimension,int ox,int oy,int width,int height,

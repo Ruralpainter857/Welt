@@ -137,6 +137,9 @@ public class Flatten extends AbstractBrushOperation {
         }
 
         int nativeMode = mode == Mode.FLATTEN ? 0 : mode == Mode.RAISE ? 1 : 2;
+        if (applyTheme && HeightBrushAccess.tryApplyThemed(dimension, centreX - radius, centreY - radius,
+                diameter, diameter, nativeStrengths, nativeMode + HeightBrushAccess.FLATTEN,
+                targetHeight, dimension.getMinHeight(), dimension.getMaxHeight() - 1)) return true;
         if (!applyTheme && HeightBrushAccess.tryApply(dimension, centreX - radius, centreY - radius,
                 diameter, diameter, nativeStrengths, nativeMode + HeightBrushAccess.FLATTEN,
                 targetHeight, dimension.getMinHeight(), dimension.getMaxHeight() - 1)) return true;

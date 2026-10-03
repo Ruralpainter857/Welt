@@ -9,10 +9,12 @@ import org.pepsoft.worldpainter.themes.SimpleTheme;
 /** One transaction covers the whole brush footprint, retaining global X/Y random order. */
 final class ThemedHeightBrushAccess {
     private static final int MAX_BYTES=4*1024*1024;
+    private static final java.util.concurrent.atomic.AtomicLong COMPLETED=new java.util.concurrent.atomic.AtomicLong();
+    static long completedCalls(){return COMPLETED.get();}
     private static final ThreadLocal<Scratch> SCRATCH=ThreadLocal.withInitial(Scratch::new);
     private static final class Scratch {ByteBuffer data;final Tile[] tiles=new Tile[9];}
     static boolean apply(Dimension dimension,int ox,int oy,int width,int height,float[] forces,int mode,float value,float low,float high) {
-        if(width<=0||height<=0||width>256||height>256||forces==null||(long)width*height!=forces.length||mode<0||mode>1
+        if(width<=0||height<=0||width>256||height>256||forces==null||(long)width*height!=forces.length||mode<0||mode>4
                 ||(long)ox+width-1>Integer.MAX_VALUE||(long)oy+height-1>Integer.MAX_VALUE
                 ||!TileRegionAccess.canBatch(dimension,ox,oy,width,height)
                 ||dimension.getTileFactory().getClass()!=HeightMapTileFactory.class)return false;
@@ -36,7 +38,7 @@ final class ThemedHeightBrushAccess {
         long sizeLong=(long)start+(long)step*count;if(sizeLong>MAX_BYTES)return false;int size=(int)sizeLong;
         ByteBuffer d=scratch.data;if(d==null||d.capacity()<size){d=ByteBuffer.allocateDirect(size).order(ByteOrder.LITTLE_ENDIAN);scratch.data=d;}
         d.clear().limit(size);for(int i=0;i<128;i+=8)d.putLong(i,0);
-        d.putInt(0,0x42544857).putInt(4,1).putInt(8,size).putInt(12,n).putInt(16,count)
+        d.putInt(0,0x42544857).putInt(4,mode<2?1:2).putInt(8,size).putInt(12,n).putInt(16,count)
                 .putInt(20,dimension.getMinHeight()).putInt(24,dimension.getMaxHeight()).putInt(28,mode).putFloat(32,value)
                 .putFloat(36,low).putFloat(40,high).putInt(44,ox).putInt(48,oy).putInt(52,width).putInt(56,height)
                 .putInt(60,forceBase).putInt(64,themeBase).putInt(68,start).putInt(72,step).putInt(76,Terrain.BEACHES.ordinal());
@@ -44,6 +46,7 @@ final class ThemedHeightBrushAccess {
         d.position(forceBase);d.slice().order(d.order()).asFloatBuffer().put(forces);plan.write(d,themeBase,layers);
         for(int t=0;t<count;t++){int base=start+t*step;for(int i=0;i<256;i+=8)d.putLong(base+i,0);scratch.tiles[t].copySelectionPlanes(d,base+256,layers,roles,kinds,offsets);}
         d.position(0);if(!SimpleTheme.processThemedHeightBrush(d))return false;
+        COMPLETED.incrementAndGet();
         for(int t=0;t<count;t++) {
             int base=start+t*step;if(d.getLong(base+272)==0)continue;
             Tile tile=dimension.getTileForEditing(scratch.tiles[t].getX(),scratch.tiles[t].getY());
