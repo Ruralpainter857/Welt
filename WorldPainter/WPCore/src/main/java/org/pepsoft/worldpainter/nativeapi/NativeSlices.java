@@ -13,6 +13,15 @@ import java.nio.ByteBuffer;
 
 /** Bulk JNI entry points. A null result asks the caller to use its Java path. */
 public final class NativeSlices {
+    /** Converts a complete big-endian MCA header to little-endian words in place. */
+    public static boolean decodeRegionHeader(ByteBuffer buffer) {
+        if(buffer==null || !buffer.isDirect() || buffer.isReadOnly()
+                || (buffer.limit()!=4096 && buffer.limit()!=8192) || !NativeLoader.areSlicesAvailable())return false;
+        try{return nativeDecodeRegionHeader(buffer,buffer.limit())==0;}
+        catch(UnsatisfiedLinkError e){return false;}
+    }
+    private static native int nativeDecodeRegionHeader(ByteBuffer buffer,int length);
+
     /** Query compact selection planes without writing either plane or retaining the direct address. */
     public static long selectionBounds(ByteBuffer buffer) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null

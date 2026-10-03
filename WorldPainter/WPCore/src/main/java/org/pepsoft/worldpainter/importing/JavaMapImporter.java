@@ -28,6 +28,7 @@ import java.util.*;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.LongAdder;
 
 import static java.lang.Boolean.TRUE;
 import static java.util.Collections.synchronizedMap;
@@ -52,6 +53,17 @@ import static org.pepsoft.worldpainter.util.ChunkUtils.skipChunk;
  * @author pepijn
  */
 public class JavaMapImporter extends MapImporter {
+    /** Optional worker time totals; these are not wall time when imports use multiple workers. */
+    public record ImportProfile(long chunks,long visitorNanos,long surfaceNanos,long writesNanos,long biomesNanos) { }
+    public static void resetImportProfile() {
+        PROFILE_CHUNKS.reset(); PROFILE_VISITOR.reset(); PROFILE_SURFACE.reset(); PROFILE_WRITES.reset(); PROFILE_BIOMES.reset();
+    }
+    public static ImportProfile importProfile() {
+        return new ImportProfile(PROFILE_CHUNKS.sum(),PROFILE_VISITOR.sum(),PROFILE_SURFACE.sum(),PROFILE_WRITES.sum(),PROFILE_BIOMES.sum());
+    }
+    private static final LongAdder PROFILE_CHUNKS=new LongAdder(), PROFILE_VISITOR=new LongAdder(),
+            PROFILE_SURFACE=new LongAdder(), PROFILE_WRITES=new LongAdder(), PROFILE_BIOMES=new LongAdder();
+
     public JavaMapImporter(Platform platform, TileFactory tileFactory, File levelDatFile, Set<MinecraftCoords> chunksToSkip, ReadOnlyOption readOnlyOption, Set<Integer> dimensionsToImport) {
         if ((tileFactory == null) || (levelDatFile == null) || (readOnlyOption == null) || (dimensionsToImport == null)) {
             throw new NullPointerException();
@@ -250,6 +262,7 @@ public class JavaMapImporter extends MapImporter {
         final BiomeScheme standardBiomes = getBiomeScheme(platform);
         final Set<Integer> unknownBiomes = synchronizedSet(new HashSet<>());
         final boolean importBiomes = platform.capabilities.contains(BIOMES) || platform.capabilities.contains(BIOMES_3D) || platform.capabilities.contains(NAMED_BIOMES);
+        final boolean profileImport=Boolean.getBoolean("welt.profile.mapImport");
         final Set<Integer> customNumberedBiomes = synchronizedSet(new HashSet<>());
         final Map<String, Integer> customNamedBiomes = synchronizedMap(new HashMap<>());
         final AtomicInteger nextCustomBiomeId = new AtomicInteger(FIRST_UNALLOCATED_ID);
@@ -264,6 +277,7 @@ public class JavaMapImporter extends MapImporter {
             if (! chunkStore.visitChunks(new ChunkVisitor() {
                 @Override
                 public boolean visitChunk(Chunk chunk) {
+                    final long visitStart=profileImport?System.nanoTime():0;
                     try {
                         if (progressReceiver != null) {
                             progressReceiver.setProgress((float) count.getAndIncrement() / total);
@@ -311,6 +325,7 @@ public class JavaMapImporter extends MapImporter {
                         try {
                             for (int xx = 0; xx < 16; xx++) {
                                 for (int zz = 0; zz < 16; zz++) {
+                                    final long surfaceStart=profileImport?System.nanoTime():0;
                                     float height = -Float.MAX_VALUE;
                                     int waterLevel = Integer.MIN_VALUE;
                                     boolean floodWithLava = false, frost = false;
@@ -374,6 +389,8 @@ public class JavaMapImporter extends MapImporter {
                                         }
                                     }
 
+                                    if(profileImport)PROFILE_SURFACE.add(System.nanoTime()-surfaceStart);
+                                    final long writesStart=profileImport?System.nanoTime():0;
                                     final int blockX = (chunkX << 4) | xx;
                                     final int blockY = (chunkZ << 4) | zz;
                                     final Point coords = new Point(blockX, blockY);
@@ -389,6 +406,8 @@ public class JavaMapImporter extends MapImporter {
                                     if (height == -Float.MAX_VALUE) {
                                         dimension.setBitLayerValueAt(org.pepsoft.worldpainter.layers.Void.INSTANCE, blockX, blockY, true);
                                     }
+                                    if(profileImport)PROFILE_WRITES.add(System.nanoTime()-writesStart);
+                                    final long biomesStart=profileImport?System.nanoTime():0;
                                     if (importBiomes) {
                                         int biome = 255;
                                         if (chunk.isBiomesAvailable()) {
@@ -460,6 +479,7 @@ public class JavaMapImporter extends MapImporter {
                                             }
                                         }
                                     }
+                                    if(profileImport)PROFILE_BIOMES.add(System.nanoTime()-biomesStart);
                                 }
                             }
                             newChunks.remove(new Point(chunkX << 4, chunkZ << 4));
@@ -481,6 +501,8 @@ public class JavaMapImporter extends MapImporter {
                         }
                     } catch (ProgressReceiver.OperationCancelled e) {
                         return false;
+                    } finally {
+                        if(profileImport){PROFILE_CHUNKS.increment();PROFILE_VISITOR.add(System.nanoTime()-visitStart);}
                     }
 
                     return true;

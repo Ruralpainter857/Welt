@@ -4742,3 +4742,25 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
         })
     }
 }
+
+/// Decode a complete MCA offset/timestamp header in one call, without retaining its address.
+/// # Safety
+/// The JVM supplies the environment and a direct buffer valid throughout the call.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeDecodeRegionHeader(
+    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if buffer.is_null() || !matches!(length,4096 | 8192) {return WeltError::IllegalArgument as jint;}
+            type Address=unsafe extern "system" fn(*mut JNIEnv,jobject)->*mut c_void;
+            type Capacity=unsafe extern "system" fn(*mut JNIEnv,jobject)->jlong;
+            let address:Address=std::mem::transmute(function(env,GET_DIRECT_BUFFER_ADDRESS));
+            let capacity:Capacity=std::mem::transmute(function(env,GET_DIRECT_BUFFER_CAPACITY));
+            let pointer=address(env,buffer);
+            if pointer.is_null() || capacity(env,buffer)<length as jlong {return WeltError::IllegalArgument as jint;}
+            let data=slice::from_raw_parts_mut(pointer.cast::<u8>(),length as usize);
+            if welt_nbt::region_header::decode(data) {WeltError::Ok as jint} else {WeltError::IllegalArgument as jint}
+        })
+    }
+}
