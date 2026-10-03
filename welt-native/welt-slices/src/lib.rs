@@ -1584,64 +1584,10 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 }
 
 fn unpack_fast_noise_lite_settings(packed: i32) -> (i32, i32, i32) {
-    if packed & 0x4000_0000 == 0 {
-        (packed, 0, 1)
-    } else {
-        (packed & 0xff, (packed >> 8) & 0xff, (packed >> 16) & 0xff)
-    }
+    welt_gen::height_map_program::unpack_fast_noise_lite_settings(packed)
 }
-
-fn decode_height_map_node(
-    opcode: i32,
-    value: f64,
-    scale: f64,
-    octaves: i32,
-    seed: i64,
-) -> Option<HeightMapNode> {
-    Some(match opcode {
-        0 => HeightMapNode::Constant(value),
-        1 => HeightMapNode::Noise {
-            d_height: value,
-            scale,
-            octaves,
-            effective_seed: seed,
-        },
-        13 => {
-            let (octaves, noise_type, fractal_type) = unpack_fast_noise_lite_settings(octaves);
-            HeightMapNode::FastNoiseLite {
-                height: value,
-                frequency: scale,
-                octaves,
-                effective_seed: seed,
-                noise_type,
-                fractal_type,
-            }
-        }
-        8 => HeightMapNode::Mandelbrot,
-        9 | 10 => HeightMapNode::Banded {
-            segment1_length: octaves,
-            segment1_end_height: value,
-            segment2_length: seed as i32,
-            segment2_end_height: scale,
-            smooth: opcode == 10,
-        },
-        11 => HeightMapNode::Shelving {
-            shelve_height: octaves,
-            shelve_strength: seed as i32,
-        },
-        12 => HeightMapNode::NinePatch {
-            inner_size: octaves,
-            border_size: seed as i32,
-            coast_size: scale as i32,
-            height: value,
-        },
-        2 => HeightMapNode::Add,
-        3 => HeightMapNode::Subtract,
-        4 => HeightMapNode::Multiply,
-        5 => HeightMapNode::Minimum,
-        6 => HeightMapNode::Maximum,
-        _ => return None,
-    })
+fn decode_height_map_node(opcode: i32, value: f64, scale: f64, octaves: i32, seed: i64) -> Option<HeightMapNode> {
+    welt_gen::height_map_program::decode_height_map_node(opcode, value, scale, octaves, seed)
 }
 
 #[derive(Default)]

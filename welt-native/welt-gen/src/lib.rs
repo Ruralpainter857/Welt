@@ -2,6 +2,7 @@
 
 pub mod fancy_theme;
 pub mod height_map_tree;
+pub mod height_map_program;
 pub mod height_map_slope;
 pub mod height_map_affine;
 pub mod height_map_displacement;

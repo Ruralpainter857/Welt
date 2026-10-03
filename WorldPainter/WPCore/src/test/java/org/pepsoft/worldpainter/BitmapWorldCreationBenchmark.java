@@ -24,7 +24,22 @@ public final class BitmapWorldCreationBenchmark {
         layers.put((x,y,z,l) -> z > 120 ? 200 : 255, Biome.INSTANCE);
         return new SimpleTheme(197, 62, terrain, layers, min, max, true, true);
     }
+    private static String sourceName() { return System.getProperty("welt.benchmark.creationSource", "bitmap"); }
+    static HeightMap proceduralMap(String source) {
+        HeightMap map = new SumHeightMap(new ConstantHeightMap(32), new SumHeightMap(
+                new NoiseHeightMap(100, 1.7, 4, 17), new NoiseHeightMap(60, .7, 3, -123)));
+        return switch(source) {
+            case "noise" -> map;
+            case "fnl" -> new SumHeightMap(new ConstantHeightMap(32), new FastNoiseLiteHeightMap(160, .7, 3, 17));
+            case "affine" -> new TransformingHeightMap("Creation", map, 1.7f, .65f, 31, -47, .37f);
+            case "slope" -> new SlopeHeightMap(map, 3.7f);
+            case "displacement" -> new DisplacementHeightMap("Creation", map,
+                    new NoiseHeightMap(Math.PI * 2, .9, 3, 177), new NoiseHeightMap(64, .5, 3, -321));
+            default -> throw new IllegalArgumentException("Unknown creation source");
+        };
+    }
     static HeightMap map() {
+        if (!sourceName().equals("bitmap")) return proceduralMap(sourceName());
         BufferedImage image = new BufferedImage(512, 512, BufferedImage.TYPE_USHORT_GRAY);
         for (int y=0;y<512;y++) for(int x=0;x<512;x++) image.getRaster().setSample(x,y,0,(x*193+y*79+x*y*13)&255);
         return new TransformingHeightMap("Creation",new BicubicHeightMap(BitmapHeightMap.build().withImage(image).now(),true),1.7f,.65f,31,-47,.37f);
@@ -38,13 +53,14 @@ public final class BitmapWorldCreationBenchmark {
     private static Result run(HeightMap map, boolean nativeMode) {
         System.setProperty(Native.GEN_KEY,Boolean.toString(nativeMode));
         System.setProperty("welt.native.bitmapGeneration", Boolean.toString(nativeMode));
+        System.setProperty("welt.native.proceduralGeneration", Boolean.toString(nativeMode));
         State state=fixture(map);
-        long callsBefore = HeightMapTileFactory.completedNativeBitmapTiles();
+        long callsBefore = HeightMapTileFactory.completedNativeGeneratedTiles();
         var bean=(com.sun.management.ThreadMXBean)ManagementFactory.getThreadMXBean();
         long before=bean.getThreadAllocatedBytes(Thread.currentThread().getId()),start=System.nanoTime();
         for(int y=-SIDE/2;y<SIDE/2;y++) for(int x=-SIDE/2;x<SIDE/2;x++) state.dimension.addTile(state.factory.createTile(x,y));
         long nanos=System.nanoTime()-start,allocated=bean.getThreadAllocatedBytes(Thread.currentThread().getId())-before;
-        long calls = HeightMapTileFactory.completedNativeBitmapTiles() - callsBefore;
+        long calls = HeightMapTileFactory.completedNativeGeneratedTiles() - callsBefore;
         if (nativeMode && calls != SIDE * SIDE) throw new AssertionError("Every generated tile must use the native transaction");
         return new Result(nanos,allocated,state,calls);
     }
@@ -79,12 +95,16 @@ public final class BitmapWorldCreationBenchmark {
                 if(trial>=0){javaTimes[trial]=j.nanos/1e6;rustTimes[trial]=r.nanos/1e6;ratios[trial]=(double)j.nanos/r.nanos;ja[trial]=j.allocated;ra[trial]=r.allocated;}
             }
             Arrays.sort(javaTimes);Arrays.sort(rustTimes);Arrays.sort(ratios);Arrays.sort(ja);Arrays.sort(ra);
-            System.out.printf(Locale.ROOT,"bitmapWorldCreation paired tiles=%d javaMs=%.3f rustMs=%.3f ratio=%.3f range=%.3f..%.3f javaAllocated=%d rustAllocated=%d checksum=%d nativeCalls=%d%n",SIDE*SIDE,javaTimes[4],rustTimes[4],ratios[4],ratios[0],ratios[8],ja[4],ra[4],checksum,nativeCalls);
+            System.out.printf(Locale.ROOT,"worldCreation source=%s paired tiles=%d javaMs=%.3f rustMs=%.3f ratio=%.3f range=%.3f..%.3f javaAllocated=%d rustAllocated=%d checksum=%d nativeCalls=%d%n",sourceName(),SIDE*SIDE,javaTimes[4],rustTimes[4],ratios[4],ratios[0],ratios[8],ja[4],ra[4],checksum,nativeCalls);
         } else {
             double[] times=new double[9];long[] allocated=new long[9]; long nativeCalls=0;
             for(int trial=-warmups;trial<9;trial++){Result result=run(map,nativeMode);checksum=hash(result.state);nativeCalls+=result.calls;if(trial>=0){times[trial]=result.nanos/1e6;allocated[trial]=result.allocated;}}
             Arrays.sort(times);Arrays.sort(allocated);
-            System.out.printf(Locale.ROOT,"bitmapWorldCreation mode=%s tiles=%d medianMs=%.3f allocatedBytes=%d checksum=%d nativeCalls=%d%n",nativeMode?"rust":"java",SIDE*SIDE,times[4],allocated[4],checksum,nativeCalls);
+            System.out.printf(Locale.ROOT,"worldCreation source=%s mode=%s tiles=%d medianMs=%.3f allocatedBytes=%d checksum=%d nativeCalls=%d%n",sourceName(),nativeMode?"rust":"java",SIDE*SIDE,times[4],allocated[4],checksum,nativeCalls);
+        }
+        if (Boolean.getBoolean("welt.native.generationProfile")) {
+            long[] p=HeightMapTileFactory.nativeGenerationProfile();
+            System.out.printf(Locale.ROOT,"generationProfile calls=%d preparationMs=%.3f nativeMs=%.3f applicationMs=%.3f%n",p[0],p[1]/1e6,p[2]/1e6,p[3]/1e6);
         }
     }
 }

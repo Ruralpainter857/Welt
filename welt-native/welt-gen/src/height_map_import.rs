@@ -1,4 +1,4 @@
-//! WHIM v1/v2/v3: factory initialization, image height conversion and both themes share
+//! WHIM v1/v2/v3/v4: factory initialization, image height conversion and both themes share
 //! one packed tile. Integers are little endian; cells are x + y * 128.
 //! The 256-byte header contains offsets into the frame, followed by 16-byte
 //! plane descriptors (kind, role, default, payload offset), image samples,
@@ -285,6 +285,7 @@ pub struct ImportScratch {
     factory: Theme,
     imported: Theme,
     heights: Vec<i32>,
+    procedural_samples: Vec<f64>,
     selected: Vec<bool>,
     terrains: Vec<u8>,
     border: Option<PerlinNoise>,
@@ -307,7 +308,7 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
     if d.len() < HEADER
         || d.len() > MAX_BYTES
         || word(d, 0) != 0x4d49_4857
-        || !(1..=3).contains(&word(d, 4))
+        || !(1..=4).contains(&word(d, 4))
         || word(d, 8) as usize != d.len()
         || word(d, 124) as usize != HEADER
         || d[if word(d, 4) == 1 { 208 } else { 212 }..HEADER]
@@ -321,7 +322,7 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
     let max = word(d, 20) as i32;
     let flags = word(d, 24);
     let fresh = flags & 1 != 0;
-    let factory_only = word(d, 4) == 3;
+    let factory_only = word(d, 4) >= 3;
     let raise = flags & 2 != 0;
     let void = flags & 4 != 0;
     let tall = i64::from(max) - i64::from(min) > 256;
@@ -401,7 +402,7 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
         }
         end = s.imported.read(d, imported, &planes[..n], beach)?;
     }
-    let source = if word(d, 4) >= 2 {
+    let source = if (2..=3).contains(&word(d, 4)) {
         if word(d, 208) as usize != end {
             return Err(bad);
         }
@@ -412,7 +413,11 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
             word(d, 44) as i32,
         )?)
     } else {
-        if end != d.len() {
+        if word(d, 4) == 4 {
+            if word(d, 208) as usize != end {
+                return Err(bad);
+            }
+        } else if end != d.len() {
             return Err(bad);
         }
         None
@@ -433,6 +438,13 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
     let y0 = word(d, 44) as i32;
     if factory_only && (long(d, meta + 8) != 7 || long(d, meta + 16) != 0) {
         return Err(bad);
+    }
+    if word(d, 4) == 4 {
+        s.procedural_samples.resize(AREA, 0.0);
+        crate::height_map_program::fill_source(d, end, &mut s.procedural_samples)?;
+        for (i, value) in s.procedural_samples.iter().enumerate() {
+            put_long(d, samples + i * 8, value.to_bits());
+        }
     }
     if let Some(source) = source {
         for y in 0..128 {
@@ -724,6 +736,59 @@ mod tests {
             number(&mut data, source + 112 + i * 8, (i * 31 % 256) as f64);
         }
         data
+    }
+    fn procedural_frame() -> Vec<u8> {
+        let mut data = factory_frame();
+        let source = word(&data, 208) as usize;
+        data.truncate(source);
+        data.resize(source + 160, 0);
+        let size = data.len();
+        put(&mut data, 4, 4);
+        put(&mut data, 8, size as u32);
+        for (p, value) in [
+            (0, 0x50475457),
+            (4, 1),
+            (8, 160),
+            (12, 1),
+            (28, 128),
+            (32, 128),
+        ] {
+            put(&mut data, source + p, value);
+        }
+        number(&mut data, source + 136, 93.125);
+        data
+    }
+    #[test]
+    fn procedural_generation_preserves_quantisation_and_rejects_invalid_programs_atomically() {
+        let valid = procedural_frame();
+        let meta = word(&valid, 120) as usize;
+        let source = word(&valid, 208) as usize;
+        let mut data = valid.clone();
+        import(&mut data, &mut ImportScratch::default()).unwrap();
+        for i in 0..AREA {
+            assert_eq!(word(&data, meta + 32 + i * 4), 93 * 256 + 32);
+            assert_eq!(word(&data, meta + 32 + AREA * 4 + i * 4), 62);
+        }
+        for (p, value) in [
+            (source, 0),
+            (source + 4, 2),
+            (source + 8, 159),
+            (source + 12, 65),
+            (source + 16, 4),
+            (source + 20, 16777216),
+            (source + 28, 127),
+            (source + 40, 1),
+            (source + 128, 99),
+        ] {
+            let mut invalid = valid.clone();
+            put(&mut invalid, p, value);
+            let before = invalid.clone();
+            assert_eq!(
+                import(&mut invalid, &mut ImportScratch::default()),
+                Err(WeltError::IllegalArgument)
+            );
+            assert_eq!(invalid, before);
+        }
     }
     #[test]
     fn factory_only_sampling_quantisation_and_stochastic_theme_share_the_tile() {

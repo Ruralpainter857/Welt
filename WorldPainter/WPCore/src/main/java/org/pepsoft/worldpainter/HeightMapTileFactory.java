@@ -134,7 +134,50 @@ public class HeightMapTileFactory extends AbstractTileFactory {
     }
 
     /** Successful factory-only native transactions on the calling worker. */
-    public static long completedNativeBitmapTiles() { return BitmapTileGenerationAccess.completed(); }
+    public static long completedNativeBitmapTiles() { return NativeTileGenerationAccess.completedBitmap(); }
+    public static long completedNativeGeneratedTiles() { return NativeTileGenerationAccess.completed(); }
+
+    /** Worker totals: successful tiles, preparation, native transaction and application nanoseconds. */
+    public static long[] nativeGenerationProfile() { return NativeTileGenerationAccess.profile(); }
+
+    static ProceduralTileSource prepareProceduralSource(HeightMap map, int x, int y) {
+        GenerationBuffers b = GENERATION_BUFFERS.get();
+        int mode = 0;
+        float scaling = 0;
+        double[] matrix = null;
+        if (map.getClass() == DisplacementHeightMap.class) {
+            DisplacementHeightMap displacement = (DisplacementHeightMap) map;
+            if (!b.prepareHeightMapProgramPair(displacement.getAngleMap(), displacement.getDistanceMap())
+                    || !b.appendHeightMapNode(displacement.getBaseHeightMap())) return null;
+            mode = 3;
+        } else {
+            if (map.getClass() == TransformingHeightMap.class) {
+                TransformingHeightMap transform = (TransformingHeightMap) map;
+                if (transform.getScaleX() == 1 && transform.getScaleY() == 1 && transform.getRotation() == 0) {
+                    long px = (long) x - transform.getOffsetX(), py = (long) y - transform.getOffsetY();
+                    if (px < -16777216 || py < -16777216 || px + 127 > 16777216 || py + 127 > 16777216) return null;
+                    x = (int) px; y = (int) py;
+                } else {
+                    mode = 1;
+                    matrix = b.previewAffineMatrix;
+                    createTransformingHeightMapTransform(transform).getMatrix(matrix);
+                }
+                map = transform.getBaseHeightMap();
+            } else if (map.getClass() == SlopeHeightMap.class) {
+                mode = 2;
+                scaling = ((SlopeHeightMap) map).getVerticalScaling();
+                map = ((SlopeHeightMap) map).getBaseHeightMap();
+            }
+            if (!b.prepareHeightMapProgram(map)) return null;
+        }
+        int margin = mode == 2 ? 1 : 0;
+        if ((long) x - margin < -16777216 || (long) y - margin < -16777216
+                || (long) x + 127 + margin > 16777216 || (long) y + 127 + margin > 16777216
+                || b.heightMapNodeCount > 64 || (b.heightMapNinePatchCount != 0 && !Native.isNinePatchGenEnabled())) return null;
+        return new ProceduralTileSource(mode, x, y, scaling, matrix, b.heightMapFirstNodeCount,
+                b.heightMapSecondNodeCount, b.heightMapNodeCount, b.heightMapOpcodes, b.heightMapValues,
+                b.heightMapScales, b.heightMapOctaves, b.heightMapSeeds);
+    }
 
     @Override
     public Tile createTile(int tileX, int tileY) {
@@ -143,7 +186,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         tile.inhibitEvents();
         final int worldTileX = tileX * TILE_SIZE, worldTileY = tileY * TILE_SIZE;
         try {
-            if (BitmapTileGenerationAccess.fill(this, tile, tileX, tileY)) return tile;
+            if (NativeTileGenerationAccess.fill(this, tile, tileX, tileY)) return tile;
             final TransformingHeightMap translatedHeightMap = getBatchSafeTranslation(heightMap);
             final HeightMap batchHeightMap = (translatedHeightMap != null)
                     ? translatedHeightMap.getBaseHeightMap() : heightMap;
