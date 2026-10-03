@@ -1,4 +1,4 @@
-//! WHIM v1/v2/v3/v4: factory initialization, image height conversion and both themes share
+//! WHIM v1/v2/v3/v4/v5: factory initialization, image height conversion and both themes share
 //! one packed tile. Integers are little endian; cells are x + y * 128.
 //! The 256-byte header contains offsets into the frame, followed by 16-byte
 //! plane descriptors (kind, role, default, payload offset), image samples,
@@ -282,6 +282,7 @@ impl TileState {
 /// Retained by the JNI worker; all per-cell arrays and theme caches are reused.
 #[derive(Default)]
 pub struct ImportScratch {
+    fancy: crate::fancy_generation::Scratch,
     factory: Theme,
     imported: Theme,
     heights: Vec<i32>,
@@ -304,6 +305,9 @@ fn quantised(raw: u32, min: i32) -> i32 {
 }
 /// Validate the whole frame before editing planes or advancing the Java RNG.
 pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
+    if d.len() >= HEADER && word(d, 4) == 5 {
+        return crate::fancy_generation::fill(d, &mut s.fancy);
+    }
     let bad = WeltError::IllegalArgument;
     if d.len() < HEADER
         || d.len() > MAX_BYTES
@@ -440,6 +444,9 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
         return Err(bad);
     }
     if word(d, 4) == 4 {
+        if end + 128 > d.len() || word(d, end + 28) != 128 || word(d, end + 32) != 128 {
+            return Err(bad);
+        }
         s.procedural_samples.resize(AREA, 0.0);
         crate::height_map_program::fill_source(d, end, &mut s.procedural_samples)?;
         for (i, value) in s.procedural_samples.iter().enumerate() {

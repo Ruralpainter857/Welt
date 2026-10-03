@@ -135,17 +135,37 @@ public class HeightMapTileFactory extends AbstractTileFactory {
 
     /** Successful factory-only native transactions on the calling worker. */
     public static long completedNativeBitmapTiles() { return NativeTileGenerationAccess.completedBitmap(); }
+    public static long completedNativeFancyTiles() { return NativeFancyGenerationAccess.completed(); }
     public static long completedNativeGeneratedTiles() { return NativeTileGenerationAccess.completed(); }
 
     /** Worker totals: successful tiles, preparation, native transaction and application nanoseconds. */
     public static long[] nativeGenerationProfile() { return NativeTileGenerationAccess.profile(); }
 
     static ProceduralTileSource prepareProceduralSource(HeightMap map, int x, int y) {
+        return prepareProceduralSource(map, x, y, 128, 128);
+    }
+
+    static ProceduralTileSource prepareProceduralSource(HeightMap map, int x, int y, int width, int height) {
+        if (map == null || width < 1 || height < 1 || width > 256 || height > 256) return null;
         GenerationBuffers b = GENERATION_BUFFERS.get();
-        int mode = 0;
+        int mode = 0, third = 0, order = 0;
         float scaling = 0;
         double[] matrix = null;
-        if (map.getClass() == DisplacementHeightMap.class) {
+        if (map.getClass() == MaximisingHeightMap.class
+                && ((((MaximisingHeightMap)map).getHeightMap1().getClass() == DisplacementHeightMap.class)
+                != (((MaximisingHeightMap)map).getHeightMap2().getClass() == DisplacementHeightMap.class))) {
+            MaximisingHeightMap maximum = (MaximisingHeightMap) map;
+            boolean displacedFirst = maximum.getHeightMap1().getClass() == DisplacementHeightMap.class;
+            DisplacementHeightMap displacement = (DisplacementHeightMap)(displacedFirst ? maximum.getHeightMap1() : maximum.getHeightMap2());
+            HeightMap other = displacedFirst ? maximum.getHeightMap2() : maximum.getHeightMap1();
+            if (!b.prepareHeightMapProgramPair(displacement.getAngleMap(), displacement.getDistanceMap())) return null;
+            int before = b.heightMapNodeCount;
+            if (!b.appendHeightMapNode(displacement.getBaseHeightMap())) return null;
+            third = b.heightMapNodeCount - before;
+            if (!b.appendHeightMapNode(other)) return null;
+            order = displacedFirst ? 1 : 0;
+            mode = 4;
+        } else if (map.getClass() == DisplacementHeightMap.class) {
             DisplacementHeightMap displacement = (DisplacementHeightMap) map;
             if (!b.prepareHeightMapProgramPair(displacement.getAngleMap(), displacement.getDistanceMap())
                     || !b.appendHeightMapNode(displacement.getBaseHeightMap())) return null;
@@ -155,7 +175,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 TransformingHeightMap transform = (TransformingHeightMap) map;
                 if (transform.getScaleX() == 1 && transform.getScaleY() == 1 && transform.getRotation() == 0) {
                     long px = (long) x - transform.getOffsetX(), py = (long) y - transform.getOffsetY();
-                    if (px < -16777216 || py < -16777216 || px + 127 > 16777216 || py + 127 > 16777216) return null;
+                    if (px < -16777216 || py < -16777216 || px + width - 1L > 16777216 || py + height - 1L > 16777216) return null;
                     x = (int) px; y = (int) py;
                 } else {
                     mode = 1;
@@ -172,10 +192,10 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         }
         int margin = mode == 2 ? 1 : 0;
         if ((long) x - margin < -16777216 || (long) y - margin < -16777216
-                || (long) x + 127 + margin > 16777216 || (long) y + 127 + margin > 16777216
+                || (long) x + width - 1L + margin > 16777216 || (long) y + height - 1L + margin > 16777216
                 || b.heightMapNodeCount > 64 || (b.heightMapNinePatchCount != 0 && !Native.isNinePatchGenEnabled())) return null;
-        return new ProceduralTileSource(mode, x, y, scaling, matrix, b.heightMapFirstNodeCount,
-                b.heightMapSecondNodeCount, b.heightMapNodeCount, b.heightMapOpcodes, b.heightMapValues,
+        return new ProceduralTileSource(mode, x, y, width, height, scaling, matrix, b.heightMapFirstNodeCount,
+                b.heightMapSecondNodeCount, third, order, b.heightMapNodeCount, b.heightMapOpcodes, b.heightMapValues,
                 b.heightMapScales, b.heightMapOctaves, b.heightMapSeeds);
     }
 

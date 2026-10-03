@@ -6,13 +6,13 @@ import java.nio.ByteOrder;
 /** Immutable WTGP v1 snapshot; intermediate source planes remain in Rust. */
 final class ProceduralTileSource {
     private final byte[] packet;
-    ProceduralTileSource(int mode, int x, int y, float scaling, double[] matrix, int first, int second,
+    ProceduralTileSource(int mode, int x, int y, int width, int height, float scaling, double[] matrix, int first, int second, int third, int order,
                          int count, int[] opcodes, double[] values, double[] scales, int[] octaves, long[] seeds) {
         packet = new byte[128 + count * 32];
         ByteBuffer b = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN);
         b.putInt(0, 0x50475457).putInt(4, 1).putInt(8, packet.length).putInt(12, count)
-                .putInt(16, mode).putInt(20, x).putInt(24, y).putInt(28, 128).putInt(32, 128)
-                .putInt(40, first).putInt(44, second).putFloat(48, scaling);
+                .putInt(16, mode).putInt(20, x).putInt(24, y).putInt(28, width).putInt(32, height)
+                .putInt(40, first).putInt(44, second).putFloat(48, scaling).putInt(52, third).putInt(56, order);
         if (matrix != null) for (int i = 0; i < 6; i++) b.putDouble(64 + i * 8, matrix[i]);
         for (int i = 0; i < count; i++) {
             int p = 128 + i * 32;

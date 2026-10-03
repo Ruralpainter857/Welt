@@ -52,7 +52,7 @@ pub fn fill_affine_height_map_tree(
         .ok_or(HeightMapTreeError::AreaOverflow)?;
     if width == 0
         || height == 0
-        || area > 16384
+        || area > 256 * 256
         || shift > 31
         || matrix.iter().any(|v| !v.is_finite())
     {

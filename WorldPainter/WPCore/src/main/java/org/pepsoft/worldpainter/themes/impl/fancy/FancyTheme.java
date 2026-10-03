@@ -47,6 +47,16 @@ public class FancyTheme implements Theme, Cloneable {
         snowLayer.setEdgeShape(GroundCoverLayer.EdgeShape.SMOOTH);
     }
 
+    /** Inputs for one complete fresh-tile transaction; callers snapshot map programs immediately. */
+    public final GenerationPlan prepareNativeGeneration() {
+        if (!supportsFreshTileBatch()) return null;
+        return new GenerationPlan(java.util.List.of(heightMap, temperatureMap, humidityMap, forestMap, randomNoiseMap),
+                java.util.List.of(Jungle.INSTANCE, SwampLand.INSTANCE, DeciduousForest.INSTANCE, PineForest.INSTANCE, Frost.INSTANCE, snowLayer),
+                waterHeight, desertMaxHeight, baseTerrain.ordinal(), terrainDirtAndGravel.ordinal(), terrainStoneAndGravel.ordinal());
+    }
+    public record GenerationPlan(java.util.List<HeightMap> sources, java.util.List<Layer> layers,
+                                 int water, int desertHeight, int base, int dirt, int stone) { }
+
     @Override
     public void apply(Tile tile, int x, int y) {
         apply(tile, x, y, null);
@@ -375,14 +385,20 @@ public class FancyTheme implements Theme, Cloneable {
             return false;
         }
         final Class<?> type = map.getClass();
+        if (type == BitmapHeightMap.class) {
+            java.awt.image.BufferedImage image = ((BitmapHeightMap)map).getImage();
+            // Custom raster callbacks must keep the original per-cell evaluation order.
+            return image.getClass() == java.awt.image.BufferedImage.class
+                    && image.getRaster().getClass().getName().startsWith("sun.awt.image.")
+                    && image.getSampleModel().getClass().getName().startsWith("java.awt.image.");
+        }
+        if (type == BicubicHeightMap.class) return isPureHeightMap(((BicubicHeightMap)map).getHeightMap(0));
         if ((type == ConstantHeightMap.class)
                 || (type == NoiseHeightMap.class)
                 || (type == FastNoiseLiteHeightMap.class)
                 || (type == MandelbrotHeightMap.class)
                 || (type == BandedHeightMap.class)
-                || (type == NinePatchHeightMap.class)
-                || (type == BitmapHeightMap.class)
-                || (type == BicubicHeightMap.class)) {
+                || (type == NinePatchHeightMap.class)) {
             return true;
         }
         if ((type == SumHeightMap.class) || (type == DifferenceHeightMap.class)

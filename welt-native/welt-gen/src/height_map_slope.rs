@@ -27,7 +27,7 @@ pub fn fill_slope_height_map_tree(
     let area = width
         .checked_mul(height)
         .ok_or(HeightMapTreeError::AreaOverflow)?;
-    if width == 0 || height == 0 || area > 16384 || shift > 31 {
+    if width == 0 || height == 0 || area > 256 * 256 || shift > 31 {
         return Err(HeightMapTreeError::InvalidProgram);
     }
     if output.len() != area {

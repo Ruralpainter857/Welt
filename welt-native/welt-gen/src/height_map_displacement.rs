@@ -34,7 +34,7 @@ pub fn fill_displacement_height_map_tree(
         .ok_or(HeightMapTreeError::InvalidProgram)?;
     if width == 0
         || height == 0
-        || area > 16384
+        || area > 256 * 256
         || shift > 31
         || angle_count == 0
         || distance_count == 0

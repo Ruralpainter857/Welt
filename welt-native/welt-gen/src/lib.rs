@@ -1,5 +1,6 @@
 //! Welt - volet generation (wp-gen) - squelette Phase 0 (voir docs/welt/CHARTE-ORCHESTRATION.md).
 
+mod fancy_generation;
 pub mod fancy_theme;
 pub mod height_map_tree;
 pub mod height_map_program;

@@ -113,19 +113,22 @@ pub fn fill_fancy_theme_tile(
                 java_max(east_west, southeast_northwest),
             );
 
+            let height = tile_heights[index];
             let mut water_near = false;
-            'water: for dy in -(border as isize)..=border as isize {
-                let row = (center_y as isize + dy) as usize * neighborhood_width;
-                for dx in -(border as isize)..=border as isize {
-                    let sample = (center_x as isize + dx) as usize + row;
-                    if height_neighborhood[sample] < water_height as f32 {
-                        water_near = true;
-                        break 'water;
+            // Match Java's lazy shoreline branch; steep and inland cells need no water scan.
+            if !(slope > 1.5) && !(height < below_water_threshold) && height < above_water_threshold
+            {
+                'water: for dy in -(border as isize)..=border as isize {
+                    let row = (center_y as isize + dy) as usize * neighborhood_width;
+                    for dx in -(border as isize)..=border as isize {
+                        let sample = (center_x as isize + dx) as usize + row;
+                        if height_neighborhood[sample] < water_height as f32 {
+                            water_near = true;
+                            break 'water;
+                        }
                     }
                 }
             }
-
-            let height = tile_heights[index];
             let temperature = temperatures[index];
             let humidity = humidities[index];
             let forest = forest_values[index];
@@ -158,7 +161,7 @@ pub fn fill_fancy_theme_tile(
             };
             output[plane(index, 0)] = terrain;
 
-            if height > below_water_threshold && forest > 0.35 {
+            if !(slope > 2.0) && height > below_water_threshold && forest > 0.35 {
                 if temperature > 20.0 {
                     if humidity > 55.0 {
                         if height < above_water_threshold {
@@ -290,11 +293,20 @@ mod tests {
         neighborhood[center - side] = 74.0;
         let output = run_case(70.0, &neighborhood, -1.0, 60.0, 0.5);
         assert_eq!(output[0], STONE_GRAVEL);
-        assert_eq!(output[4], 8); // Forest layers are independent of steep-terrain selection.
+        assert_eq!(output[4], 0); // Java skips forests in the steep-terrain branch.
         assert_eq!(output[5], 1);
         assert_eq!(output[6], 0);
     }
 
+    #[test]
+    fn steep_slopes_do_not_add_forests_even_with_warm_humid_climate() {
+        let mut neighborhood = vec![80.0; 121];
+        neighborhood[5 * 11 + 4] = 75.0;
+        neighborhood[5 * 11 + 6] = 85.0;
+        let output = run_case(80.0, &neighborhood, 35.0, 70.0, 0.5);
+        assert_eq!(output[0], STONE_GRAVEL);
+        assert_eq!(&output[1..5], &[0, 0, 0, 0]);
+    }
     #[test]
     fn nan_slope_follows_java_comparison_branches() {
         let width = 1;

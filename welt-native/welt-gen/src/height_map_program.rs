@@ -4,6 +4,7 @@ use crate::height_map_displacement::fill_displacement_height_map_tree;
 use crate::height_map_slope::fill_slope_height_map_tree;
 use crate::height_map_tree::{fill_height_map_tree, HeightMapNode};
 use welt_core::error::WeltError;
+thread_local! { static MAXIMUM_SCRATCH: std::cell::RefCell<Vec<f64>> = const { std::cell::RefCell::new(Vec::new()) }; }
 pub fn unpack_fast_noise_lite_settings(packed: i32) -> (i32, i32, i32) {
     if packed & 0x4000_0000 == 0 {
         (packed, 0, 1)
@@ -86,14 +87,17 @@ pub(crate) fn fill_source(data: &[u8], base: usize, output: &mut [f64]) -> Resul
     }
     let count = word(data, base + 12) as usize;
     let mode = word(data, base + 16);
+    let width = word(data, base + 28) as usize;
+    let height = word(data, base + 32) as usize;
     if !(1..=64).contains(&count)
-        || !(0..=3).contains(&mode)
+        || !(0..=4).contains(&mode)
         || word(data, base + 8) as usize != 128 + count * 32
         || data.len() - base != 128 + count * 32
-        || word(data, base + 28) != 128
-        || word(data, base + 32) != 128
+        || !(1..=256).contains(&width)
+        || !(1..=256).contains(&height)
+        || width.checked_mul(height) != Some(output.len())
         || word(data, base + 36) != 0
-        || data[base + 52..base + 64]
+        || data[base + 60..base + 64]
             .iter()
             .chain(data[base + 112..base + 128].iter())
             .any(|v| *v != 0)
@@ -103,14 +107,21 @@ pub(crate) fn fill_source(data: &[u8], base: usize, output: &mut [f64]) -> Resul
     let x = word(data, base + 20);
     let y = word(data, base + 24);
     let margin = i64::from(mode == 2);
-    for origin in [x, y] {
-        if i64::from(origin) - margin < -16777216 || i64::from(origin) + 127 + margin > 16777216 {
+    for (origin, extent) in [(x, width), (y, height)] {
+        if i64::from(origin) - margin < -16777216
+            || i64::from(origin) + extent as i64 - 1 + margin > 16777216
+        {
             return Err(bad);
         }
     }
     let first = word(data, base + 40) as usize;
     let second = word(data, base + 44) as usize;
-    if mode != 3 && (first != 0 || second != 0) {
+    let third = word(data, base + 52) as usize;
+    let order = word(data, base + 56);
+    if mode != 4 && (third != 0 || order != 0) {
+        return Err(bad);
+    }
+    if mode != 3 && mode != 4 && (first != 0 || second != 0) {
         return Err(bad);
     }
     let mut nodes = [HeightMapNode::Constant(0.0); 64];
@@ -127,22 +138,77 @@ pub(crate) fn fill_source(data: &[u8], base: usize, output: &mut [f64]) -> Resul
     }
     let nodes = &nodes[..count];
     let result = match mode {
-        0 => fill_height_map_tree(nodes, x, y, 128, 128, output),
+        0 => fill_height_map_tree(nodes, x, y, width, height, output),
         1 => {
             let matrix = std::array::from_fn(|i| number(data, base + 64 + i * 8));
-            fill_affine_height_map_tree(nodes, x, y, 128, 128, 0, &matrix, output)
+            fill_affine_height_map_tree(nodes, x, y, width, height, 0, &matrix, output)
         }
         2 => fill_slope_height_map_tree(
             nodes,
             x,
             y,
-            128,
-            128,
+            width,
+            height,
             0,
             f32::from_bits(word(data, base + 48) as u32),
             output,
         ),
-        3 => fill_displacement_height_map_tree(nodes, first, second, x, y, 128, 128, 0, output),
+        3 => {
+            fill_displacement_height_map_tree(nodes, first, second, x, y, width, height, 0, output)
+        }
+        4 => {
+            let split = first
+                .checked_add(second)
+                .and_then(|v| v.checked_add(third))
+                .ok_or(bad)?;
+            if first == 0
+                || second == 0
+                || third == 0
+                || split >= count
+                || !(0..=1).contains(&order)
+            {
+                return Err(bad);
+            }
+            MAXIMUM_SCRATCH.with(|cell| {
+                let mut displaced = cell.borrow_mut();
+                displaced.resize(output.len(), 0.0);
+                fill_displacement_height_map_tree(
+                    &nodes[..split],
+                    first,
+                    second,
+                    x,
+                    y,
+                    width,
+                    height,
+                    0,
+                    &mut displaced,
+                )?;
+                fill_height_map_tree(&nodes[split..], x, y, width, height, output)?;
+                for (other, displaced) in output.iter_mut().zip(displaced.iter()) {
+                    let (left, right) = if order == 1 {
+                        (*displaced, *other)
+                    } else {
+                        (*other, *displaced)
+                    };
+                    *other = if left.is_nan() {
+                        left
+                    } else if right.is_nan() {
+                        right
+                    } else if left == 0.0 && right == 0.0 {
+                        if left.is_sign_negative() {
+                            right
+                        } else {
+                            left
+                        }
+                    } else if left >= right {
+                        left
+                    } else {
+                        right
+                    };
+                }
+                Ok(())
+            })
+        }
         _ => unreachable!(),
     };
     result.map_err(|_| bad)

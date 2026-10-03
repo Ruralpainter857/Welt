@@ -13,13 +13,15 @@ final class NativeTileGenerationAccess {
     private static final ThreadLocal<Worker> WORKERS = ThreadLocal.withInitial(Worker::new);
     private static final class Worker { ByteBuffer data; long completed, completedBitmap, preparationNanos, nativeNanos, applicationNanos; }
     static long completedBitmap() { return WORKERS.get().completedBitmap; }
-    static long completed() { return WORKERS.get().completed; }
-    static long[] profile() { Worker w = WORKERS.get(); return new long[]{w.completed, w.preparationNanos, w.nativeNanos, w.applicationNanos}; }
+    static long completed() { return WORKERS.get().completed + NativeFancyGenerationAccess.completed(); }
+    static long[] profile() { Worker w = WORKERS.get(); long[] p=NativeFancyGenerationAccess.profile(); return new long[]{w.completed+p[0], w.preparationNanos+p[1], w.nativeNanos+p[2], w.applicationNanos+p[3]}; }
 
     static boolean fill(HeightMapTileFactory factory, Tile tile, int tx, int ty) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
-                || factory.getClass() != HeightMapTileFactory.class || factory.isFloodWithLava()
-                || factory.getTheme().getClass() != SimpleTheme.class) return false;
+                || factory.getClass() != HeightMapTileFactory.class || factory.isFloodWithLava()) return false;
+        if (factory.getTheme().getClass() == org.pepsoft.worldpainter.themes.impl.fancy.FancyTheme.class)
+            return NativeFancyGenerationAccess.fill(factory, tile, tx, ty);
+        if (factory.getTheme().getClass() != SimpleTheme.class) return false;
         boolean profiling = Boolean.getBoolean("welt.native.generationProfile");
         long started = profiling ? System.nanoTime() : 0;
         long x = (long) tx * 128, y = (long) ty * 128;
