@@ -1,5 +1,6 @@
 package org.pepsoft.worldpainter;
 
+import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
 import java.util.HashSet;
@@ -72,6 +73,85 @@ public class ViewportRenderParityTest {
             }
         } finally { restore(Native.GEN_KEY, gen); restore(Native.RENDER_KEY, render); restore("welt.native.viewport", flag); }
     }
+    @Test public void customPaintPreservesOpacityPatternsAndGlobalCoordinates() {
+        BufferedImage alpha = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB_PRE);
+        BufferedImage tall = new BufferedImage(5, 9, BufferedImage.TYPE_INT_RGB);
+        for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++)
+            alpha.setRGB(x, y, ((x + y) % 4 * 85 << 24) | (x * 17 << 16) | (y * 17 << 8) | 0x39);
+        for (int y = 0; y < 9; y++) for (int x = 0; x < 5; x++) tall.setRGB(x, y, x * 16384 + y * 257);
+        for (Object paint : new Object[] {new Color(0x17395b), alpha, tall})
+            for (float opacity : new float[] {0, .37f, 1, Float.NaN}) customPaintPair(paint, opacity, true);
+        customPaintPair(new BufferedImage(257, 257, BufferedImage.TYPE_INT_RGB), .65f, false);
+    }
+    private static void customPaintPair(Object paint, float opacity, boolean supported) {
+        String gen = System.getProperty(Native.GEN_KEY), render = System.getProperty(Native.RENDER_KEY), flag = System.getProperty("welt.native.viewport");
+        try {
+            System.setProperty(Native.GEN_KEY, "false"); Dimension d = fixture(true, false);
+            CustomLayer nibble = new CustomLayer("Paint nibble", "Parity", Layer.DataSize.NIBBLE, 101, paint) { };
+            CustomLayer bit = new CustomLayer("Paint bit", "Parity", Layer.DataSize.BIT, 102, paint) { };
+            CustomLayer chunk = new CustomLayer("Paint chunk", "Parity", Layer.DataSize.BIT_PER_CHUNK, 103, paint) { };
+            nibble.setOpacity(opacity); bit.setOpacity(opacity); chunk.setOpacity(opacity);
+            for (Tile tile : d.getTiles()) {
+                tile.inhibitEvents();
+                try { for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++) {
+                    tile.setLayerValue(nibble, x, y, (x + y * 3) & 15);
+                    tile.setBitLayerValue(bit, x, y, ((x * 3 + y) & 7) == 0);
+                    tile.setBitLayerValue(chunk, x, y, (x / 16 + y / 16) % 3 == 0);
+                } } finally { tile.releaseEvents(); }
+            }
+            for (TileRenderer.LightOrigin light : TileRenderer.LightOrigin.values()) {
+                TileRenderer java = new TileRenderer(d, ColourScheme.DEFAULT, new CustomBiomeManager(), 0, true, null);
+                TileRenderer rust = new TileRenderer(d, ColourScheme.DEFAULT, new CustomBiomeManager(), 0, true, null);
+                java.setLightOrigin(light); rust.setLightOrigin(light);
+                BufferedImage expected = new BufferedImage(250, 252, BufferedImage.TYPE_INT_ARGB);
+                BufferedImage actual = new BufferedImage(250, 252, BufferedImage.TYPE_INT_ARGB);
+                for (Tile tile : d.getTiles()) {
+                    int dx = ((tile.getX() + 1) << 7) - 8, dy = ((tile.getY() + 1) << 7) - 4;
+                    System.setProperty(Native.RENDER_KEY, "false"); java.renderTile(tile, expected, dx, dy);
+                    System.setProperty(Native.RENDER_KEY, "true"); System.setProperty("welt.native.viewport", "true"); rust.renderTile(tile, actual, dx, dy);
+                }
+                assertArrayEquals("Custom paint opacity=" + opacity + " light=" + light,
+                        ((DataBufferInt) expected.getRaster().getDataBuffer()).getData(), ((DataBufferInt) actual.getRaster().getDataBuffer()).getData());
+                assertEquals(supported ? 4L : 0L, rust.completedNativeViewportTiles());
+            }
+        } finally { restore(Native.GEN_KEY, gen); restore(Native.RENDER_KEY, render); restore("welt.native.viewport", flag); }
+    }
+
+    @Test public void rendererSnapshotsAndWideTextureFailureStayJavaCompatible() {
+        String gen = System.getProperty(Native.GEN_KEY), render = System.getProperty(Native.RENDER_KEY), flag = System.getProperty("welt.native.viewport");
+        try {
+            System.setProperty(Native.GEN_KEY, "false"); Dimension d = fixture(false, false);
+            BufferedImage image = new BufferedImage(4, 4, BufferedImage.TYPE_INT_ARGB);
+            for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) image.setRGB(x, y, 0xff17395b);
+            CustomLayer layer = new CustomLayer("Snapshot", "Parity", Layer.DataSize.NIBBLE, 101, image) { };
+            for (Tile tile : d.getTiles()) for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++) tile.setLayerValue(layer, x, y, 15);
+            TileRenderer java = new TileRenderer(d, ColourScheme.DEFAULT, new CustomBiomeManager(), 0, true, null);
+            TileRenderer rust = new TileRenderer(d, ColourScheme.DEFAULT, new CustomBiomeManager(), 0, true, null);
+            BufferedImage expected = new BufferedImage(256, 256, BufferedImage.TYPE_INT_ARGB), actual = new BufferedImage(256, 256, BufferedImage.TYPE_INT_ARGB);
+            for (int pass = 0; pass < 2; pass++) {
+                for (Tile tile : d.getTiles()) {
+                    int dx = (tile.getX() + 1) << 7, dy = (tile.getY() + 1) << 7;
+                    System.setProperty(Native.RENDER_KEY, "false"); java.renderTile(tile, expected, dx, dy);
+                    System.setProperty(Native.RENDER_KEY, "true"); System.setProperty("welt.native.viewport", "true"); rust.renderTile(tile, actual, dx, dy);
+                }
+                assertArrayEquals(((DataBufferInt) expected.getRaster().getDataBuffer()).getData(), ((DataBufferInt) actual.getRaster().getDataBuffer()).getData());
+                org.pepsoft.worldpainter.layers.renderers.PaintRenderer snapshot = (org.pepsoft.worldpainter.layers.renderers.PaintRenderer) layer.getRenderer();
+                snapshot.getRed()[0] = 255; snapshot.getAlpha()[1] = Float.NaN;
+                image.setRGB(2, 2, 0xffabcdef);
+            }
+            assertEquals(8L, rust.completedNativeViewportTiles());
+            for (boolean nativeMode : new boolean[] {false, true}) {
+                System.setProperty(Native.RENDER_KEY, Boolean.toString(nativeMode));
+                TileRenderer renderer = new TileRenderer(d, ColourScheme.DEFAULT, new CustomBiomeManager(), 0, true, null);
+                try {
+                    new CustomLayer("Wide", "Original failure", Layer.DataSize.NIBBLE, 102,
+                            new BufferedImage(8, 4, BufferedImage.TYPE_INT_RGB)) { };
+                    fail("Wide PaintRenderer construction must retain its original indexing failure");
+                } catch (ArrayIndexOutOfBoundsException expectedFailure) { assertEquals(0L, renderer.completedNativeViewportTiles()); }
+            }
+        } finally { restore(Native.GEN_KEY, gen); restore(Native.RENDER_KEY, render); restore("welt.native.viewport", flag); }
+    }
+
     private static Dimension fixture(boolean masks, boolean unsupported) {
         Platform p = DefaultPlugin.JAVA_ANVIL_1_19;
         TileFactory factory = TileFactoryFactory.createFlatTileFactory(17L, Terrain.GRASS, p.minZ, p.standardMaxHeight, 62, 62, false, false);

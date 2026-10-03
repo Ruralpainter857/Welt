@@ -1,5 +1,6 @@
 package org.pepsoft.worldpainter;
 
+import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
 import java.lang.management.ManagementFactory;
@@ -23,7 +24,9 @@ public final class TileViewportBenchmark {
         boolean nativeShade = fused || args.length > 0 && args[0].equals("shade");
         Setup setup = fixture(); select(nativeShade);
         long[] times = new long[9], allocations = new long[9];
-        for (int sample = -5; sample < 9; sample++) {
+        int warmups = Integer.getInteger("welt.benchmark.viewportWarmups", 5);
+        if (warmups < 5 || warmups > 100) throw new IllegalArgumentException("Viewport warmups must be between 5 and 100");
+        for (int sample = -warmups; sample < 9; sample++) {
             Sample result = redraw(setup);
             if (sample >= 0) { times[sample] = result.nanos; allocations[sample] = result.allocated; }
         }
@@ -32,7 +35,7 @@ public final class TileViewportBenchmark {
                 .filter(pool -> pool.getName().equals("direct")).mapToLong(java.lang.management.BufferPoolMXBean::getMemoryUsed).sum();
         System.out.printf("viewport mode=%s threeFullRedraws medianMs=%.3f allocatedBytes=%d directBytes=%d checksum=%d nativeTiles=%d%n",
                 fused ? "fused" : nativeShade ? "shade" : "java", times[4] / 1e6, allocations[4], direct, checksum, setup.renderer.completedNativeViewportTiles());
-        if (fused && setup.renderer.completedNativeViewportTiles() != 14L * 3 * setup.tiles.length)
+        if (fused && setup.renderer.completedNativeViewportTiles() != ((long) warmups + 9) * 3 * setup.tiles.length)
             throw new AssertionError("Every tile redraw must use the fused path");
     }
     private static void select(boolean nativeShade) {
@@ -48,6 +51,16 @@ public final class TileViewportBenchmark {
         Dimension d = new Dimension(new World2(p, p.minZ, p.standardMaxHeight), "Surface", 17L, factory, Dimension.Anchor.NORMAL_DETAIL);
         Terrain[] terrains = {Terrain.GRASS, Terrain.SAND, Terrain.DIRT, Terrain.STONE};
         boolean indexed = Boolean.getBoolean("welt.benchmark.viewportIndexed");
+        boolean custom = Boolean.getBoolean("welt.benchmark.viewportCustomPaint");
+        CustomLayer solid = custom ? new CustomLayer("Solid", "Custom paint fixture", Layer.DataSize.NIBBLE, 101, new Color(0x17395b)) { } : null;
+        if (custom) solid.setOpacity(.37f);
+        BufferedImage pattern = custom ? new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB_PRE) : null;
+        if (custom) for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++)
+            pattern.setRGB(x, y, ((x + y) % 4 * 85 << 24) | ((x * 17) << 16) | ((y * 17) << 8) | 0x39);
+        CustomLayer textured = custom ? new CustomLayer("Texture", "Custom paint fixture", Layer.DataSize.NIBBLE, 102, pattern) { } : null;
+        if (custom) textured.setOpacity(.65f);
+        CustomLayer bitPaint = custom ? new CustomLayer("Bit paint", "Custom paint fixture", Layer.DataSize.BIT, 103, pattern) { } : null;
+        if (custom) bitPaint.setOpacity(.73f);
         int[] biomes = {1, 4, 6, 21, 255};
         Tile[] tiles = new Tile[16]; int next = 0;
         for (int ty = -2; ty < 2; ty++) for (int tx = -2; tx < 2; tx++) {
@@ -63,6 +76,11 @@ public final class TileViewportBenchmark {
                 tile.setBitLayerValue(Frost.INSTANCE, x, y, ((x + y) & 7) == 0);
                 tile.setBitLayerValue(ReadOnly.INSTANCE, x, y, (x / 16 + y / 16) % 7 == 0);
                 tile.setBitLayerValue(FloodWithLava.INSTANCE, x, y, x < 32 && y < 32);
+                if (custom) {
+                    tile.setLayerValue(solid, x, y, (x + y * 3) & 15);
+                    tile.setLayerValue(textured, x, y, (x * 7 + y) & 15);
+                    tile.setBitLayerValue(bitPaint, x, y, ((x * 3 + y * 5) & 7) == 0);
+                }
                 if (indexed) {
                     tile.setLayerValue(Biome.INSTANCE, x, y, biomes[(x / 16 + y / 16) % biomes.length]);
                     tile.setLayerValue(Annotations.INSTANCE, x, y, (x + y * 3) & 15);
@@ -89,7 +107,9 @@ public final class TileViewportBenchmark {
         Setup java = fixture(), shade = fixture();
         double[] jt = new double[9], rt = new double[9], ratios = new double[9];
         long[] ja = new long[9], ra = new long[9];
-        for (int sample = -5; sample < 9; sample++) {
+        int warmups = Integer.getInteger("welt.benchmark.viewportWarmups", 5);
+        if (warmups < 5 || warmups > 100) throw new IllegalArgumentException("Viewport warmups must be between 5 and 100");
+        for (int sample = -warmups; sample < 9; sample++) {
             Sample j = null, r = null;
             for (int pass = 0; pass < 2; pass++) {
                 boolean nativePass = ((sample + pass) & 1) != 0; select(nativePass);
@@ -104,7 +124,7 @@ public final class TileViewportBenchmark {
         Arrays.sort(jt); Arrays.sort(rt); Arrays.sort(ratios); Arrays.sort(ja); Arrays.sort(ra);
         System.out.printf("viewport paired javaMs=%.3f nativeMs=%.3f ratio=%.3f minRatio=%.3f maxRatio=%.3f javaAllocated=%d nativeAllocated=%d pixelParity=true nativeTiles=%d%n",
                 jt[4], rt[4], ratios[4], ratios[0], ratios[8], ja[4], ra[4], shade.renderer.completedNativeViewportTiles());
-        if (Boolean.getBoolean("welt.benchmark.viewportFused") && shade.renderer.completedNativeViewportTiles() != 14L * 3 * shade.tiles.length)
+        if (Boolean.getBoolean("welt.benchmark.viewportFused") && shade.renderer.completedNativeViewportTiles() != ((long) warmups + 9) * 3 * shade.tiles.length)
             throw new AssertionError("Every tile redraw must use the fused path");
     }
 }

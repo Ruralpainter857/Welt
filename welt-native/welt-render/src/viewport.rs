@@ -1,4 +1,4 @@
-//! WVR versions 1 and 2: complete tile composition with compact overlay planes.
+//! WVR versions 1, 2 and 3: complete tile composition with compact overlay planes.
 use crate::shade::java_multiply;
 
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -17,6 +17,9 @@ struct Plane {
     pattern: u64,
     frost: bool,
     lookup: usize,
+    paint_width: usize,
+    paint_height: usize,
+    opacity: f32,
 }
 impl Plane {
     const EMPTY: Self = Self {
@@ -27,6 +30,9 @@ impl Plane {
         pattern: 0,
         frost: false,
         lookup: 0,
+        paint_width: 0,
+        paint_height: 0,
+        opacity: 0.0,
     };
     fn value(self, data: &[u8], x: usize, y: usize) -> i32 {
         let index = if self.bits == 0 {
@@ -100,12 +106,51 @@ fn frost(colour: i32) -> i32 {
     result
 }
 
+fn java_round(value: f32) -> i32 {
+    let bits = value.to_bits();
+    let shift = 149 - ((bits >> 23) & 255) as i32;
+    if (0..32).contains(&shift) {
+        let mantissa = ((bits & 0x007fffff) | 0x00800000) as i32;
+        let signed = if bits & 0x80000000 == 0 {
+            mantissa
+        } else {
+            -mantissa
+        };
+        ((signed >> shift) + 1) >> 1
+    } else {
+        // Float-to-int saturation also matches Java for NaN and infinities.
+        value as i32
+    }
+}
+fn paint(plane: Plane, data: &[u8], x: i32, y: i32, colour: i32, value: i32) -> i32 {
+    if plane.paint_width == 0 {
+        let alpha = if plane.opacity < 1.0 {
+            java_round(value as f32 * plane.opacity * 256.0 / 15.0)
+        } else {
+            value * 256 / 15
+        };
+        return mix(int(data, plane.lookup + 8), colour, alpha, false);
+    }
+    // Preserve PaintRenderer's historical x * width + y indexing, including tall textures.
+    let cell = x.rem_euclid(plane.paint_width as i32) as usize * plane.paint_width
+        + y.rem_euclid(plane.paint_height as i32) as usize;
+    let p = plane.lookup + 16 + cell * 16;
+    let alpha = f32::from_bits(int(data, p + 12) as u32) * plane.opacity * value as f32 / 15.0;
+    let mut result = 0;
+    for (offset, shift) in [(0, 16), (4, 8), (8, 0)] {
+        let channel =
+            alpha * int(data, p + offset) as f32 + (1.0 - alpha) * ((colour >> shift) & 255) as f32;
+        result |= java_round(channel).wrapping_shl(shift);
+    }
+    result
+}
+
 pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
     let bad = RenderError::InvalidFrame;
     if data.len() < 128
         || data.len() > MAX_BYTES
         || int(data, 0) != 0x31525657
-        || !matches!(int(data, 4), 1 | 2)
+        || !matches!(int(data, 4), 1..=3)
     {
         return Err(bad);
     }
@@ -146,7 +191,14 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
         let bits = int(data, p) as usize;
         let kind = int(data, p + 4);
         if !matches!(bits, 0 | 1 | 4 | 8)
-            || !(0..=if version == 1 { 4 } else { 6 }).contains(&kind)
+            || !(0..=if version == 1 {
+                4
+            } else if version == 2 {
+                6
+            } else {
+                7
+            })
+                .contains(&kind)
             || int(data, p + 12) as usize != cursor
             || !matches!(int(data, p + 24), 0 | 1)
             || kind <= 4 && int(data, p + 28) != 0
@@ -168,10 +220,13 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
             pattern: word(data, p + 16),
             frost: int(data, p + 24) != 0,
             lookup: int(data, p + 28) as usize,
+            paint_width: 0,
+            paint_height: 0,
+            opacity: 0.0,
         };
         cursor += bytes(bits);
     }
-    for plane in planes.iter().take(count) {
+    for plane in planes.iter_mut().take(count) {
         match plane.kind {
             5 => {
                 if plane.lookup != cursor || cursor + 64 > data.len() {
@@ -194,6 +249,29 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
                     }
                     cursor += 1024;
                 }
+            }
+            7 => {
+                if plane.lookup != cursor || cursor + 16 > data.len() {
+                    return Err(bad);
+                }
+                let w = int(data, cursor) as usize;
+                let h = int(data, cursor + 4) as usize;
+                let opacity = f32::from_bits(int(data, cursor + 12) as u32);
+                if (w == 0) != (h == 0)
+                    || w > h
+                    || h > 65536
+                    || w * h > 65536
+                    || (!opacity.is_nan() && !(0.0..=1.0).contains(&opacity))
+                {
+                    return Err(bad);
+                }
+                cursor += 16 + w * h * 16;
+                if cursor > data.len() {
+                    return Err(bad);
+                }
+                plane.paint_width = w;
+                plane.paint_height = h;
+                plane.opacity = opacity;
             }
             _ => (),
         }
@@ -218,6 +296,8 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
     // All descriptors and bounds are validated before the first output write.
     let min = int(data, 16);
     let hide_fluids = flags & 2 != 0;
+    let origin_x = if version >= 3 { int(data, 96) } else { 0 };
+    let origin_y = if version >= 3 { int(data, 100) } else { 0 };
     for y in 0..128 {
         for x in 0..128 {
             let cell = x + y * 128;
@@ -285,6 +365,14 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
                                     }
                                 }
                             }
+                            7 => paint(
+                                *plane,
+                                data,
+                                origin_x.wrapping_add(x as i32),
+                                origin_y.wrapping_add(y as i32),
+                                rgb,
+                                if plane.bits <= 1 { value * 15 } else { value },
+                            ),
                             _ => unreachable!(),
                         };
                     }
@@ -353,7 +441,7 @@ mod tests {
             assert_eq!(int(&data, output + i * 4) as u32, 0xff123456);
         }
         for (p, v) in [
-            (4, 3_i32),
+            (4, 4_i32),
             (8, 129),
             (12, 257),
             (28, 5),
@@ -373,6 +461,84 @@ mod tests {
         assert!(render(&mut data).is_err());
         assert_eq!(data, before);
     }
+    #[test]
+    fn custom_paint_frames_are_bounded_and_round_like_java() {
+        assert_eq!(java_round(127.49999), 127);
+        assert_eq!(java_round(127.5), 128);
+        assert_eq!(java_round(-0.5), 0);
+        assert_eq!(java_round(f32::NAN), 0);
+        let mut bits = 123_u32;
+        for _ in 0..65536 {
+            bits = bits.wrapping_mul(1664525).wrapping_add(1013904223);
+            let value = f32::from_bits(bits);
+            assert_eq!(java_round(value), (f64::from(value) + 0.5).floor() as i32);
+        }
+        let terrain = 164;
+        let heights = terrain + AREA;
+        let wet = heights + HALO * 4;
+        let plane = wet + HALO * 4;
+        let lookup = plane + AREA / 2;
+        let output = lookup + 16 + 16;
+        let mut data = vec![0; output + AREA * 4];
+        for (p, v) in [
+            (0, 0x31525657),
+            (4, 3),
+            (8, 1),
+            (12, 1),
+            (28, 4),
+            (52, terrain as i32),
+            (56, heights as i32),
+            (60, wet as i32),
+            (64, output as i32),
+            (68, 128),
+            (72, 132),
+            (76, 1),
+            (80, -1),
+            (84, -1),
+            (88, -1),
+            (92, -1),
+            (96, -128),
+            (100, -128),
+            (128, 0x123456),
+            (132, 4),
+            (136, 7),
+            (144, plane as i32),
+            (160, lookup as i32),
+            (lookup, 1),
+            (lookup + 4, 1),
+            (lookup + 12, 1.0_f32.to_bits() as i32),
+            (lookup + 16, 255),
+            (lookup + 20, 255),
+            (lookup + 24, 255),
+            (lookup + 28, 1.0_f32.to_bits() as i32),
+        ] {
+            data[p..p + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        for i in 0..HALO {
+            data[heights + i * 4..heights + i * 4 + 4].copy_from_slice(&64_i32.to_le_bytes());
+            data[wet + i * 4..wet + i * 4 + 4].copy_from_slice(&i32::MIN.to_le_bytes());
+        }
+        data[plane] = 15;
+        let valid = data.clone();
+        render(&mut data).unwrap();
+        assert_eq!(int(&data, output) as u32, 0xffffffff);
+        assert_eq!(int(&data, output + 4) as u32, 0xff123456);
+        for (p, v) in [
+            (lookup, -1),
+            (lookup, 2),
+            (lookup + 4, 0),
+            (lookup + 4, 65537),
+            (lookup + 12, 2.0_f32.to_bits() as i32),
+            (160, 0),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[p..p + 4].copy_from_slice(&v.to_le_bytes());
+            let before = invalid.clone();
+            assert!(render(&mut invalid).is_err());
+            assert_eq!(invalid, before);
+        }
+    }
+
     #[test]
     fn half_mix_and_frost_use_different_java_rounding() {
         assert_eq!(mix(0x010101, 0x010101, 128, true), 0);

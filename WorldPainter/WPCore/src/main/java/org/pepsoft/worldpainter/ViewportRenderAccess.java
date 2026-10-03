@@ -45,6 +45,12 @@ final class ViewportRenderAccess {
     private static Model model(Layer layer, LayerRenderer renderer) {
         int bits = switch (layer.dataSize) { case BIT_PER_CHUNK -> 0; case BIT -> 1; case NIBBLE -> 4; case BYTE -> 8; default -> -1; };
         if (bits < 0) return null;
+        if (bits <= 4 && renderer.getClass() == PaintRenderer.class) {
+            PaintRenderer paint = (PaintRenderer) renderer;
+            if (paint.getRed() != null && (paint.getW() <= 0 || paint.getH() <= 0 || paint.getW() > paint.getH()
+                    || (long) paint.getW() * paint.getH() > 65536)) return null;
+            return new Model(layer, bits, 7, paint.getColour(), 0L, 0, renderer);
+        }
         if (bits == 8) return renderer.getClass() == BiomeRenderer.class
                 ? new Model(layer, bits, 6, 0, 0L, 0, renderer) : null;
         if (bits == 4 && renderer.getClass() == AnnotationsRenderer.class)
@@ -102,17 +108,22 @@ final class ViewportRenderAccess {
         int end = planes; for (Model model : models) end += bytes(model.bits);
         int required = end + AREA * 4;
         for (Model model : models) required += model.kind == 5 ? 64 : model.kind == 6 ? 256 * 1024 + 1024 : 0;
+        for (Model model : models) if (model.kind == 7) {
+            PaintRenderer paint = (PaintRenderer) model.renderer;
+            required += 16 + (paint.getRed() == null ? 0 : paint.getW() * paint.getH() * 16);
+        }
         if (required > MAX_BYTES) return false;
         if (data == null || data.capacity() < required) data = ByteBuffer.allocateDirect(required).order(ByteOrder.LITTLE_ENDIAN);
         data.clear().limit(required);
         for (int i = 0; i < HEADER; i += 8) data.putLong(i, 0L);
-        data.putInt(0, 0x31525657).putInt(4, 2).putInt(8, models.size()).putInt(12, colours.length)
+        data.putInt(0, 0x31525657).putInt(4, 3).putInt(8, models.size()).putInt(12, colours.length)
                 .putInt(16, tile.getMinHeight()).putInt(20, (contours ? 1 : 0) | (hideFluids ? 2 : 0) | (bottomless ? 4 : 0))
                 .putInt(24, separation).putInt(28, light).putInt(32, waterColour).putInt(36, lavaColour)
                 .putInt(40, bedrockColour).putInt(44, voidColour).putInt(48, missingColour)
                 .putInt(52, terrainOffset).putInt(56, heightOffset).putInt(60, wetOffset)
                 .putInt(68, palette).putInt(72, table).putInt(76, visible)
-                .putInt(80, vp).putInt(84, np).putInt(88, nb).putInt(92, lp);
+                .putInt(80, vp).putInt(84, np).putInt(88, nb).putInt(92, lp)
+                .putInt(96, tile.getX() << 7).putInt(100, tile.getY() << 7);
         data.position(palette); data.slice().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer().put(colours);
         data.position(terrainOffset); data.put(terrains);
         data.position(heightOffset);
@@ -139,7 +150,21 @@ final class ViewportRenderAccess {
         }
         for (int i = 0; i < models.size(); i++) {
             Model m = models.get(i);
-            if (m.kind == 5) {
+            if (m.kind == 7) {
+                PaintRenderer paint = (PaintRenderer) m.renderer;
+                data.putInt(table + i * 32 + 28, offset);
+                boolean textured = paint.getRed() != null;
+                int cells = textured ? paint.getW() * paint.getH() : 0;
+                data.putInt(offset, textured ? paint.getW() : 0).putInt(offset + 4, textured ? paint.getH() : 0)
+                        .putInt(offset + 8, paint.getColour()).putFloat(offset + 12, paint.getOpacity());
+                offset += 16;
+                // Copy the renderer snapshot, not the live image from which it was constructed.
+                for (int cell = 0; cell < cells; cell++) {
+                    data.putInt(offset, paint.getRed()[cell]).putInt(offset + 4, paint.getGreen()[cell])
+                            .putInt(offset + 8, paint.getBlue()[cell]).putFloat(offset + 12, paint.getAlpha()[cell]);
+                    offset += 16;
+                }
+            } else if (m.kind == 5) {
                 data.putInt(table + i * 32 + 28, offset);
                 AnnotationsRenderer renderer = (AnnotationsRenderer) m.renderer;
                 for (int value = 0; value < 16; value++) data.putInt(offset + value * 4, renderer.getPixelColour(0, 0, 0, value));
