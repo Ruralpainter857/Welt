@@ -2404,7 +2404,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
     env: *mut JNIEnv, class: jclass, origin_x: jint, origin_y: jint, width: jint, height: jint,
     node_count: jint, opcodes: jobject, values: jobject, scales: jobject, octaves: jobject, seeds: jobject, output: jobject,
 ) -> jint {
-    unsafe { fill_height_map_tree_jni(env, class, origin_x, origin_y, width, height, None, None,
+    unsafe { fill_height_map_tree_jni(env, class, origin_x, origin_y, width, height, None, None, None,
         node_count, opcodes, values, scales, octaves, seeds, output) }
 }
 
@@ -2417,7 +2417,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
     shift: jint, vertical_scaling: f32, node_count: jint, opcodes: jobject, values: jobject,
     scales: jobject, octaves: jobject, seeds: jobject, output: jobject,
 ) -> jint {
-    unsafe { fill_height_map_tree_jni(env, class, origin_x, origin_y, width, height, Some((shift, vertical_scaling)), None,
+    unsafe { fill_height_map_tree_jni(env, class, origin_x, origin_y, width, height, Some((shift, vertical_scaling)), None, None,
         node_count, opcodes, values, scales, octaves, seeds, output) }
 }
 
@@ -2430,8 +2430,21 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
     shift: jint, matrix: jobject, node_count: jint, opcodes: jobject, values: jobject,
     scales: jobject, octaves: jobject, seeds: jobject, output: jobject,
 ) -> jint {
-    unsafe { fill_height_map_tree_jni(env, class, origin_x, origin_y, width, height, None, Some((shift, matrix)),
+    unsafe { fill_height_map_tree_jni(env, class, origin_x, origin_y, width, height, None, Some((shift, matrix)), None,
         node_count, opcodes, values, scales, octaves, seeds, output) }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+/// # Safety
+/// All arrays must be valid JNI references from this JVM frame.
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFillDisplacementHeightMapTree(
+    env: *mut JNIEnv, class: jclass, origin_x: jint, origin_y: jint, width: jint, height: jint,
+    shift: jint, angle_count: jint, distance_count: jint, node_count: jint, opcodes: jobject,
+    values: jobject, scales: jobject, octaves: jobject, seeds: jobject, output: jobject,
+) -> jint {
+    unsafe { fill_height_map_tree_jni(env, class, origin_x, origin_y, width, height, None, None,
+        Some((shift, angle_count, distance_count)), node_count, opcodes, values, scales, octaves, seeds, output) }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2444,6 +2457,7 @@ unsafe fn fill_height_map_tree_jni(
     height: jint,
     slope: Option<(jint, f32)>,
     affine: Option<(jint, jobject)>,
+    displacement: Option<(jint, jint, jint)>,
     node_count: jint,
     opcodes: jobject,
     values: jobject,
@@ -2469,6 +2483,10 @@ unsafe fn fill_height_map_tree_jni(
                 return WeltError::IllegalArgument as jint;
             }
             if slope.is_some_and(|(shift, _)| !(0..=31).contains(&shift) || area > 16384) {
+                return WeltError::IllegalArgument as jint;
+            }
+            if displacement.is_some_and(|(shift, a, d)| !(0..=31).contains(&shift) || area > 16384
+                || a <= 0 || d <= 0 || i64::from(a) + i64::from(d) >= i64::from(node_count)) {
                 return WeltError::IllegalArgument as jint;
             }
             type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
@@ -2582,6 +2600,9 @@ unsafe fn fill_height_map_tree_jni(
             } else if let Some((shift, _)) = affine {
                 welt_gen::height_map_affine::fill_affine_height_map_tree(&nodes, origin_x, origin_y,
                     width as usize, height as usize, shift as u32, &affine_matrix, output_values.as_mut_slice()).is_err()
+            } else if let Some((shift, a, d)) = displacement {
+                welt_gen::height_map_displacement::fill_displacement_height_map_tree(&nodes, a as usize, d as usize,
+                    origin_x, origin_y, width as usize, height as usize, shift as u32, output_values.as_mut_slice()).is_err()
             } else {
                 fill_height_map_tree(&nodes, origin_x, origin_y, width as usize, height as usize,
                     output_values.as_mut_slice()).is_err()

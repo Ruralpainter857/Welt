@@ -14,6 +14,7 @@ import org.pepsoft.worldpainter.HeightMapTileFactory;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.heightMaps.SlopeHeightMap;
 import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
+import org.pepsoft.worldpainter.heightMaps.DisplacementHeightMap;
 
 import java.awt.*;
 import java.awt.image.BufferedImage;
@@ -86,7 +87,8 @@ public class HeightMapTileProvider implements TileProvider {
         PreviewBuffers buffers = previewBuffers.get();
         int shift = zoom < 0 ? -zoom & 31 : 0;
         if (shift != 0 && heightMap.getClass() != SlopeHeightMap.class
-                && heightMap.getClass() != TransformingHeightMap.class && buffers.x == null) {
+                && heightMap.getClass() != TransformingHeightMap.class
+                && heightMap.getClass() != DisplacementHeightMap.class && buffers.x == null) {
             buffers.x = new float[16384]; buffers.y = new float[16384];
         }
         if (!HeightMapTileFactory.tryFillPreviewHeights(heightMap, tileX << 7 << shift, tileY << 7 << shift,

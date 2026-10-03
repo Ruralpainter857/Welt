@@ -12,6 +12,7 @@ const FACTORS: [i32; 10] = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NoiseHeightMapError {
     TooManyOctaves(i32),
+    InvalidShift(u32),
     AreaOverflow,
     OutputLength { expected: usize, actual: usize },
 }
@@ -95,6 +96,57 @@ impl NoiseHeightMapBulk {
                 f64::from(origin_y.wrapping_add(row as i32)) / f64::from(LARGE_BLOBS) / self.scale
             })
             .collect();
+        self.fill_normalized_grid(&normalized_x, &normalized_y, width, height, output)
+    }
+
+    /// Evaluates a Java float-coordinate grid at a power-of-two sample interval.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fill_sampled_bulk(
+        &self,
+        origin_x: i32,
+        origin_y: i32,
+        width: usize,
+        height: usize,
+        shift: u32,
+        output: &mut [f64],
+    ) -> Result<(), NoiseHeightMapError> {
+        if shift > 31 {
+            return Err(NoiseHeightMapError::InvalidShift(shift));
+        }
+        let expected = width
+            .checked_mul(height)
+            .ok_or(NoiseHeightMapError::AreaOverflow)?;
+        if output.len() != expected {
+            return Err(NoiseHeightMapError::OutputLength {
+                expected,
+                actual: output.len(),
+            });
+        }
+        let normalized_x: Vec<f64> = (0..width)
+            .map(|col| {
+                f64::from(origin_x.wrapping_add((col as i32).wrapping_shl(shift)) as f32)
+                    / f64::from(LARGE_BLOBS)
+                    / self.scale
+            })
+            .collect();
+        let normalized_y: Vec<f64> = (0..height)
+            .map(|row| {
+                f64::from(origin_y.wrapping_add((row as i32).wrapping_shl(shift)) as f32)
+                    / f64::from(LARGE_BLOBS)
+                    / self.scale
+            })
+            .collect();
+        self.fill_normalized_grid(&normalized_x, &normalized_y, width, height, output)
+    }
+
+    fn fill_normalized_grid(
+        &self,
+        normalized_x: &[f64],
+        normalized_y: &[f64],
+        width: usize,
+        height: usize,
+        output: &mut [f64],
+    ) -> Result<(), NoiseHeightMapError> {
         let prepared_count = if self.octaves == 1 {
             1
         } else {
@@ -103,7 +155,7 @@ impl NoiseHeightMapBulk {
         let grids: Vec<_> = (0..prepared_count)
             .map(|octave| {
                 if self.octaves == 1 {
-                    self.perlin.prepare_grid_2d(&normalized_x, &normalized_y)
+                    self.perlin.prepare_grid_2d(normalized_x, normalized_y)
                 } else {
                     let factor = f64::from(FACTORS[octave]);
                     let xs: Vec<_> = normalized_x.iter().map(|&x| x * factor).collect();
@@ -170,6 +222,34 @@ mod tests {
             checked += 1;
         }
         assert_eq!(checked, 512, "unexpected Java golden sample count");
+    }
+
+    #[test]
+    fn sampled_grids_preserve_float_coordinates_and_wrapping() {
+        for octaves in [1, 3, 10] {
+            let map = NoiseHeightMapBulk::new(128.0, 1.7, octaves, -123).unwrap();
+            for shift in [0, 3, 31] {
+                for (ox, oy) in [(-128_i32, 64_i32), (16_777_217, i32::MAX)] {
+                    let mut actual = [0.0; 35];
+                    map.fill_sampled_bulk(ox, oy, 7, 5, shift, &mut actual)
+                        .unwrap();
+                    for row in 0..5 {
+                        for col in 0..7 {
+                            let x = ox.wrapping_add((col as i32).wrapping_shl(shift)) as f32;
+                            let y = oy.wrapping_add((row as i32).wrapping_shl(shift)) as f32;
+                            let expected = map.get_value(f64::from(x), f64::from(y));
+                            assert_eq!(actual[col + row * 7].to_bits(), expected.to_bits());
+                        }
+                    }
+                }
+            }
+            let mut output = [17.0; 35];
+            assert_eq!(
+                map.fill_sampled_bulk(0, 0, 7, 5, 32, &mut output),
+                Err(NoiseHeightMapError::InvalidShift(32))
+            );
+            assert_eq!(output, [17.0; 35]);
+        }
     }
 
     #[test]

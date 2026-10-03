@@ -61,7 +61,8 @@ public class HeightMapPreviewParityTest {
     @Test public void parallelWorkersKeepIndependentPreviewBuffers() {
         HeightMap base = new SumHeightMap(new ConstantHeightMap(32), new NoiseHeightMap(100, .7, 3, -123));
         for (HeightMap map : new HeightMap[] {base, new SlopeHeightMap(base, 3.7f),
-                new TransformingHeightMap("Affine", base, 1.7f, .65f, 31, -47, .37f)}) withFlags(() -> {
+                new TransformingHeightMap("Affine", base, 1.7f, .65f, 31, -47, .37f),
+                new DisplacementHeightMap(base, new NoiseHeightMap(6, .9, 3, 177), new NoiseHeightMap(64, .5, 3, -321))}) withFlags(() -> {
             HeightMapTileProvider java = new HeightMapTileProvider(map), rust = new HeightMapTileProvider(map);
             List<int[]> expected = new ArrayList<>();
             System.setProperty(Native.GEN_KEY, "false");
@@ -148,6 +149,44 @@ public class HeightMapPreviewParityTest {
                         if (base instanceof BandedHeightMap) assertEquals(location, expected, actual[x + y * 128], 2e-15);
                         else assertEquals(location, Double.doubleToLongBits(expected), Double.doubleToLongBits(actual[x + y * 128]));
                     }
+                }
+            }
+        });
+    }
+    @Test public void displacementChainsPreservePixelsAcrossProgramsAndZoom() {
+        HeightMap[] bases = {new NoiseHeightMap(128, 1.7, 3, -123),
+                new FastNoiseLiteHeightMap(128, .7, 3, 17), new BandedHeightMap(37, .1, 29, 1, true)};
+        for (HeightMap base : bases) for (HeightMap angle : new HeightMap[] {new ConstantHeightMap(0),
+                new ConstantHeightMap(.37), new NoiseHeightMap(Math.PI * 2, .9, 3, 177)})
+            for (int zoom : new int[] {0, -1, -3})
+                compare(new DisplacementHeightMap(base, angle, new NoiseHeightMap(64, .5, 3, -321)), zoom, -1, 0, 1);
+        compare(new DisplacementHeightMap(bases[0], new ConstantHeightMap(Double.NaN), new ConstantHeightMap(17)), 0, -1, 0, 0);
+        compare(new DisplacementHeightMap(bases[0], new ConstantHeightMap(.37), new ConstantHeightMap(Double.POSITIVE_INFINITY)), 0, -1, 0, 0);
+    }
+    @Test public void displacementReusedProviderObservesAllChildChanges() {
+        DisplacementHeightMap map = new DisplacementHeightMap(new NoiseHeightMap(128, 1.7, 3, -123),
+                new NoiseHeightMap(Math.PI * 2, .9, 3, 177), new NoiseHeightMap(64, .5, 3, -321));
+        HeightMapTileProvider java = new HeightMapTileProvider(map), rust = new HeightMapTileProvider(map);
+        withFlags(() -> {
+            renderPair(java, rust, -1, 0);
+            map.setSeed(-1234567); renderPair(java, rust, -1, 0);
+            map.setAngleMap(new ConstantHeightMap(-.37)); renderPair(java, rust, -1, 0);
+            map.setDistanceMap(new ConstantHeightMap(-64)); renderPair(java, rust, -1, 0);
+            map.setBaseHeightMap(new FastNoiseLiteHeightMap(100, .7, 2, 17)); renderPair(java, rust, -1, 0);
+            assertEquals(5, rust.completedNativePreviewTiles());
+        });
+    }
+    @Test public void displacementHeightValuesMatchBeforeRasterQuantisation() {
+        withFlags(() -> {
+            System.setProperty(Native.GEN_KEY, "true"); System.setProperty("welt.native.heightMapPreview", "true");
+            for (HeightMap base : new HeightMap[] {new NoiseHeightMap(128, 1.7, 3, -123), new FastNoiseLiteHeightMap(128, .7, 3, 17)}) {
+                HeightMap map = new DisplacementHeightMap(base, new NoiseHeightMap(Math.PI * 2, .9, 3, 177), new NoiseHeightMap(64, .5, 3, -321));
+                for (int shift : new int[] {0, 3}) {
+                    double[] actual = new double[16384];
+                    assertTrue(HeightMapTileFactory.tryFillPreviewHeights(map, -128, 64, shift, null, null, actual));
+                    for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++)
+                        assertEquals("Displaced unquantised height", Double.doubleToLongBits(map.getHeight(-128 + (x << shift), 64 + (y << shift))),
+                                Double.doubleToLongBits(actual[x + y * 128]));
                 }
             }
         });

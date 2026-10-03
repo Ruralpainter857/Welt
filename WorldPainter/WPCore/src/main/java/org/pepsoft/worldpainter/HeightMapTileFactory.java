@@ -1082,6 +1082,16 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             if (x < -(1 << 24) || x > (1 << 24) || y < -(1 << 24) || y > (1 << 24)) return false;
         }
         GenerationBuffers buffers = GENERATION_BUFFERS.get();
+        if (map.getClass() == DisplacementHeightMap.class) {
+            DisplacementHeightMap displacement = (DisplacementHeightMap) map;
+            if (!buffers.prepareHeightMapProgramPair(displacement.getAngleMap(), displacement.getDistanceMap())
+                    || !buffers.appendHeightMapNode(displacement.getBaseHeightMap()) || buffers.heightMapNodeCount > 64
+                    || (buffers.heightMapNinePatchCount != 0 && !Native.isNinePatchGenEnabled())) return false;
+            return NativeSlices.fillDisplacementHeightMapTree(originX, originY, TILE_SIZE, TILE_SIZE, shift,
+                    buffers.heightMapFirstNodeCount, buffers.heightMapSecondNodeCount, buffers.heightMapNodeCount,
+                    buffers.heightMapOpcodes, buffers.heightMapValues, buffers.heightMapScales,
+                    buffers.heightMapOctaves, buffers.heightMapSeeds, output);
+        }
         if (map.getClass() == TransformingHeightMap.class) {
             TransformingHeightMap transforming = (TransformingHeightMap) map;
             if (transforming.getScaleX() == 1.0f && transforming.getScaleY() == 1.0f && transforming.getRotation() == 0) {

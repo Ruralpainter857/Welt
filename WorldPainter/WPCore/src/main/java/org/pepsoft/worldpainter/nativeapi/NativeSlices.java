@@ -456,6 +456,25 @@ public final class NativeSlices {
             int shift, double[] matrix, int nodeCount, int[] opcodes, double[] values, double[] scales,
             int[] octaves, long[] seeds, double[] output);
 
+    /** Evaluates angle, distance and the displaced source without returning intermediate planes. */
+    public static boolean fillDisplacementHeightMapTree(int originX, int originY, int width, int height,
+            int shift, int angleCount, int distanceCount, int nodeCount, int[] opcodes, double[] values,
+            double[] scales, int[] octaves, long[] seeds, double[] output) {
+        long area = (long) width * height;
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || width <= 0 || height <= 0
+                || area > 16384 || shift < 0 || shift > 31 || angleCount <= 0 || distanceCount <= 0
+                || (long) angleCount + distanceCount >= nodeCount || nodeCount <= 0 || nodeCount > 64
+                || opcodes == null || opcodes.length < nodeCount || values == null || values.length < nodeCount
+                || scales == null || scales.length < nodeCount || octaves == null || octaves.length < nodeCount
+                || seeds == null || seeds.length < nodeCount || output == null || output.length != area) return false;
+        try { return nativeFillDisplacementHeightMapTree(originX, originY, width, height, shift, angleCount,
+                distanceCount, nodeCount, opcodes, values, scales, octaves, seeds, output) == 0; }
+        catch (UnsatisfiedLinkError e) { return false; }
+    }
+    private static native int nativeFillDisplacementHeightMapTree(int originX, int originY, int width, int height,
+            int shift, int angleCount, int distanceCount, int nodeCount, int[] opcodes, double[] values,
+            double[] scales, int[] octaves, long[] seeds, double[] output);
+
     /** Processes one erosion brush area in Rust and returns Java-ordered setter calls. */
     public static boolean erodeRawHeightRegion(final int radius, final int[] heights,
                                                final byte[] controls, final int[] writeLog,
