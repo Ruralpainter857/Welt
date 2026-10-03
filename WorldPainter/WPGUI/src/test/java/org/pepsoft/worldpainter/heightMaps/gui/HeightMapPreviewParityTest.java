@@ -191,6 +191,28 @@ public class HeightMapPreviewParityTest {
             }
         });
     }
+    @Test public void transformedBitmapPreviewsPreserveClippingZoomAndLivePixels() {
+        BufferedImage source = new BufferedImage(64, 48, BufferedImage.TYPE_USHORT_GRAY);
+        for (int y = 0; y < 48; y++) for (int x = 0; x < 64; x++) source.getRaster().setSample(x, y, 0, (x * 193 + y * 79 + x * y * 13) & 65535);
+        for (boolean repeat : new boolean[] {true, false}) {
+            HeightMap bitmap = new BicubicHeightMap(BitmapHeightMap.build().withImage(source).now(), repeat);
+            for (float scale : new float[] {1.7f, -1.7f}) {
+                HeightMap map = new TransformingHeightMap("Bitmap", bitmap, scale, .65f, 31, -47, .37f);
+                for (int zoom : new int[] {0, -1}) compare(map, zoom, -1, 0, 1);
+                compare(map, -3, -1, 0, 0);
+            }
+            HeightMap map = new TransformingHeightMap("Live", bitmap, 1.7f, .65f, 31, -47, .37f);
+            withFlags(() -> {
+                HeightMapTileProvider java = new HeightMapTileProvider(map), rust = new HeightMapTileProvider(map);
+                renderPair(java, rust, -1, 0);
+                for (int y = 0; y < 48; y++) for (int x = 0; x < 64; x++)
+                    source.getRaster().setSample(x, y, 0, source.getRaster().getSample(x, y, 0) ^ 65535);
+                renderPair(java, rust, -1, 0);
+                assertEquals(2, rust.completedNativePreviewTiles());
+            });
+        }
+    }
+
     private static void compare(HeightMap map, int zoom, int tileX, int tileY, int expectedCalls) {
         withFlags(() -> {
             HeightMapTileProvider java = new HeightMapTileProvider(map), rust = new HeightMapTileProvider(map);

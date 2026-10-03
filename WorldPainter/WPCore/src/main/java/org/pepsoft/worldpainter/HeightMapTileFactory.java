@@ -1069,6 +1069,9 @@ public class HeightMapTileFactory extends AbstractTileFactory {
     private static final ThreadLocal<GenerationBuffers> GENERATION_BUFFERS =
             ThreadLocal.withInitial(GenerationBuffers::new);
 
+    private static final ThreadLocal<org.pepsoft.worldpainter.heightMaps.BitmapPreviewAccess> BITMAP_PREVIEW =
+            ThreadLocal.withInitial(org.pepsoft.worldpainter.heightMaps.BitmapPreviewAccess::new);
+
     /** Reuses the generation program compiler for one complete preview tile. */
     public static boolean tryFillPreviewHeights(HeightMap map, int originX, int originY, int shift,
                                                 float[] xCoordinates, float[] yCoordinates, double[] output) {
@@ -1082,6 +1085,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             if (x < -(1 << 24) || x > (1 << 24) || y < -(1 << 24) || y > (1 << 24)) return false;
         }
         GenerationBuffers buffers = GENERATION_BUFFERS.get();
+        if (BITMAP_PREVIEW.get().fill(map, originX, originY, shift, output)) return true;
         if (map.getClass() == DisplacementHeightMap.class) {
             DisplacementHeightMap displacement = (DisplacementHeightMap) map;
             if (!buffers.prepareHeightMapProgramPair(displacement.getAngleMap(), displacement.getDistanceMap())

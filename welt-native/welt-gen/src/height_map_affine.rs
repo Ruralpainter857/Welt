@@ -10,7 +10,7 @@ struct Scratch {
 thread_local! { static SCRATCH: RefCell<Scratch> = RefCell::new(Scratch::default()); }
 
 /// Matches the operation states of Java AffineTransform.transform(Point2D).
-fn point(x: f64, y: f64, m: &[f64; 6]) -> (f32, f32) {
+pub(crate) fn point(x: f64, y: f64, m: &[f64; 6]) -> (f32, f32) {
     let shear = m[1] != 0.0 || m[2] != 0.0;
     let scale = if shear {
         m[0] != 0.0 || m[3] != 0.0

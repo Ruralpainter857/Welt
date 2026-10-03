@@ -11,7 +11,7 @@ fn word(d: &[u8], p: usize) -> i32 {
 fn number(d: &[u8], p: usize) -> f64 {
     f64::from_le_bytes(d[p..p + 8].try_into().unwrap())
 }
-fn shifted(x: f32) -> f32 {
+pub(crate) fn shifted(x: f32) -> f32 {
     x - if x > 0.0 {
         0.5
     } else if x < 0.0 {
@@ -20,11 +20,11 @@ fn shifted(x: f32) -> f32 {
         x
     }
 }
-fn cubic(a: f64, b: f64, c: f64, d: f64, t: f32) -> f64 {
+pub(crate) fn cubic(a: f64, b: f64, c: f64, d: f64, t: f32) -> f64 {
     let t = f64::from(t);
     b + 0.5 * t * (c - a + t * (2.0 * a - 5.0 * b + 4.0 * c - d + t * (3.0 * (b - c) + d - a)))
 }
-fn minimum(a: f64, b: f64) -> f64 {
+pub(crate) fn minimum(a: f64, b: f64) -> f64 {
     if a.is_nan() {
         a
     } else if b.is_nan() {
@@ -37,7 +37,7 @@ fn minimum(a: f64, b: f64) -> f64 {
         b
     }
 }
-fn maximum(a: f64, b: f64) -> f64 {
+pub(crate) fn maximum(a: f64, b: f64) -> f64 {
     if a.is_nan() {
         a
     } else if b.is_nan() {

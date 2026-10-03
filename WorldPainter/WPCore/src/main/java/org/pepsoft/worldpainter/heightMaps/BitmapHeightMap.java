@@ -96,6 +96,38 @@ public final class BitmapHeightMap extends AbstractHeightMap {
         return fillSamples(x, y, sampleWidth, sampleHeight, samples, rowSamples, true);
     }
 
+    /** Live grouped source reads for a bicubic patch, including repeated or extended edges. */
+    public boolean fillBicubicPatch(int x, int y, int patchWidth, int patchHeight,
+                                    boolean repeatEdges, double[] samples, double[] rowSamples) {
+        long area = (long) patchWidth * patchHeight;
+        if (patchWidth <= 0 || patchHeight <= 0 || area > 262144 || samples == null
+                || samples.length < area || rowSamples == null || rowSamples.length < patchWidth
+                || (long) x + patchWidth > Integer.MAX_VALUE || (long) y + patchHeight > Integer.MAX_VALUE) return false;
+        for (int row = 0; row < patchHeight; row++) {
+            int sourceY = repeatEdges ? MathUtils.mod(y + row, height) : Math.max(0, Math.min(height - 1, y + row));
+            int column = 0;
+            while (column < patchWidth) {
+                int physicalX = x + column;
+                int sourceX = repeatEdges ? MathUtils.mod(physicalX, width) : Math.max(0, Math.min(width - 1, physicalX));
+                int count = repeatEdges ? Math.min(patchWidth - column, width - sourceX)
+                        : physicalX < 0 ? (int) Math.min(patchWidth - column, -(long) physicalX)
+                        : physicalX >= width ? patchWidth - column : Math.min(patchWidth - column, width - sourceX);
+                if (!repeatEdges && (physicalX < 0 || physicalX >= width)) {
+                    Arrays.fill(samples, row * patchWidth + column, row * patchWidth + column + count, getSample(sourceX, sourceY));
+                } else {
+                    raster.getSamples(sourceX, sourceY, count, 1, channel, rowSamples);
+                    for (int i = 0; i < count; i++) {
+                        double value = rowSamples[i];
+                        samples[row * patchWidth + column + i] = !floatingPoint && !signed && bitDepth == 32
+                                ? ((long) value & 0xffffffffL) : value;
+                    }
+                }
+                column += count;
+            }
+        }
+        return true;
+    }
+
     private boolean fillSamples(int x, int y, int sampleWidth, int sampleHeight,
                                 double[] samples, double[] rowSamples, boolean repeatCoordinates) {
         if ((sampleWidth <= 0) || (sampleHeight <= 0) || (samples == null)

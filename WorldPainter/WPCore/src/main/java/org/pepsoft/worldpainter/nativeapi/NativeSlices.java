@@ -274,6 +274,15 @@ public final class NativeSlices {
     }
     private static native int nativePaintFilteredTerrain(ByteBuffer buffer, int length);
 
+    /** One bounded live bitmap patch and all transformed bicubic samples in a single call. */
+    public static boolean fillBitmapPreview(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()
+                || buffer.isReadOnly() || buffer.position() != 0 || buffer.limit() < 128 || buffer.limit() > 4194304) return false;
+        try { return nativeFillBitmapPreview(buffer, buffer.limit()) == 0; }
+        catch (UnsatisfiedLinkError e) { return false; }
+    }
+    private static native int nativeFillBitmapPreview(ByteBuffer buffer, int length);
+
     /** Complete compact viewport tile; Java retains its original path when unsupported. */
     public static boolean renderViewportTile(ByteBuffer buffer) {
         if (!Native.isRenderEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()
