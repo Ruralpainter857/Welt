@@ -26,6 +26,63 @@ pub fn fill_displacement_height_map_tree(
     shift: u32,
     output: &mut [f64],
 ) -> Result<(), HeightMapTreeError> {
+    fill_chain(
+        nodes,
+        angle_count,
+        distance_count,
+        origin_x,
+        origin_y,
+        width,
+        height,
+        shift,
+        None,
+        output,
+    )
+}
+
+/// Affine coordinates, both displacement controls and final source evaluation stay in Rust.
+#[allow(clippy::too_many_arguments)]
+pub fn fill_affine_displacement_height_map_tree(
+    nodes: &[HeightMapNode],
+    angle_count: usize,
+    distance_count: usize,
+    origin_x: i32,
+    origin_y: i32,
+    width: usize,
+    height: usize,
+    matrix: &[f64; 6],
+    output: &mut [f64],
+) -> Result<(), HeightMapTreeError> {
+    if matrix.iter().any(|v| !v.is_finite()) {
+        return Err(HeightMapTreeError::InvalidProgram);
+    }
+    fill_chain(
+        nodes,
+        angle_count,
+        distance_count,
+        origin_x,
+        origin_y,
+        width,
+        height,
+        0,
+        Some(matrix),
+        output,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fill_chain(
+    nodes: &[HeightMapNode],
+    angle_count: usize,
+    distance_count: usize,
+    origin_x: i32,
+    origin_y: i32,
+    width: usize,
+    height: usize,
+    shift: u32,
+    matrix: Option<&[f64; 6]>,
+    output: &mut [f64],
+) -> Result<(), HeightMapTreeError> {
     let area = width
         .checked_mul(height)
         .ok_or(HeightMapTreeError::AreaOverflow)?;
@@ -65,9 +122,19 @@ pub fn fill_displacement_height_map_tree(
                 let p = col + row * width;
                 x[p] = origin_x.wrapping_add((col as i32).wrapping_shl(shift)) as f32;
                 y[p] = origin_y.wrapping_add((row as i32).wrapping_shl(shift)) as f32;
+                if let Some(matrix) = matrix {
+                    (x[p], y[p]) =
+                        crate::height_map_affine::point(f64::from(x[p]), f64::from(y[p]), matrix);
+                    if !x[p].is_finite() || !y[p].is_finite() {
+                        return Err(HeightMapTreeError::InvalidProgram);
+                    }
+                }
             }
         }
-        if shift == 0 {
+        if matrix.is_some() {
+            fill_height_map_tree_points(&nodes[..angle_count], x, y, angle)?;
+            fill_height_map_tree_points(&nodes[angle_count..base_start], x, y, distance)?;
+        } else if shift == 0 {
             // Both controls share a regular grid; retain prepared Perlin axes before displacement.
             fill_height_map_tree(
                 &nodes[..angle_count],
@@ -151,6 +218,80 @@ fn fill_control(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn affine_displacement_matches_explicit_points_and_validates_before_writing() {
+        let nodes = [
+            HeightMapNode::Constant(0.37),
+            HeightMapNode::Constant(31.0),
+            HeightMapNode::Noise {
+                d_height: 128.0,
+                scale: 1.7,
+                octaves: 3,
+                effective_seed: -123,
+            },
+        ];
+        let matrix = [-0.7, 0.13, -0.21, 1.3, -11.0, 7.0];
+        let mut actual = [0.0; 12];
+        fill_affine_displacement_height_map_tree(
+            &nodes,
+            1,
+            1,
+            -128,
+            64,
+            4,
+            3,
+            &matrix,
+            &mut actual,
+        )
+        .unwrap();
+        let mut x = [0.0; 12];
+        let mut y = [0.0; 12];
+        for row in 0..3 {
+            for col in 0..4 {
+                let p = col + row * 4;
+                let (px, py) = crate::height_map_affine::point(
+                    (-128 + col as i32) as f64,
+                    (64 + row as i32) as f64,
+                    &matrix,
+                );
+                x[p] = (f64::from(px) + 0.37_f64.sin() * 31.0) as f32;
+                y[p] = (f64::from(py) + 0.37_f64.cos() * 31.0) as f32;
+            }
+        }
+        let mut expected = [0.0; 12];
+        fill_height_map_tree_points(&nodes[2..], &x, &y, &mut expected).unwrap();
+        assert_eq!(actual, expected);
+        let before = actual;
+        let mut invalid = matrix;
+        invalid[0] = f64::NAN;
+        assert!(fill_affine_displacement_height_map_tree(
+            &nodes,
+            1,
+            1,
+            0,
+            0,
+            4,
+            3,
+            &invalid,
+            &mut actual
+        )
+        .is_err());
+        assert_eq!(actual, before);
+        assert!(fill_affine_displacement_height_map_tree(
+            &nodes,
+            0,
+            1,
+            0,
+            0,
+            4,
+            3,
+            &matrix,
+            &mut actual
+        )
+        .is_err());
+        assert_eq!(actual, before);
+    }
+
     #[test]
     fn complete_chain_matches_explicit_coordinates_and_rejects_invalid_inputs() {
         let nodes = [

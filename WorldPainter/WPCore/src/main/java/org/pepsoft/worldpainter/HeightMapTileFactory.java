@@ -151,7 +151,24 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         int mode = 0, third = 0, order = 0;
         float scaling = 0;
         double[] matrix = null;
-        if (map.getClass() == MaximisingHeightMap.class
+        // Compile the complete transformed displacement chain before creating any tile planes.
+        if (map.getClass() == TransformingHeightMap.class
+                && ((TransformingHeightMap) map).getBaseHeightMap().getClass() == DisplacementHeightMap.class) {
+            TransformingHeightMap transform = (TransformingHeightMap) map;
+            DisplacementHeightMap displacement = (DisplacementHeightMap) transform.getBaseHeightMap();
+            if (!b.prepareHeightMapProgramPair(displacement.getAngleMap(), displacement.getDistanceMap())
+                    || !b.appendHeightMapNode(displacement.getBaseHeightMap())) return null;
+            if (transform.getScaleX() == 1 && transform.getScaleY() == 1 && transform.getRotation() == 0) {
+                long px = (long) x - transform.getOffsetX(), py = (long) y - transform.getOffsetY();
+                if (px < -16777216 || py < -16777216 || px + width - 1L > 16777216 || py + height - 1L > 16777216) return null;
+                x = (int) px; y = (int) py;
+                mode = 3;
+            } else {
+                mode = 5;
+                matrix = b.previewAffineMatrix;
+                createTransformingHeightMapTransform(transform).getMatrix(matrix);
+            }
+        } else if (map.getClass() == MaximisingHeightMap.class
                 && ((((MaximisingHeightMap)map).getHeightMap1().getClass() == DisplacementHeightMap.class)
                 != (((MaximisingHeightMap)map).getHeightMap2().getClass() == DisplacementHeightMap.class))) {
             MaximisingHeightMap maximum = (MaximisingHeightMap) map;

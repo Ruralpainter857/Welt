@@ -34,7 +34,7 @@ public class FancyTileGenerationParityTest {
         String gen=System.getProperty(Native.GEN_KEY),flag=System.getProperty("welt.native.fancyGeneration"),nine=System.getProperty(Native.NINE_PATCH_GEN_KEY);
         try {
             System.setProperty("welt.native.fancyGeneration","true");Native.setNinePatchGenEnabled(true);
-            for(String source:new String[]{"noise","fnl","affine","slope","displacement"}) {
+            for(String source:new String[]{"noise","fnl","affine","slope","displacement","affine-displacement"}) {
                 HeightMap map=BitmapWorldCreationBenchmark.proceduralMap(source);
                 FancyTheme theme=new FancyTheme(-64,320,62,map,Terrain.GRASS);
                 for(int tx:new int[]{-1,0})compare(map,theme,-64,320,tx,-tx,true);
@@ -72,7 +72,7 @@ public class FancyTileGenerationParityTest {
             System.setProperty("welt.native.fancyGeneration","true");System.setProperty(Native.GEN_KEY,"false");
             List<HeightMapTileFactory> factories=new ArrayList<>();List<Tile> expected=new ArrayList<>();
             for(int i=0;i<8;i++) {
-                HeightMap map=BitmapWorldCreationBenchmark.proceduralMap((i&1)==0?"affine":"displacement");
+                HeightMap map=BitmapWorldCreationBenchmark.proceduralMap((i&1)==0?"affine":"affine-displacement");
                 FancyTheme theme=new FancyTheme(-64,320,62,map,Terrain.GRASS);
                 theme.setTemperatureMap(new ConstantHeightMap((i&1)==0?-30:35));
                 HeightMapTileFactory f=new HeightMapTileFactory(197,map,-64,320,false,theme);

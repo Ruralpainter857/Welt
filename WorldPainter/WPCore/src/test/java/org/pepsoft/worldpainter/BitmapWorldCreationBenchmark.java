@@ -33,6 +33,8 @@ public final class BitmapWorldCreationBenchmark {
             case "fnl" -> new SumHeightMap(new ConstantHeightMap(32), new FastNoiseLiteHeightMap(160, .7, 3, 17));
             case "affine" -> new TransformingHeightMap("Creation", map, 1.7f, .65f, 31, -47, .37f);
             case "slope" -> new SlopeHeightMap(map, 3.7f);
+            case "affine-displacement" -> new TransformingHeightMap("Creation", proceduralMap("displacement"),
+                    1.7f, .65f, 31, -47, .37f);
             case "displacement" -> new DisplacementHeightMap("Creation", map,
                     new NoiseHeightMap(Math.PI * 2, .9, 3, 177), new NoiseHeightMap(64, .5, 3, -321));
             default -> throw new IllegalArgumentException("Unknown creation source");

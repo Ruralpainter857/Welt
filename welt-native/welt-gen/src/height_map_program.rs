@@ -1,6 +1,8 @@
 //! WTGP v1: bounded procedural source for the complete packed factory transaction.
 use crate::height_map_affine::fill_affine_height_map_tree;
-use crate::height_map_displacement::fill_displacement_height_map_tree;
+use crate::height_map_displacement::{
+    fill_affine_displacement_height_map_tree, fill_displacement_height_map_tree,
+};
 use crate::height_map_slope::fill_slope_height_map_tree;
 use crate::height_map_tree::{fill_height_map_tree, HeightMapNode};
 use welt_core::error::WeltError;
@@ -90,7 +92,7 @@ pub(crate) fn fill_source(data: &[u8], base: usize, output: &mut [f64]) -> Resul
     let width = word(data, base + 28) as usize;
     let height = word(data, base + 32) as usize;
     if !(1..=64).contains(&count)
-        || !(0..=4).contains(&mode)
+        || !(0..=5).contains(&mode)
         || word(data, base + 8) as usize != 128 + count * 32
         || data.len() - base != 128 + count * 32
         || !(1..=256).contains(&width)
@@ -121,7 +123,7 @@ pub(crate) fn fill_source(data: &[u8], base: usize, output: &mut [f64]) -> Resul
     if mode != 4 && (third != 0 || order != 0) {
         return Err(bad);
     }
-    if mode != 3 && mode != 4 && (first != 0 || second != 0) {
+    if mode != 3 && mode != 4 && mode != 5 && (first != 0 || second != 0) {
         return Err(bad);
     }
     let mut nodes = [HeightMapNode::Constant(0.0); 64];
@@ -208,6 +210,12 @@ pub(crate) fn fill_source(data: &[u8], base: usize, output: &mut [f64]) -> Resul
                 }
                 Ok(())
             })
+        }
+        5 => {
+            let matrix = std::array::from_fn(|i| number(data, base + 64 + i * 8));
+            fill_affine_displacement_height_map_tree(
+                nodes, first, second, x, y, width, height, &matrix, output,
+            )
         }
         _ => unreachable!(),
     };

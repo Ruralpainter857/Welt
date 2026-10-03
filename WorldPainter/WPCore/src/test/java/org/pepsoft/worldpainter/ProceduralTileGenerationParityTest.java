@@ -15,7 +15,7 @@ public class ProceduralTileGenerationParityTest {
         String gen=System.getProperty(Native.GEN_KEY), flag=System.getProperty("welt.native.proceduralGeneration");
         try {
             System.setProperty("welt.native.proceduralGeneration","true");
-            for (String source : new String[]{"noise","fnl","affine","slope","displacement"}) {
+            for (String source : new String[]{"noise","fnl","affine","slope","displacement","affine-displacement"}) {
                 HeightMap map=BitmapWorldCreationBenchmark.proceduralMap(source);
                 for (int min : new int[]{0,-64}) {
                     for (int tx : new int[]{-1,0,1}) compare(map,min,min==0?256:320,tx,-tx,true);
@@ -30,6 +30,26 @@ public class ProceduralTileGenerationParityTest {
             compare(new ConstantHeightMap(100000),0,256,0,0,true);
         } finally {restore(Native.GEN_KEY,gen);restore("welt.native.proceduralGeneration",flag);}
     }
+    @Test public void transformedDisplacementPreservesLiveSettingsAndFallbacks() throws Exception {
+        String gen=System.getProperty(Native.GEN_KEY), flag=System.getProperty("welt.native.proceduralGeneration");
+        try {
+            System.setProperty("welt.native.proceduralGeneration","true");
+            HeightMap source=BitmapWorldCreationBenchmark.proceduralMap("displacement");
+            for (float rotation : new float[]{0, .37f, (float)(Math.PI/2)}) {
+                compare(new TransformingHeightMap("Warp",source,-1.7f,.65f,31,-47,rotation),-64,320,-1,1,true);
+            }
+            compare(new TransformingHeightMap("Translation",source,1,1,31,-47,0),0,256,-1,1,true);
+            TransformingHeightMap transform=new TransformingHeightMap("Live",source,1.7f,.65f,31,-47,.37f);
+            compare(transform,-64,320,1,-1,true);
+            transform.setBaseHeightMap(BitmapWorldCreationBenchmark.proceduralMap("displacement"));
+            transform.setSeed(-98723);
+            compare(transform,-64,320,1,-1,true);
+            HeightMap nested=new DisplacementHeightMap("Nested",source,new ConstantHeightMap(.37),new ConstantHeightMap(10));
+            compare(new TransformingHeightMap("Unsupported",nested,1.7f,.65f,31,-47,.37f),-64,320,0,0,false);
+            compare(transform,-64,320,131073,0,false);
+        } finally {restore(Native.GEN_KEY,gen);restore("welt.native.proceduralGeneration",flag);}
+    }
+
     @Test public void arithmeticAndShapeProgramsPreserveCompleteTiles() throws Exception {
         String gen=System.getProperty(Native.GEN_KEY), flag=System.getProperty("welt.native.proceduralGeneration");
         try {
@@ -77,7 +97,7 @@ public class ProceduralTileGenerationParityTest {
     }
     private static HeightMapTileFactory deterministicFactory() {
         var ranges=new TreeMap<Integer,Terrain>();ranges.put(-65,Terrain.GRASS);ranges.put(100,Terrain.STONE);
-        return new HeightMapTileFactory(197,BitmapWorldCreationBenchmark.proceduralMap("displacement"),-64,320,false,
+        return new HeightMapTileFactory(197,BitmapWorldCreationBenchmark.proceduralMap("affine-displacement"),-64,320,false,
                 new SimpleTheme(197,62,ranges,null,-64,320,false,false));
     }
     @Test public void unsupportedSourcesAndCoordinatesKeepJavaFallback() throws Exception {
