@@ -13,7 +13,7 @@ import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 /** Measures complete viewport redraws, including tile snapshots and image writes. */
 public final class TileViewportBenchmark {
     private static volatile int checksum;
-    private record Setup(Dimension dimension, Tile[] tiles, TileRenderer renderer, BufferedImage image) { }
+    private record Setup(Dimension dimension, Tile[] tiles, TileRenderer renderer, BufferedImage image, int origin, int tilePixels) { }
     private record Sample(long nanos, long allocated) { }
 
     public static void main(String[] args) {
@@ -33,8 +33,8 @@ public final class TileViewportBenchmark {
         Arrays.sort(times); Arrays.sort(allocations);
         long direct = ManagementFactory.getPlatformMXBeans(java.lang.management.BufferPoolMXBean.class).stream()
                 .filter(pool -> pool.getName().equals("direct")).mapToLong(java.lang.management.BufferPoolMXBean::getMemoryUsed).sum();
-        System.out.printf("viewport mode=%s threeFullRedraws medianMs=%.3f allocatedBytes=%d directBytes=%d checksum=%d nativeTiles=%d%n",
-                fused ? "fused" : nativeShade ? "shade" : "java", times[4] / 1e6, allocations[4], direct, checksum, setup.renderer.completedNativeViewportTiles());
+        System.out.printf("viewport mode=%s zoom=%d tiles=%d threeFullRedraws medianMs=%.3f allocatedBytes=%d directBytes=%d checksum=%d nativeTiles=%d%n",
+                fused ? "fused" : nativeShade ? "shade" : "java", setup.renderer.getZoom(), setup.tiles.length, times[4] / 1e6, allocations[4], direct, checksum, setup.renderer.completedNativeViewportTiles());
         if (fused && setup.renderer.completedNativeViewportTiles() != ((long) warmups + 9) * 3 * setup.tiles.length)
             throw new AssertionError("Every tile redraw must use the fused path");
     }
@@ -62,8 +62,13 @@ public final class TileViewportBenchmark {
         CustomLayer bitPaint = custom ? new CustomLayer("Bit paint", "Custom paint fixture", Layer.DataSize.BIT, 103, pattern) { } : null;
         if (custom) bitPaint.setOpacity(.73f);
         int[] biomes = {1, 4, 6, 21, 255};
-        Tile[] tiles = new Tile[16]; int next = 0;
-        for (int ty = -2; ty < 2; ty++) for (int tx = -2; tx < 2; tx++) {
+        int zoom = Integer.getInteger("welt.benchmark.viewportZoom", 0);
+        int side = Integer.getInteger("welt.benchmark.viewportSide", 4);
+        if (zoom > 0 || zoom < -7 || side < 1 || side > 16)
+            throw new IllegalArgumentException("Viewport zoom must be -7..0 and side 1..16");
+        int origin = side / 2, tilePixels = 128 >> -zoom;
+        Tile[] tiles = new Tile[side * side]; int next = 0;
+        for (int ty = -origin; ty < side - origin; ty++) for (int tx = -origin; tx < side - origin; tx++) {
             Tile tile = factory.createTile(tx, ty); tile.inhibitEvents();
             for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++) {
                 tile.setHeight(x, y, 58 + ((x * 3 + y * 7) & 63) / 4f);
@@ -88,15 +93,15 @@ public final class TileViewportBenchmark {
             }
             tile.releaseEvents(); d.addTile(tile); tiles[next++] = tile;
         }
-        TileRenderer renderer = new TileRenderer(d, ColourScheme.DEFAULT, new CustomBiomeManager(), 0, true, null);
+        TileRenderer renderer = new TileRenderer(d, ColourScheme.DEFAULT, new CustomBiomeManager(), zoom, true, null);
         renderer.setContourLines(true);
-        return new Setup(d, tiles, renderer, new BufferedImage(512, 512, BufferedImage.TYPE_INT_ARGB));
+        return new Setup(d, tiles, renderer, new BufferedImage(side * tilePixels, side * tilePixels, BufferedImage.TYPE_INT_ARGB), origin, tilePixels);
     }
     private static Sample redraw(Setup setup) {
         var bean = (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
         long allocated = bean.getThreadAllocatedBytes(Thread.currentThread().getId()), start = System.nanoTime();
         for (int pass = 0; pass < 3; pass++) for (Tile tile : setup.tiles)
-            setup.renderer.renderTile(tile, setup.image, (tile.getX() + 2) << 7, (tile.getY() + 2) << 7);
+            setup.renderer.renderTile(tile, setup.image, (tile.getX() + setup.origin) * setup.tilePixels, (tile.getY() + setup.origin) * setup.tilePixels);
         long elapsed = System.nanoTime() - start;
         allocated = bean.getThreadAllocatedBytes(Thread.currentThread().getId()) - allocated;
         checksum = Arrays.hashCode(pixels(setup));
@@ -122,8 +127,8 @@ public final class TileViewportBenchmark {
             }
         }
         Arrays.sort(jt); Arrays.sort(rt); Arrays.sort(ratios); Arrays.sort(ja); Arrays.sort(ra);
-        System.out.printf("viewport paired javaMs=%.3f nativeMs=%.3f ratio=%.3f minRatio=%.3f maxRatio=%.3f javaAllocated=%d nativeAllocated=%d pixelParity=true nativeTiles=%d%n",
-                jt[4], rt[4], ratios[4], ratios[0], ratios[8], ja[4], ra[4], shade.renderer.completedNativeViewportTiles());
+        System.out.printf("viewport paired zoom=%d tiles=%d javaMs=%.3f nativeMs=%.3f ratio=%.3f minRatio=%.3f maxRatio=%.3f javaAllocated=%d nativeAllocated=%d pixelParity=true nativeTiles=%d%n",
+                java.renderer.getZoom(), java.tiles.length, jt[4], rt[4], ratios[4], ratios[0], ratios[8], ja[4], ra[4], shade.renderer.completedNativeViewportTiles());
         if (Boolean.getBoolean("welt.benchmark.viewportFused") && shade.renderer.completedNativeViewportTiles() != ((long) warmups + 9) * 3 * shade.tiles.length)
             throw new AssertionError("Every tile redraw must use the fused path");
     }
