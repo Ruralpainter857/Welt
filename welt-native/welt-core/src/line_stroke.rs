@@ -12,7 +12,7 @@ use crate::{
     selection_copy::{get, set},
 };
 use std::cell::RefCell;
-pub const MAX_BYTES: usize = 256 + 256 * 256 * 4 + 32 + 8192;
+pub const MAX_BYTES: usize = 1024 * 1024;
 thread_local! { static CENTERS: RefCell<Vec<i32>> = const { RefCell::new(Vec::new()) }; }
 fn word(d: &[u8], p: usize) -> i32 {
     i32::from_le_bytes(d[p..p + 4].try_into().unwrap())
@@ -23,6 +23,9 @@ fn float(d: &[u8], p: usize) -> f32 {
 
 /// Validates the complete frame before changing any layer values or metadata.
 pub fn paint(d: &mut [u8]) -> Result<(), WeltError> {
+    if d.len() >= 256 && word(d, 4) == 2 {
+        return crate::line_set_stroke::paint(d);
+    }
     let bad = WeltError::IllegalArgument;
     if d.len() < 256
         || d.len() > MAX_BYTES

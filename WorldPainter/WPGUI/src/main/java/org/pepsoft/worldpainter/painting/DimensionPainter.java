@@ -688,7 +688,10 @@ public final class DimensionPainter {
     private float[] nativeStrokeStrengths;
     private boolean drawNativeStroke(Dimension dimension, int x1, int y1, int x2, int y2, float dynamic) {
         if (!LineStrokeAccess.isEnabled() || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
-                || paint.getClass()!=NibbleLayerPaint.class || paint.getFilter()!=null) return false;
+                || paint.getFilter()!=null) return false;
+        boolean nibble=paint.getClass()==NibbleLayerPaint.class,bit=paint.getClass()==BitLayerPaint.class;
+        boolean terrain=paint.getClass()==TerrainPaint.class && !undo;
+        if(!nibble && ((!bit && !terrain) || !LineStrokeAccess.isSetEnabled()))return false;
         Brush brush=paint.getBrush();
         // Stock cached brushes have no per-cell callbacks; arbitrary brushes retain their call order.
         if (!(brush instanceof SymmetricBrush && brush.getClass().getEnclosingClass()==SymmetricBrush.class)
@@ -696,10 +699,14 @@ public final class DimensionPainter {
         boolean pixel=brush.getRadius()==0;
         Rectangle box=pixel?new Rectangle(0,0,1,1):brush.getBoundingBox();
         if(box.width<1 || box.height<1 || box.width>256 || box.height>256) return false;
+        if(!nibble && !LineStrokeAccess.useSetStroke(box.width,box.height,x1,y1,x2,y2))return false;
         int cells=box.width*box.height;
         if(nativeStrokeStrengths==null || nativeStrokeStrengths.length!=cells)nativeStrokeStrengths=new float[cells];
-        for(int y=0;y<box.height;y++)for(int x=0;x<box.width;x++)nativeStrokeStrengths[x+y*box.width]=pixel?brush.getLevel()
-                :undo?brush.getFullStrength(box.x+x,box.y+y):brush.getStrength(box.x+x,box.y+y);
+        for(int y=0;y<box.height;y++)for(int x=0;x<box.width;x++)nativeStrokeStrengths[x+y*box.width]=pixel?(nibble?brush.getLevel():1)
+                :undo || !nibble && !paint.isDither()?brush.getFullStrength(box.x+x,box.y+y):brush.getStrength(box.x+x,box.y+y);
+        if(!nibble)return LineStrokeAccess.paintSet(dimension,terrain?((TerrainPaint)paint).getTerrain():null,
+                bit?((LayerPaint)paint).getLayer():null,undo?0:1,x1,y1,x2,y2,
+                box.x,box.y,box.width,box.height,dynamic,pixel,paint.isDither(),nativeStrokeStrengths)>=0;
         return LineStrokeAccess.paint(dimension,((LayerPaint)paint).getLayer(),x1,y1,x2,y2,
                 box.x,box.y,box.width,box.height,dynamic,undo,pixel,nativeStrokeStrengths)>=0;
     }
