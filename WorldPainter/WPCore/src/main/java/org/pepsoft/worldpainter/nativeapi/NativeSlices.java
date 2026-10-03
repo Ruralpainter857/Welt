@@ -13,6 +13,19 @@ import java.nio.ByteBuffer;
 
 /** Bulk JNI entry points. A null result asks the caller to use its Java path. */
 public final class NativeSlices {
+    private static volatile boolean chunkNbtSymbolUnavailable;
+
+    /** Index all NBT payloads once; malformed or oversized trees retain the Java reader. */
+    public static boolean indexChunkNbt(byte[] bytes, int length, int[] index) {
+        if (bytes == null || length < 1 || length > bytes.length || length > 4 * 1024 * 1024
+                || index == null || index.length != 4 + 8192 * 8 || chunkNbtSymbolUnavailable
+                || !NativeLoader.areSlicesAvailable()) return false;
+        try { return nativeIndexChunkNbt(bytes, length, index) == 0
+                && index[0] == 0x574e4254 && index[1] == 1 && index[2] > 0 && index[2] <= 8192
+                && index[3] > 0 && index[3] <= length; }
+        catch (UnsatisfiedLinkError e) { chunkNbtSymbolUnavailable = true; return false; }
+    }
+    private static native int nativeIndexChunkNbt(byte[] bytes, int length, int[] index);
     /** Converts a complete big-endian MCA header to little-endian words in place. */
     public static boolean decodeRegionHeader(ByteBuffer buffer) {
         if(buffer==null || !buffer.isDirect() || buffer.isReadOnly()

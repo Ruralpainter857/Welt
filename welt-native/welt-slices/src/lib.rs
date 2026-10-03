@@ -4764,3 +4764,43 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
         })
     }
 }
+thread_local! {
+    static NBT_INDEX_SCRATCH: RefCell<(Vec<u8>, Vec<i32>)> = const { RefCell::new((Vec::new(), Vec::new())) };
+}
+
+/// Index the complete NBT tree without JNI calls per tag or retaining Java array addresses.
+/// # Safety
+/// The input and output arrays are valid JVM references and exclusive during this call.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeIndexChunkNbt(
+    env: *mut JNIEnv, _class: jclass, input: jobject, length: jint, output: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            use welt_nbt::nbt_index::{index, HEADER_WORDS, MAGIC, MAX_BYTES, NODE_WORDS, OUTPUT_WORDS};
+            if input.is_null() || output.is_null() || length < 1 || length as usize > MAX_BYTES {
+                return WeltError::IllegalArgument as jint;
+            }
+            type Length = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            type Read = unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i8);
+            type Write = unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i32);
+            let array_length: Length = std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            if array_length(env, input) < length || array_length(env, output) != OUTPUT_WORDS as jint {
+                return WeltError::IllegalArgument as jint;
+            }
+            let read: Read = std::mem::transmute(function(env, 200)); // GetByteArrayRegion
+            let write: Write = std::mem::transmute(function(env, SET_INT_ARRAY_REGION));
+            NBT_INDEX_SCRATCH.with(|cell| {
+                let mut scratch = cell.borrow_mut();
+                let (bytes, nodes) = &mut *scratch;
+                bytes.resize(length as usize, 0);
+                read(env, input, 0, length, bytes.as_mut_ptr().cast());
+                let Some(consumed) = index(bytes, nodes) else {return WeltError::IllegalArgument as jint;};
+                let header = [MAGIC, 1, (nodes.len()/NODE_WORDS) as i32, consumed as i32];
+                write(env, output, 0, HEADER_WORDS as jint, header.as_ptr());
+                write(env, output, HEADER_WORDS as jint, nodes.len() as jint, nodes.as_ptr());
+                WeltError::Ok as jint
+            })
+        })
+    }
+}

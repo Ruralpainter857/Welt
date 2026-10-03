@@ -68,9 +68,13 @@ public final class MapImportBenchmark extends AbstractTool {
         }
         return result;
     }
-    private record Result(long nanos,long allocated,long hash,long calls) { }
+    private record Result(long nanos,long allocated,long hash,long calls,long nbtCalls) { }
     private static Result run(File levelDat,String mode) throws Exception {
-        System.setProperty("welt.native.regionHeader",Boolean.toString(!mode.equals("java")));
+        boolean nbtMode=mode.startsWith("nbt-");
+        System.setProperty("welt.native.chunkNbt",Boolean.toString(nbtMode&&!mode.equals("nbt-java")));
+        System.setProperty("welt.native.chunkNbtKernel",Boolean.toString(!mode.equals("nbt-grouped")));
+        long nbtCalls=ChunkTagReader.completedCalls();
+        System.setProperty("welt.native.regionHeader",Boolean.toString(nbtMode||!mode.equals("java")));
         System.setProperty("welt.native.regionHeaderKernel",Boolean.toString(!mode.equals("grouped-java")));
         long calls=RegionHeaderAccess.completedCalls();
         var memory=(com.sun.management.ThreadMXBean)ManagementFactory.getThreadMXBean();
@@ -78,8 +82,11 @@ public final class MapImportBenchmark extends AbstractTool {
         long elapsed=System.nanoTime()-start,bytes=memory.getThreadAllocatedBytes(Thread.currentThread().getId())-before;
         long delta=RegionHeaderAccess.completedCalls()-calls;
         if(mode.equals("rust")&&delta==0)throw new AssertionError("Native region decoder did not execute");
-        if(!mode.equals("rust")&&delta!=0)throw new AssertionError("Reference unexpectedly executed native decoder");
-        return new Result(elapsed,bytes,hash(world),delta);
+        if(!nbtMode&&!mode.equals("rust")&&delta!=0)throw new AssertionError("Reference unexpectedly executed native decoder");
+        long nbtDelta=ChunkTagReader.completedCalls()-nbtCalls;
+        if(mode.equals("nbt-rust")&&nbtDelta!=(long)Integer.getInteger("welt.benchmark.importSide",4)*Integer.getInteger("welt.benchmark.importSide",4))throw new AssertionError("Native NBT fallback in benchmark");
+        if(!mode.equals("nbt-rust")&&nbtDelta!=0)throw new AssertionError("Reference unexpectedly used native NBT");
+        return new Result(elapsed,bytes,hash(world),delta,nbtDelta);
     }
     private static void quietLogging() throws Exception {
         Object root=org.slf4j.LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
@@ -98,9 +105,10 @@ public final class MapImportBenchmark extends AbstractTool {
         quietLogging();
         File levelDat=fixture(root);int warm=Integer.getInteger("welt.benchmark.importWarmups",6),trials=Integer.getInteger("welt.benchmark.importTrials",9);
         double[] millis=new double[trials],rust=new double[trials],ratios=new double[trials];long[] allocated=new long[trials],rustAllocated=new long[trials];long expected=0;Result last=null;
-        String reference=selected.equals("compare-grouped")?"grouped-java":"java";
+        String reference=selected.equals("compare-nbt-grouped")?"nbt-grouped":selected.equals("compare-nbt")?"nbt-java":selected.equals("compare-grouped")?"grouped-java":"java";
+        String nativeMode=selected.startsWith("compare-nbt")?"nbt-rust":"rust";
         for(int i=-warm;i<trials;i++){
-            if(paired){Result j=null,r=null;for(int pass=0;pass<2;pass++){if(((i+pass)&1)==0)j=run(levelDat,reference);else r=run(levelDat,"rust");}
+            if(paired){Result j=null,r=null;for(int pass=0;pass<2;pass++){if(((i+pass)&1)==0)j=run(levelDat,reference);else r=run(levelDat,nativeMode);}
                 if(j.hash!=r.hash)throw new AssertionError("Whole imported worlds differ");last=r;
                 if(i==-warm)expected=r.hash;else if(r.hash!=expected)throw new AssertionError("Imported world changed across trials");
                 if(i>=0){millis[i]=j.nanos/1e6;rust[i]=r.nanos/1e6;ratios[i]=(double)j.nanos/r.nanos;allocated[i]=j.allocated;rustAllocated[i]=r.allocated;}
@@ -112,7 +120,7 @@ public final class MapImportBenchmark extends AbstractTool {
         System.out.printf(Locale.ROOT,"mapDecodeProfile chunks=%d workerNbtMs=%.3f constructionMs=%.3f allocatedBytes=%d%n",decode.chunks(),decode.nbtNanos()/1e6,decode.constructionNanos()/1e6,decode.allocatedBytes());
         var profile=JavaMapImporter.importProfile();
         System.out.printf(Locale.ROOT,"mapImportProfile chunks=%d workerVisitorMs=%.3f surfaceMs=%.3f writesMs=%.3f biomesMs=%.3f%n",profile.chunks(),profile.visitorNanos()/1e6,profile.surfaceNanos()/1e6,profile.writesNanos()/1e6,profile.biomesNanos()/1e6);
-        if(paired)System.out.printf(Locale.ROOT,"mapImport side=%d workers=%s readOnly=%s reference=%s referenceMs=%.3f rustMs=%.3f pairedRatio=%.3f range=%.3f..%.3f callerAllocated=%d rustCallerAllocated=%d hash=%d nativeRegionCalls=%d%n",Integer.getInteger("welt.benchmark.importSide",4),System.getProperty("org.pepsoft.worldpainter.threads"),System.getProperty("welt.benchmark.importReadOnly","MAN_MADE"),reference,millis[middle],rust[middle],ratios[middle],ratios[0],ratios[trials-1],allocated[middle],rustAllocated[middle],expected,last.calls);
-        else System.out.printf(Locale.ROOT,"mapImport side=%d workers=%s readOnly=%s mode=%s medianMs=%.3f callerAllocated=%d hash=%d nativeRegionCalls=%d%n",Integer.getInteger("welt.benchmark.importSide",4),System.getProperty("org.pepsoft.worldpainter.threads"),System.getProperty("welt.benchmark.importReadOnly","MAN_MADE"),selected,millis[middle],allocated[middle],expected,last.calls);
+        if(paired)System.out.printf(Locale.ROOT,"mapImport side=%d workers=%s readOnly=%s reference=%s referenceMs=%.3f rustMs=%.3f pairedRatio=%.3f range=%.3f..%.3f callerAllocated=%d rustCallerAllocated=%d hash=%d nativeRegionCalls=%d nativeNbtCalls=%d%n",Integer.getInteger("welt.benchmark.importSide",4),System.getProperty("org.pepsoft.worldpainter.threads"),System.getProperty("welt.benchmark.importReadOnly","MAN_MADE"),reference,millis[middle],rust[middle],ratios[middle],ratios[0],ratios[trials-1],allocated[middle],rustAllocated[middle],expected,last.calls,last.nbtCalls);
+        else System.out.printf(Locale.ROOT,"mapImport side=%d workers=%s readOnly=%s mode=%s medianMs=%.3f callerAllocated=%d hash=%d nativeRegionCalls=%d nativeNbtCalls=%d%n",Integer.getInteger("welt.benchmark.importSide",4),System.getProperty("org.pepsoft.worldpainter.threads"),System.getProperty("welt.benchmark.importReadOnly","MAN_MADE"),selected,millis[middle],allocated[middle],expected,last.calls,last.nbtCalls);
     }
 }

@@ -1,7 +1,6 @@
 package org.pepsoft.worldpainter.exporting;
 
 import com.google.common.collect.ImmutableSet;
-import org.jnbt.NBTInputStream;
 import org.jnbt.NBTOutputStream;
 import org.jnbt.Tag;
 import org.pepsoft.minecraft.*;
@@ -16,7 +15,6 @@ import org.slf4j.LoggerFactory;
 import java.awt.*;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadFactory;
@@ -256,12 +254,8 @@ public class JavaChunkStore implements ChunkStore {
                 if (regionFile == null) {
                     continue;
                 }
-                final InputStream chunkIn = regionFile.getChunkDataInputStream(x & 31, z & 31);
-                if (chunkIn != null) {
-                    try (NBTInputStream in = new NBTInputStream(chunkIn)) {
-                        tags.put(type, in.readTag());
-                    }
-                }
+                final Tag tag = ChunkTagReader.read(regionFile, x & 31, z & 31);
+                if (tag != null) { tags.put(type, tag); }
             }
             if (! tags.containsKey(REGION)) {
                 return null;
@@ -426,12 +420,8 @@ public class JavaChunkStore implements ChunkStore {
                                 final long nbtStart=profileImport?System.nanoTime():0;
                                 final Map<DataType, Tag> tags = new HashMap<>();
                                 for (Map.Entry<DataType, RegionFile> entry: regions.entrySet()) {
-                                    final InputStream chunkIn = entry.getValue().getChunkDataInputStream(x & 31, z & 31);
-                                    if (chunkIn != null) {
-                                        try (NBTInputStream in = new NBTInputStream(chunkIn)) {
-                                            tags.put(entry.getKey(), in.readTag());
-                                        }
-                                    }
+                                    final Tag tag = ChunkTagReader.read(entry.getValue(), x & 31, z & 31);
+                                    if (tag != null) { tags.put(entry.getKey(), tag); }
                                 }
                                 final long constructionStart=profileImport?System.nanoTime():0;
                                 if(profileImport)PROFILE_NBT.add(constructionStart-nbtStart);

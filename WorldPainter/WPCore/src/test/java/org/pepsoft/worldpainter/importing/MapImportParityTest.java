@@ -5,6 +5,7 @@ import java.nio.file.*;
 import java.util.*;
 import org.junit.*;
 import org.pepsoft.minecraft.RegionHeaderAccess;
+import org.pepsoft.minecraft.ChunkTagReader;
 import org.pepsoft.worldpainter.*;
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.exporting.JavaChunkStore;
@@ -12,7 +13,7 @@ import org.pepsoft.worldpainter.layers.Layer;
 import static org.junit.Assert.*;
 
 public class MapImportParityTest extends AbstractTool {
-    private static final String[] KEYS={"user.home","org.pepsoft.worldpainter.threads","welt.native.regionHeader","welt.native.regionHeaderKernel","welt.profile.mapImport","welt.benchmark.importReadOnly"};
+    private static final String[] KEYS={"user.home","org.pepsoft.worldpainter.threads","welt.native.chunkNbt","welt.native.chunkNbtKernel","welt.native.regionHeader","welt.native.regionHeaderKernel","welt.profile.mapImport","welt.benchmark.importReadOnly"};
     private static final String[] SAVED=new String[KEYS.length];
     private static Configuration previousConfiguration;
     private static File fixture;
@@ -38,9 +39,9 @@ public class MapImportParityTest extends AbstractTool {
         System.setProperty("welt.profile.mapImport","false");
         for(String workers:new String[]{"1","4"})for(MapImporter.ReadOnlyOption readOnly:MapImporter.ReadOnlyOption.values()){
             System.setProperty("org.pepsoft.worldpainter.threads",workers);System.setProperty("welt.benchmark.importReadOnly",readOnly.name());
-            System.setProperty("welt.native.regionHeader","false");World2 expected=MapImportBenchmark.importWorld(fixture);
-            System.setProperty("welt.native.regionHeader","true");System.setProperty("welt.native.regionHeaderKernel","true");long calls=RegionHeaderAccess.completedCalls();World2 actual=MapImportBenchmark.importWorld(fixture);
-            assertTrue(RegionHeaderAccess.completedCalls()>calls);same(expected,actual);
+            System.setProperty("welt.native.chunkNbt","false");System.setProperty("welt.native.regionHeader","false");World2 expected=MapImportBenchmark.importWorld(fixture);
+            System.setProperty("welt.native.chunkNbt","true");System.setProperty("welt.native.chunkNbtKernel","true");long nbtCalls=ChunkTagReader.completedCalls();System.setProperty("welt.native.regionHeader","true");System.setProperty("welt.native.regionHeaderKernel","true");long calls=RegionHeaderAccess.completedCalls();World2 actual=MapImportBenchmark.importWorld(fixture);
+            assertTrue(RegionHeaderAccess.completedCalls()>calls);assertEquals(16,ChunkTagReader.completedCalls()-nbtCalls);same(expected,actual);
         }
     }
     @Test public void diagnosticsAndGroupedJavaFallbackPreserveTheWholeImportedWorld() throws Exception {

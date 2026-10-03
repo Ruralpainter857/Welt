@@ -3,3 +3,5 @@
 pub mod packed_array;
 
 pub mod region_header;
+
+pub mod nbt_index;
