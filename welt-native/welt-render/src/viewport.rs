@@ -1,7 +1,8 @@
-//! WVR versions 1, 2 and 3: complete tile composition with compact overlay planes.
+//! WVR versions 1 through 4: complete tile composition with compact overlay planes.
 use crate::shade::java_multiply;
 
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
+#[cfg(test)]
 const AREA: usize = 16384;
 const HALO: usize = 130 * 130;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,11 +35,11 @@ impl Plane {
         paint_height: 0,
         opacity: 0.0,
     };
-    fn value(self, data: &[u8], x: usize, y: usize) -> i32 {
+    fn value(self, data: &[u8], x: usize, y: usize, cell: usize) -> i32 {
         let index = if self.bits == 0 {
             x / 16 + y / 16 * 8
         } else {
-            x + y * 128
+            cell
         };
         match self.bits {
             0 | 1 => ((data[self.offset + index / 8] >> (index & 7)) & 1) as i32,
@@ -54,11 +55,11 @@ fn int(data: &[u8], p: usize) -> i32 {
 fn word(data: &[u8], p: usize) -> u64 {
     u64::from_le_bytes(data[p..p + 8].try_into().unwrap())
 }
-fn bytes(bits: usize) -> usize {
+fn bytes(bits: usize, area: usize) -> usize {
     if bits == 0 {
         8
     } else {
-        AREA * bits / 8
+        (area * bits).div_ceil(8)
     }
 }
 fn brighten(h: [i32; 4], light: i32) -> i32 {
@@ -150,12 +151,24 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
     if data.len() < 128
         || data.len() > MAX_BYTES
         || int(data, 0) != 0x31525657
-        || !matches!(int(data, 4), 1..=3)
+        || !matches!(int(data, 4), 1..=4)
     {
         return Err(bad);
     }
     let count = int(data, 8) as usize;
     let version = int(data, 4);
+    let shift = if version == 4 {
+        let shift = int(data, 104);
+        if !(1..=7).contains(&shift) {
+            return Err(bad);
+        }
+        shift as u32
+    } else {
+        0
+    };
+    let width = 128 >> shift;
+    let area = width * width;
+    let compact = version == 4;
     let palette_count = int(data, 12) as usize;
     let flags = int(data, 20);
     let separation = int(data, 24);
@@ -173,9 +186,10 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
     let palette = 128;
     let table = palette + palette_count * 4;
     let terrain = table + count * 32;
-    let heights = terrain + AREA;
-    let wet = heights + HALO * 4;
-    let mut cursor = wet + HALO * 4;
+    let heights = terrain + area;
+    let height_bytes = if compact { area * 20 } else { HALO * 4 };
+    let wet = heights + height_bytes;
+    let mut cursor = wet + height_bytes;
     if cursor > data.len()
         || int(data, 52) as usize != terrain
         || int(data, 56) as usize != heights
@@ -224,7 +238,7 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
             paint_height: 0,
             opacity: 0.0,
         };
-        cursor += bytes(bits);
+        cursor += bytes(bits, area);
     }
     for plane in planes.iter_mut().take(count) {
         match plane.kind {
@@ -278,8 +292,8 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
     }
     let output = cursor;
     if int(data, 64) as usize != output
-        || output + AREA * 4 != data.len()
-        || data[terrain..terrain + AREA]
+        || output + area * 4 != data.len()
+        || data[terrain..terrain + area]
             .iter()
             .any(|&v| v as usize >= palette_count)
     {
@@ -298,18 +312,29 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
     let hide_fluids = flags & 2 != 0;
     let origin_x = if version >= 3 { int(data, 96) } else { 0 };
     let origin_y = if version >= 3 { int(data, 100) } else { 0 };
-    for y in 0..128 {
-        for x in 0..128 {
-            let cell = x + y * 128;
-            let halo = x + 1 + (y + 1) * 130;
-            let set = |index: i32| index >= 0 && planes[index as usize].value(data, x, y) != 0;
+    for row in 0..width {
+        for col in 0..width {
+            let x = col << shift;
+            let y = row << shift;
+            let cell = col + row * width;
+            let halo = if compact {
+                cell * 5
+            } else {
+                x + 1 + (y + 1) * 130
+            };
+            let set =
+                |index: i32| index >= 0 && planes[index as usize].value(data, x, y, cell) != 0;
             let colour = if set(masks[1]) || set(masks[2]) {
                 int(data, 48)
             } else if set(masks[0]) {
                 int(data, 44)
             } else {
                 let h = int(data, heights + halo * 4);
-                let neighbors = [halo - 130, halo - 1, halo + 1, halo + 130];
+                let neighbors = if compact {
+                    [halo + 1, halo + 2, halo + 3, halo + 4]
+                } else {
+                    [halo - 130, halo - 1, halo + 1, halo + 130]
+                };
                 let mut delta = [0; 4];
                 for i in 0..4 {
                     delta[i] = int(data, heights + neighbors[i] * 4).wrapping_sub(h);
@@ -330,7 +355,7 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
                 };
                 if !contour {
                     for plane in planes.iter().take(visible) {
-                        let value = plane.value(data, x, y);
+                        let value = plane.value(data, x, y, cell);
                         if value == 0 && plane.bits != 8 || hide_fluids && flooded && plane.frost {
                             continue;
                         }
@@ -441,7 +466,7 @@ mod tests {
             assert_eq!(int(&data, output + i * 4) as u32, 0xff123456);
         }
         for (p, v) in [
-            (4, 4_i32),
+            (4, 5_i32),
             (8, 129),
             (12, 257),
             (28, 5),
@@ -536,6 +561,76 @@ mod tests {
             let before = invalid.clone();
             assert!(render(&mut invalid).is_err());
             assert_eq!(invalid, before);
+        }
+    }
+
+    #[test]
+    fn compact_frames_preserve_single_cell_planes_and_reject_bad_shapes() {
+        for shift in 1..=7 {
+            for bits in [0, 1, 4] {
+                let width = 128 >> shift;
+                let area = width * width;
+                let terrain = 164;
+                let heights = terrain + area;
+                let wet = heights + area * 20;
+                let plane = wet + area * 20;
+                let output = plane + bytes(bits, area);
+                let mut data = vec![0; output + area * 4];
+                for (p, v) in [
+                    (0, 0x31525657),
+                    (4, 4),
+                    (8, 1),
+                    (12, 1),
+                    (28, 4),
+                    (52, terrain as i32),
+                    (56, heights as i32),
+                    (60, wet as i32),
+                    (64, output as i32),
+                    (68, 128),
+                    (72, 132),
+                    (76, 1),
+                    (80, -1),
+                    (84, -1),
+                    (88, -1),
+                    (92, -1),
+                    (104, shift),
+                    (128, 0x123456),
+                    (132, bits as i32),
+                    (136, 1),
+                    (140, 0xffffff),
+                    (144, plane as i32),
+                ] {
+                    data[p..p + 4].copy_from_slice(&v.to_le_bytes());
+                }
+                for point in 0..area * 5 {
+                    data[heights + point * 4..heights + point * 4 + 4]
+                        .copy_from_slice(&64_i32.to_le_bytes());
+                    data[wet + point * 4..wet + point * 4 + 4]
+                        .copy_from_slice(&i32::MIN.to_le_bytes());
+                }
+                data[plane] = if bits == 4 { 15 } else { 1 };
+                let valid = data.clone();
+                render(&mut data).unwrap();
+                assert_eq!(
+                    int(&data, output) as u32,
+                    if bits == 4 {
+                        0xffffffff
+                    } else {
+                        0xff000000 | mix(0xffffff, 0x123456, 128, true) as u32
+                    }
+                );
+                for invalid_shift in [0_i32, 8, -1] {
+                    let mut invalid = valid.clone();
+                    invalid[104..108].copy_from_slice(&invalid_shift.to_le_bytes());
+                    let before = invalid.clone();
+                    assert!(render(&mut invalid).is_err());
+                    assert_eq!(invalid, before);
+                }
+                let mut truncated = valid[..valid.len() - 1].to_vec();
+                let before = truncated.clone();
+                assert!(render(&mut truncated).is_err());
+                assert_eq!(truncated, before);
+            }
         }
     }
 

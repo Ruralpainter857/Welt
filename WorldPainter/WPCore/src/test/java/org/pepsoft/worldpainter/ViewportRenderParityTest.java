@@ -25,7 +25,11 @@ public class ViewportRenderParityTest {
     @Test public void unzoomedAndClippedDestinationPixelsMatch() {
         compare(TileRenderer.LightOrigin.SOUTHEAST, false, true, false, false, true);
     }
-    @Test public void indexedBiomesAnnotationsAndLiveCustomPatternsMatch() {
+    @Test public void indexedBiomesAnnotationsAndLiveCustomPatternsMatch() { indexedPair(0); }
+    @Test public void zoomedIndexedBiomesAnnotationsAndLiveCustomPatternsMatch() {
+        for (int zoom : new int[] {-1, -2, -3, -7}) indexedPair(zoom);
+    }
+    private static void indexedPair(int zoom) {
         String gen = System.getProperty(Native.GEN_KEY), render = System.getProperty(Native.RENDER_KEY), flag = System.getProperty("welt.native.viewport");
         try {
             System.setProperty(Native.GEN_KEY, "false");
@@ -46,18 +50,24 @@ public class ViewportRenderParityTest {
                         tile.setLayerValue(Biome.INSTANCE, x, y, (x + y * 7) & 255);
                         tile.setLayerValue(Annotations.INSTANCE, x, y, (x & 7) == 0 ? (x / 8 + y) & 15 : 0);
                     }
+                    // Keep a live custom pattern visible even in the one-pixel tile fixture.
+                    tile.setLayerValue(Biome.INSTANCE, 0, 0, 200);
+                    tile.setLayerValue(Annotations.INSTANCE, 0, 0, 0);
+                    tile.setHeight(0, 0, 71);
+                    tile.setBitLayerValue(ReadOnly.INSTANCE, 0, 0, false);
+                    tile.setBitLayerValue(Frost.INSTANCE, 0, 0, false);
                 } finally { tile.releaseEvents(); }
             }
             for (TileRenderer.LightOrigin light : TileRenderer.LightOrigin.values()) {
-                TileRenderer java = new TileRenderer(d, ColourScheme.DEFAULT, manager, 0, true, null);
-                TileRenderer rust = new TileRenderer(d, ColourScheme.DEFAULT, manager, 0, true, null);
+                TileRenderer java = new TileRenderer(d, ColourScheme.DEFAULT, manager, zoom, true, null);
+                TileRenderer rust = new TileRenderer(d, ColourScheme.DEFAULT, manager, zoom, true, null);
                 java.setLightOrigin(light); rust.setLightOrigin(light);
                 BufferedImage expected = new BufferedImage(256, 256, BufferedImage.TYPE_INT_ARGB);
                 BufferedImage actual = new BufferedImage(256, 256, BufferedImage.TYPE_INT_ARGB);
                 int[] before = null;
                 for (int pass = 0; pass < 2; pass++) {
                     for (Tile tile : d.getTiles()) {
-                        int dx = (tile.getX() + 1) << 7, dy = (tile.getY() + 1) << 7;
+                        int dx = (tile.getX() + 1) * (128 >> -zoom), dy = (tile.getY() + 1) * (128 >> -zoom);
                         System.setProperty(Native.RENDER_KEY, "false"); java.renderTile(tile, expected, dx, dy);
                         System.setProperty(Native.RENDER_KEY, "true"); System.setProperty("welt.native.viewport", "true"); rust.renderTile(tile, actual, dx, dy);
                     }
@@ -84,6 +94,14 @@ public class ViewportRenderParityTest {
         customPaintPair(new BufferedImage(257, 257, BufferedImage.TYPE_INT_RGB), .65f, false);
     }
     private static void customPaintPair(Object paint, float opacity, boolean supported) {
+        customPaintPair(paint, opacity, supported, 0);
+    }
+    @Test public void zoomedCustomPaintUsesPhysicalAndGlobalCoordinates() {
+        BufferedImage image = new BufferedImage(5, 9, BufferedImage.TYPE_INT_ARGB_PRE);
+        for (int y = 0; y < 9; y++) for (int x = 0; x < 5; x++) image.setRGB(x, y, ((x + y) % 4 * 85 << 24) | (x * 51 << 16) | (y * 28 << 8) | 0x39);
+        for (int zoom : new int[] {-1, -2, -3, -7}) customPaintPair(image, .37f, true, zoom);
+    }
+    private static void customPaintPair(Object paint, float opacity, boolean supported, int zoom) {
         String gen = System.getProperty(Native.GEN_KEY), render = System.getProperty(Native.RENDER_KEY), flag = System.getProperty("welt.native.viewport");
         try {
             System.setProperty(Native.GEN_KEY, "false"); Dimension d = fixture(true, false);
@@ -100,13 +118,14 @@ public class ViewportRenderParityTest {
                 } } finally { tile.releaseEvents(); }
             }
             for (TileRenderer.LightOrigin light : TileRenderer.LightOrigin.values()) {
-                TileRenderer java = new TileRenderer(d, ColourScheme.DEFAULT, new CustomBiomeManager(), 0, true, null);
-                TileRenderer rust = new TileRenderer(d, ColourScheme.DEFAULT, new CustomBiomeManager(), 0, true, null);
+                TileRenderer java = new TileRenderer(d, ColourScheme.DEFAULT, new CustomBiomeManager(), zoom, true, null);
+                TileRenderer rust = new TileRenderer(d, ColourScheme.DEFAULT, new CustomBiomeManager(), zoom, true, null);
                 java.setLightOrigin(light); rust.setLightOrigin(light);
                 BufferedImage expected = new BufferedImage(250, 252, BufferedImage.TYPE_INT_ARGB);
                 BufferedImage actual = new BufferedImage(250, 252, BufferedImage.TYPE_INT_ARGB);
                 for (Tile tile : d.getTiles()) {
-                    int dx = ((tile.getX() + 1) << 7) - 8, dy = ((tile.getY() + 1) << 7) - 4;
+                    int size = 128 >> -zoom;
+                    int dx = (tile.getX() + 1) * size - (zoom == 0 ? 8 : 0), dy = (tile.getY() + 1) * size - (zoom == 0 ? 4 : 0);
                     System.setProperty(Native.RENDER_KEY, "false"); java.renderTile(tile, expected, dx, dy);
                     System.setProperty(Native.RENDER_KEY, "true"); System.setProperty("welt.native.viewport", "true"); rust.renderTile(tile, actual, dx, dy);
                 }
@@ -185,11 +204,20 @@ public class ViewportRenderParityTest {
         compare(light, hideFluid, masks, hideLayers, unsupported, false);
     }
     private static void compare(TileRenderer.LightOrigin light, boolean hideFluid, boolean masks, boolean hideLayers, boolean unsupported, boolean clipped) {
+        compare(light, hideFluid, masks, hideLayers, unsupported, clipped, 0);
+    }
+    @Test public void zoomedCompositionPreservesMasksLightingAndFallback() {
+        for (int zoom : new int[] {-1, -2, -3, -7}) for (TileRenderer.LightOrigin light : TileRenderer.LightOrigin.values())
+            compare(light, false, true, false, false, true, zoom);
+        compare(TileRenderer.LightOrigin.NORTHWEST, true, true, true, false, false, -2);
+        compare(TileRenderer.LightOrigin.NORTHWEST, false, true, false, true, false, -2);
+    }
+    private static void compare(TileRenderer.LightOrigin light, boolean hideFluid, boolean masks, boolean hideLayers, boolean unsupported, boolean clipped, int zoom) {
         String gen = System.getProperty(Native.GEN_KEY), render = System.getProperty(Native.RENDER_KEY), flag = System.getProperty("welt.native.viewport");
         try {
             System.setProperty(Native.GEN_KEY, "false"); Dimension d = fixture(masks, unsupported);
-            TileRenderer java = new TileRenderer(d, ColourScheme.DEFAULT, new CustomBiomeManager(), 0, true, null);
-            TileRenderer rust = new TileRenderer(d, ColourScheme.DEFAULT, new CustomBiomeManager(), 0, true, null);
+            TileRenderer java = new TileRenderer(d, ColourScheme.DEFAULT, new CustomBiomeManager(), zoom, true, null);
+            TileRenderer rust = new TileRenderer(d, ColourScheme.DEFAULT, new CustomBiomeManager(), zoom, true, null);
             java.setLightOrigin(light); rust.setLightOrigin(light);
             java.setHideAllLayers(hideLayers); rust.setHideAllLayers(hideLayers);
             if (hideFluid) {
@@ -199,7 +227,8 @@ public class ViewportRenderParityTest {
             BufferedImage expected = new BufferedImage(256, 256, BufferedImage.TYPE_INT_ARGB);
             BufferedImage actual = new BufferedImage(256, 256, BufferedImage.TYPE_INT_ARGB);
             for (Tile tile : d.getTiles()) {
-                int dx = ((tile.getX() + 1) << 7) - (clipped ? 8 : 0), dy = ((tile.getY() + 1) << 7) - (clipped ? 4 : 0);
+                int size = 128 >> -zoom;
+                int dx = (tile.getX() + 1) * size - (clipped ? (zoom == 0 ? 8 : 1) : 0), dy = (tile.getY() + 1) * size - (clipped ? (zoom == 0 ? 4 : 1) : 0);
                 System.setProperty(Native.RENDER_KEY, "false"); java.renderTile(tile, expected, dx, dy);
                 System.setProperty(Native.RENDER_KEY, "true"); System.setProperty("welt.native.viewport", "true"); rust.renderTile(tile, actual, dx, dy);
             }
@@ -207,5 +236,55 @@ public class ViewportRenderParityTest {
             assertEquals(unsupported ? 0L : 4L, rust.completedNativeViewportTiles());
         } finally { restore(Native.GEN_KEY, gen); restore(Native.RENDER_KEY, render); restore("welt.native.viewport", flag); }
     }
+    @Test public void sampledSnapshotsMatchGettersForNormalAndTallTiles() {
+        for (int min : new int[] {0, -64}) {
+            Tile tile = new Tile(-1, 0, min, min == 0 ? 128 : 320);
+            tile.inhibitEvents();
+            try {
+                for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++) {
+                    tile.setHeight(x, y, min + 8 + ((x * 3 + y * 7) & 255) / 4f);
+                    tile.setWaterLevel(x, y, min + 42);
+                    tile.setTerrain(x, y, (x & 4) == 0 ? Terrain.GRASS : Terrain.SAND);
+                    tile.setLayerValue(Resources.INSTANCE, x, y, (x + y * 3) & 15);
+                    tile.setBitLayerValue(Frost.INSTANCE, x, y, ((x + y) & 3) == 0);
+                    tile.setBitLayerValue(ReadOnly.INSTANCE, x, y, (x / 16 + y / 16) % 3 == 0);
+                }
+            } finally { tile.releaseEvents(); }
+            for (int shift = 1; shift <= 7; shift++) {
+                int width = 128 >> shift, area = width * width;
+                java.nio.ByteBuffer data = java.nio.ByteBuffer.allocate(area * 41).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                tile.copySampledRenderPoints(shift, data, 0, area, area * 21);
+                for (int row = 0; row < width; row++) for (int col = 0; col < width; col++) {
+                    int x = col << shift, y = row << shift, point = col + row * width;
+                    assertEquals(tile.getTerrain(x, y).ordinal(), data.get(point) & 255);
+                    for (int neighbor = 0; neighbor < 5; neighbor++) {
+                        int nx = x + (neighbor == 2 ? -1 : neighbor == 3 ? 1 : 0);
+                        int ny = y + (neighbor == 1 ? -1 : neighbor == 4 ? 1 : 0);
+                        boolean inside = nx >= 0 && ny >= 0 && nx < 128 && ny < 128;
+                        int height = inside ? tile.getIntHeight(nx, ny) : org.pepsoft.minecraft.Constants.DEFAULT_WATER_LEVEL;
+                        int wet = inside && tile.getWaterLevel(nx, ny) > height ? tile.getWaterLevel(nx, ny) : Integer.MIN_VALUE;
+                        assertEquals(height, data.getInt(area + (point * 5 + neighbor) * 4));
+                        assertEquals(wet, data.getInt(area * 21 + (point * 5 + neighbor) * 4));
+                    }
+                }
+                for (Layer layer : new Layer[] {Frost.INSTANCE, ReadOnly.INSTANCE, Resources.INSTANCE, Biome.INSTANCE}) {
+                    int bits = layer.dataSize == Layer.DataSize.BIT ? 1 : layer.dataSize == Layer.DataSize.BIT_PER_CHUNK ? 0 : layer.dataSize == Layer.DataSize.NIBBLE ? 4 : 8;
+                    int bytes = bits == 0 ? 8 : (area * bits + 7) / 8;
+                    java.nio.ByteBuffer plane = java.nio.ByteBuffer.allocate(bytes + 2);
+                    plane.put(0, (byte) 93); plane.put(bytes + 1, (byte) 71);
+                    tile.copySampledLayerPlane(layer, bits, shift, plane, 1);
+                    assertEquals(93, plane.get(0)); assertEquals(71, plane.get(bytes + 1));
+                    for (int row = 0; row < width; row++) for (int col = 0; col < width; col++) {
+                        int x = col << shift, y = row << shift;
+                        int index = bits == 0 ? x / 16 + y / 16 * 8 : col + row * width;
+                        int stride = bits == 0 ? 1 : bits;
+                        int actual = (plane.get(1 + index * stride / 8) >>> (index * stride & 7)) & ((1 << stride) - 1);
+                        assertEquals(bits <= 1 ? (tile.getBitLayerValue(layer, x, y) ? 1 : 0) : tile.getLayerValue(layer, x, y), actual);
+                    }
+                }
+            }
+        }
+    }
+
     private static void restore(String key, String value) { if (value == null) System.clearProperty(key); else System.setProperty(key, value); }
 }

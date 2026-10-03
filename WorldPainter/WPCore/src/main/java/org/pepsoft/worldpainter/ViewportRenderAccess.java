@@ -77,15 +77,18 @@ final class ViewportRenderAccess {
         int bits = layer.dataSize == Layer.DataSize.BIT ? 1 : 0;
         models.add(new Model(layer, bits, 0, 0, 0L, 0, null)); return models.size() - 1;
     }
-    private static int bytes(int bits) { return bits == 0 ? 8 : AREA * bits / 8; }
+    private static int bytes(int bits, int area) { return bits == 0 ? 8 : (area * bits + 7) / 8; }
 
     boolean render(Tile tile, TileProvider provider, Layer[] layers, LayerRenderer[] renderers,
                    int[] heights, int[] water, byte[] terrains, boolean contours, int separation, int light,
                    boolean hideFluids, boolean bottomless, boolean voidPresent, boolean missingPresent, boolean lavaPresent,
-                   int waterColour, int lavaColour, int bedrockColour, int voidColour, int missingColour, int[] output) {
+                   int waterColour, int lavaColour, int bedrockColour, int voidColour, int missingColour, int[] output, int shift) {
         if (tile.getClass() != Tile.class || provider.getClass() != Dimension.class
                 || TERRAINS.length > 256 || contours && separation == 0) return false;
-        for (byte terrain : terrains) if ((terrain & 255) >= TERRAINS.length || !planTerrain(terrain & 255)) return false;
+        if (shift < 0 || shift > 7) return false;
+        int width = 128 >> shift, area = width * width;
+        boolean compact = shift != 0;
+        if (!compact) for (byte terrain : terrains) if ((terrain & 255) >= TERRAINS.length || !planTerrain(terrain & 255)) return false;
         List<Model> models = new ArrayList<>();
         for (int i = 0; i < layers.length; i++) {
             if (renderers[i] == null) return false;
@@ -104,9 +107,10 @@ final class ViewportRenderAccess {
                 provider.getTile(tile.getX() - 1, tile.getY()), provider.getTile(tile.getX() + 1, tile.getY())};
         for (Tile edge : edges) if (edge != null && edge.getClass() != Tile.class) return false;
         int palette = HEADER, table = palette + colours.length * 4, terrainOffset = table + models.size() * 32;
-        int heightOffset = terrainOffset + AREA, wetOffset = heightOffset + HALO * 4, planes = wetOffset + HALO * 4;
-        int end = planes; for (Model model : models) end += bytes(model.bits);
-        int required = end + AREA * 4;
+        int heightOffset = terrainOffset + area, heightBytes = compact ? area * 20 : HALO * 4;
+        int wetOffset = heightOffset + heightBytes, planes = wetOffset + heightBytes;
+        int end = planes; for (Model model : models) end += bytes(model.bits, area);
+        int required = end + area * 4;
         for (Model model : models) required += model.kind == 5 ? 64 : model.kind == 6 ? 256 * 1024 + 1024 : 0;
         for (Model model : models) if (model.kind == 7) {
             PaintRenderer paint = (PaintRenderer) model.renderer;
@@ -116,37 +120,53 @@ final class ViewportRenderAccess {
         if (data == null || data.capacity() < required) data = ByteBuffer.allocateDirect(required).order(ByteOrder.LITTLE_ENDIAN);
         data.clear().limit(required);
         for (int i = 0; i < HEADER; i += 8) data.putLong(i, 0L);
-        data.putInt(0, 0x31525657).putInt(4, 3).putInt(8, models.size()).putInt(12, colours.length)
+        data.putInt(0, 0x31525657).putInt(4, compact ? 4 : 3).putInt(8, models.size()).putInt(12, colours.length)
                 .putInt(16, tile.getMinHeight()).putInt(20, (contours ? 1 : 0) | (hideFluids ? 2 : 0) | (bottomless ? 4 : 0))
                 .putInt(24, separation).putInt(28, light).putInt(32, waterColour).putInt(36, lavaColour)
                 .putInt(40, bedrockColour).putInt(44, voidColour).putInt(48, missingColour)
                 .putInt(52, terrainOffset).putInt(56, heightOffset).putInt(60, wetOffset)
                 .putInt(68, palette).putInt(72, table).putInt(76, visible)
                 .putInt(80, vp).putInt(84, np).putInt(88, nb).putInt(92, lp)
-                .putInt(96, tile.getX() << 7).putInt(100, tile.getY() << 7);
+                .putInt(96, tile.getX() << 7).putInt(100, tile.getY() << 7).putInt(104, shift);
         data.position(palette); data.slice().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer().put(colours);
-        data.position(terrainOffset); data.put(terrains);
-        data.position(heightOffset);
-        IntBuffer heightHalo = data.slice().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();
-        for (int y = 0; y < 128; y++) {
-            heightHalo.position((y + 1) * 130 + 1); heightHalo.put(heights, y * 128, 128);
-            for (int x = 0; x < 128; x++) {
-                int cell = x + y * 128;
-                data.putInt(wetOffset + ((y + 1) * 130 + x + 1) * 4, water[cell] > heights[cell] ? water[cell] : Integer.MIN_VALUE);
+        if (compact) {
+            tile.copySampledRenderPoints(shift, data, terrainOffset, heightOffset, wetOffset);
+            for (int cell = 0; cell < area; cell++) {
+                int terrain = data.get(terrainOffset + cell) & 255;
+                if (terrain >= TERRAINS.length || !planTerrain(terrain)) return false;
             }
-        }
-        for (int i = 0; i < 128; i++) {
-            edge(edges[0], i, 127, heightOffset + (i + 1) * 4, wetOffset + (i + 1) * 4);
-            edge(edges[1], i, 0, heightOffset + (129 * 130 + i + 1) * 4, wetOffset + (129 * 130 + i + 1) * 4);
-            edge(edges[2], 127, i, heightOffset + ((i + 1) * 130) * 4, wetOffset + ((i + 1) * 130) * 4);
-            edge(edges[3], 0, i, heightOffset + ((i + 1) * 130 + 129) * 4, wetOffset + ((i + 1) * 130 + 129) * 4);
+            for (int i = 0; i < width; i++) {
+                edge(edges[0], i << shift, 127, heightOffset + (i * 5 + 1) * 4, wetOffset + (i * 5 + 1) * 4);
+                edge(edges[2], 127, i << shift, heightOffset + (i * width * 5 + 2) * 4, wetOffset + (i * width * 5 + 2) * 4);
+            }
+            // Planning sampled terrains updated the reusable palette after the first palette write.
+            data.position(palette); data.slice().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer().put(colours);
+        } else {
+            data.position(terrainOffset); data.put(terrains);
+            data.position(heightOffset);
+            IntBuffer heightHalo = data.slice().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();
+            for (int y = 0; y < 128; y++) {
+                heightHalo.position((y + 1) * 130 + 1); heightHalo.put(heights, y * 128, 128);
+                for (int x = 0; x < 128; x++) {
+                    int cell = x + y * 128;
+                    data.putInt(wetOffset + ((y + 1) * 130 + x + 1) * 4, water[cell] > heights[cell] ? water[cell] : Integer.MIN_VALUE);
+                }
+            }
+            for (int i = 0; i < 128; i++) {
+                edge(edges[0], i, 127, heightOffset + (i + 1) * 4, wetOffset + (i + 1) * 4);
+                edge(edges[1], i, 0, heightOffset + (129 * 130 + i + 1) * 4, wetOffset + (129 * 130 + i + 1) * 4);
+                edge(edges[2], 127, i, heightOffset + ((i + 1) * 130) * 4, wetOffset + ((i + 1) * 130) * 4);
+                edge(edges[3], 0, i, heightOffset + ((i + 1) * 130 + 129) * 4, wetOffset + ((i + 1) * 130 + 129) * 4);
+            }
         }
         int offset = planes;
         for (int i = 0; i < models.size(); i++) {
             Model m = models.get(i); int record = table + i * 32;
             data.putInt(record, m.bits).putInt(record + 4, m.kind).putInt(record + 8, m.colour).putInt(record + 12, offset)
                     .putLong(record + 16, m.pattern).putInt(record + 24, m.frost).putInt(record + 28, 0);
-            tile.copyCombinedLayerPlane(m.layer, m.bits, data, offset); offset += bytes(m.bits);
+            if (compact) tile.copySampledLayerPlane(m.layer, m.bits, shift, data, offset);
+            else tile.copyCombinedLayerPlane(m.layer, m.bits, data, offset);
+            offset += bytes(m.bits, area);
         }
         for (int i = 0; i < models.size(); i++) {
             Model m = models.get(i);
@@ -172,7 +192,7 @@ final class ViewportRenderAccess {
             } else if (m.kind == 6) {
                 Arrays.fill(usedBiomes, false);
                 int plane = data.getInt(table + i * 32 + 12);
-                for (int cell = 0; cell < AREA; cell++) usedBiomes[data.get(plane + cell) & 255] = true;
+                for (int cell = 0; cell < area; cell++) usedBiomes[data.get(plane + cell) & 255] = true;
                 int lookup = offset; offset += 1024;
                 data.putInt(table + i * 32 + 28, lookup);
                 BiomeRenderer renderer = (BiomeRenderer) m.renderer;
@@ -183,10 +203,14 @@ final class ViewportRenderAccess {
                 }
             }
         }
-        data.putInt(64, offset); data.limit(offset + AREA * 4);
+        data.putInt(64, offset); data.limit(offset + area * 4);
         data.position(0);
         if (!NativeSlices.renderViewportTile(data)) return false;
-        data.position(offset); data.slice().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer().get(output); data.position(0);
+                data.position(offset);
+        IntBuffer pixels = data.slice().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();
+        if (compact) for (int row = 0; row < width; row++) pixels.get(output, row * 128, width);
+        else pixels.get(output);
+        data.position(0);
         completed++; return true;
     }
     private void edge(Tile tile, int x, int y, int heightOffset, int wetOffset) {

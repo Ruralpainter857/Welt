@@ -3359,6 +3359,57 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                 (tall ? tallWaterLevel[i] & 65535 : waterLevel[i] & 255) + minHeight);
     }
 
+    /** Read displayed cells and their immediate physical neighbors in one tile transaction. */
+    synchronized void copySampledRenderPoints(int shift, ByteBuffer output, int terrainOffset, int heightsOffset, int wetOffset) {
+        if (shift < 1 || shift > 7) throw new IllegalArgumentException("Sample shift must be 1..7");
+        int width = 128 >> shift, area = width * width;
+        if (terrainOffset < 0 || heightsOffset < 0 || wetOffset < 0
+                || terrainOffset + (long) area > output.limit() || heightsOffset + area * 20L > output.limit()
+                || wetOffset + area * 20L > output.limit()) throw new IndexOutOfBoundsException("Invalid sampled viewport bounds");
+        ensureReadable(TERRAIN); ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP); ensureReadable(tall ? TALL_WATERLEVEL : WATERLEVEL);
+        for (int row = 0; row < width; row++) for (int col = 0; col < width; col++) {
+            int x = col << shift, y = row << shift, point = col + row * width;
+            output.put(terrainOffset + point, terrain[x | (y << 7)]);
+            for (int neighbor = 0; neighbor < 5; neighbor++) {
+                int nx = x + (neighbor == 2 ? -1 : neighbor == 3 ? 1 : 0);
+                int ny = y + (neighbor == 1 ? -1 : neighbor == 4 ? 1 : 0);
+                int height = org.pepsoft.minecraft.Constants.DEFAULT_WATER_LEVEL, wet = Integer.MIN_VALUE;
+                if (nx >= 0 && nx < 128 && ny >= 0 && ny < 128) {
+                    int cell = nx | (ny << 7);
+                    height = Math.round((tall ? tallHeightMap[cell] : heightMap[cell] & 65535) / 256f + minHeight);
+                    int water = (tall ? tallWaterLevel[cell] & 65535 : waterLevel[cell] & 255) + minHeight;
+                    if (water > height) wet = water;
+                }
+                output.putInt(heightsOffset + (point * 5 + neighbor) * 4, height);
+                output.putInt(wetOffset + (point * 5 + neighbor) * 4, wet);
+            }
+        }
+    }
+
+    /** Copy a sampled packed plane with one map lookup and no per-cell synchronized getters. */
+    synchronized void copySampledLayerPlane(Layer layer, int bits, int shift, ByteBuffer output, int offset) {
+        if (shift < 1 || shift > 7 || (bits != 0 && bits != 1 && bits != 4 && bits != 8))
+            throw new IllegalArgumentException("Invalid sampled layer shape");
+        if (bits == 0) {
+            if (offset < 0 || offset + 8L > output.limit()) throw new IndexOutOfBoundsException("Invalid sampled layer bounds");
+            copyCombinedLayerPlane(layer, bits, output, offset); return;
+        }
+        int width = 128 >> shift, area = width * width, bytes = (area * bits + 7) / 8;
+        if (offset < 0 || offset + (long) bytes > output.limit()) throw new IndexOutOfBoundsException("Invalid sampled layer bounds");
+        for (int i = 0; i < bytes; i++) output.put(offset + i, (byte) 0);
+        BitSet bitValues = null; byte[] numericValues = null; int fallback = 0;
+        if (bits == 1) { ensureReadable(BIT_LAYER_DATA); bitValues = bitLayerData.get(layer); }
+        else { ensureReadable(LAYER_DATA); numericValues = layerData.get(layer); fallback = layer.getDefaultValue(); }
+        for (int row = 0; row < width; row++) for (int col = 0; col < width; col++) {
+            int cell = (col << shift) | ((row << shift) << 7), point = col + row * width;
+            int value = bits == 1 ? (bitValues != null && bitValues.get(cell) ? 1 : 0)
+                    : numericValues == null ? fallback : bits == 8 ? numericValues[cell] & 255
+                    : (numericValues[cell >> 1] >>> ((cell & 1) * 4)) & 15;
+            int index = offset + point * bits / 8, bit = point * bits & 7;
+            output.put(index, (byte) (output.get(index) | value << bit));
+        }
+    }
+
     /** Snapshot a compact layer plane; null denotes terrain. */
     synchronized boolean copyCombinedLayerPlane(Layer layer, int bits, ByteBuffer buffer, int offset) {
         if (layer == null) {

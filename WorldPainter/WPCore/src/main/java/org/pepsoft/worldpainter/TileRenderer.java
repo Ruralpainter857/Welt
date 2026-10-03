@@ -229,7 +229,11 @@ public final class TileRenderer {
 //        synchronized (tile) {
 
         final int tileX = tile.getX(), tileY = tile.getY();
-        tile.copyRenderDataTo(floatHeightCache, intHeightCache, intFluidHeightCache, terrainOrdinalCache);
+        final boolean compactViewport = zoom >= -7 && zoom < 0 && !renderCeilingIntersection && !renderTunnelRoofIntersection
+                && colourScheme == ColourScheme.DEFAULT && !hiddenLayers.contains(TERRAIN_AS_LAYER)
+                && tile.getX() >= -(1 << 24) && tile.getX() < (1 << 24) && tile.getY() >= -(1 << 24) && tile.getY() < (1 << 24)
+                && Native.isRenderEnabled() && Boolean.getBoolean("welt.native.viewport") && NativeLoader.areSlicesAvailable();
+        if (!compactViewport) tile.copyRenderDataTo(floatHeightCache, intHeightCache, intFluidHeightCache, terrainOrdinalCache);
 
         // Determine which coordinates, if any, have heights which would intersect with the opposite tile, if any
         final boolean bottomless, topLayersRelativeToTerrain;
@@ -297,7 +301,7 @@ public final class TileRenderer {
         for (int i = 0; i < layers.length; i++) {
             renderers[i] = getRenderer(layers[i]);
         }
-        if (zoom == 0 && !hideTerrain && !renderCeilingIntersection && !renderTunnelRoofIntersection
+        if ((zoom == 0 || compactViewport) && !hideTerrain && !renderCeilingIntersection && !renderTunnelRoofIntersection
                 && colourScheme == ColourScheme.DEFAULT && Native.isRenderEnabled()
                 && Boolean.parseBoolean(System.getProperty("welt.native.viewport", "false"))
                 && NativeLoader.areSlicesAvailable()) {
@@ -305,15 +309,23 @@ public final class TileRenderer {
             if (viewportRenderAccess.render(tile, tileProvider, layers, renderers, intHeightCache, intFluidHeightCache,
                     terrainOrdinalCache, contourLines, contourSeparation, lightOrigin.ordinal(), hideFluids, bottomless,
                     _void, notAllBlocksPresent, !hideFluids && tileLayers.contains(FloodWithLava.INSTANCE),
-                    waterColour, lavaColour, bedrockColour, voidColour, notPresentColour, renderBuffer)) {
+                    waterColour, lavaColour, bedrockColour, voidColour, notPresentColour, renderBuffer, -zoom)) {
                 if (!copyRenderBufferToArgbImage(image, dx, dy)) {
                     Graphics2D graphics = (Graphics2D) image.getGraphics();
-                    try { graphics.setComposite(AlphaComposite.Src); graphics.drawImage(bufferedImage, dx, dy, null); }
+                    try {
+                        graphics.setComposite(AlphaComposite.Src);
+                        if (zoom == 0) graphics.drawImage(bufferedImage, dx, dy, null);
+                        else {
+                            int size = 128 >> -zoom;
+                            graphics.drawImage(bufferedImage, dx, dy, dx + size, dy + size, 0, 0, size, size, null);
+                        }
+                    }
                     finally { graphics.dispose(); }
                 }
                 return;
             }
         }
+        if (compactViewport) tile.copyRenderDataTo(floatHeightCache, intHeightCache, intFluidHeightCache, terrainOrdinalCache);
         layerValueSnapshot.prepare(tile, layers, _void, notAllBlocksPresent,
                 (!hideFluids) && tileLayers.contains(FloodWithLava.INSTANCE));
 
