@@ -18,7 +18,11 @@ $mavenVersion = '3.9.9'
 $mavenCmd = Join-Path $toolsRoot "apache-maven-$mavenVersion/bin/mvn.cmd"
 
 function Show-SafeOutput {
-    process { $_.ToString() -replace 'C:[/\\]Users[/\\][^/\\]+', '<user>' }
+    process {
+        $safeLine = $_.ToString() -replace 'C:[/\\]Users[/\\][^/\\]+', '<user>'
+        if ($env:USERNAME) { $safeLine = $safeLine -replace [regex]::Escape($env:USERNAME), '<user>' }
+        $safeLine
+    }
 }
 
 try {

@@ -156,4 +156,30 @@
             </plugin>
         </plugins>
     </build>
+    <profiles>
+        <profile>
+            <id>welt-brush-tests</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <!-- Use the fixtures compiled by WPCore in the same reactor build. -->
+                            <additionalClasspathElements>
+                                <additionalClasspathElement>${project.basedir}/../WPCore/target/test-classes</additionalClasspathElement>
+                            </additionalClasspathElements>
+                            <includes>
+                                <include>**/*PipelineParityTest.java</include>
+                            </includes>
+                            <systemPropertyVariables>
+                                <wp.native.gen>true</wp.native.gen>
+                                <java.awt.headless>true</java.awt.headless>
+                            </systemPropertyVariables>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
