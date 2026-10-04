@@ -1,4 +1,4 @@
-//! WFPT v1..v4: shared filter and painting transactions for terrain, numeric and bit layers.
+//! WFPT v1..v5: shared filter and painting transactions for terrain, numeric and bit layers.
 use crate::editor_filter::{CellData, Levels, Node, Predicate, Program};
 use crate::error::WeltError;
 use crate::nibble_paint::{target as nibble_target, NibblePaintMode};
@@ -41,6 +41,8 @@ fn child(value: i32) -> Option<usize> {
 
 struct Frame {
     record: usize,
+    wx: i64,
+    wy: i64,
     x: usize,
     y: usize,
     w: usize,
@@ -176,7 +178,17 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
     if data.len() < HEADER
         || data.len() > MAX_BYTES
         || int(data, 0) != 0x54504657
-        || !matches!(int(data, 4), 1..=4)
+        || !matches!(int(data, 4), 1..=5)
+    {
+        return bad();
+    }
+    let heights = int(data, 4) == 5;
+    let header = if heights { 192 } else { HEADER };
+    if data.len() < header
+        || heights
+            && (!(0..=4).contains(&int(data, 160))
+                || !matches!(int(data, 180), 0 | 1)
+                || data[184..192].iter().any(|&v| v != 0))
     {
         return bad();
     }
@@ -234,7 +246,7 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
         }
     }
     let mut nodes = Vec::with_capacity(count);
-    let mut cursor = HEADER;
+    let mut cursor = header;
     for _ in 0..count {
         if cursor + 48 > data.len() {
             return bad();
@@ -347,6 +359,10 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
     if cursor != int(data, 48) as usize {
         return bad();
     }
+    let height_output = end;
+    if heights {
+        end += 16384 * 5;
+    }
     let mut frames = Vec::with_capacity(tile_count);
     for i in 0..tile_count {
         let record = records + i * 32;
@@ -376,6 +392,8 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
         }
         frames.push(Frame {
             record,
+            wx: i64::from(int(data, record)) * 128,
+            wy: i64::from(int(data, record + 4)) * 128,
             x,
             y,
             w,
@@ -387,6 +405,17 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
     }
     if cursor != data.len() {
         return bad();
+    }
+    if heights {
+        return edit_heights(
+            data,
+            &frames,
+            &planes,
+            &program,
+            palette,
+            height_output,
+            end,
+        );
     }
     // No writes until every program node, descriptor and input plane is validated.
     let dynamic = float(data, 24);
@@ -466,6 +495,142 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
     Ok(())
 }
 
+/// V5 extends the header with mode/value/clamps/minimum/storage at bytes 160..184.
+/// Each tile appends an X-major raw output and mask; filter planes and mutable halos are shared.
+fn edit_heights(
+    data: &mut [u8],
+    frames: &[Frame],
+    planes: &[(usize, usize)],
+    program: &Program,
+    palette: usize,
+    output: usize,
+    forces: usize,
+) -> Result<(), WeltError> {
+    let ox = frames.iter().map(|f| f.wx + f.x as i64).min().unwrap();
+    let oy = frames.iter().map(|f| f.wy + f.y as i64).min().unwrap();
+    let ex = frames
+        .iter()
+        .map(|f| f.wx + (f.x + f.w) as i64)
+        .max()
+        .unwrap();
+    let ey = frames
+        .iter()
+        .map(|f| f.wy + (f.y + f.h) as i64)
+        .max()
+        .unwrap();
+    if ex - ox > 256
+        || ey - oy > 256
+        || ox < i64::from(i32::MIN) + 256
+        || oy < i64::from(i32::MIN) + 256
+        || ex > i64::from(i32::MAX) - 256
+        || ey > i64::from(i32::MAX) - 256
+    {
+        return bad();
+    }
+    for (i, f) in frames.iter().enumerate() {
+        if frames[..i]
+            .iter()
+            .any(|other| other.wx == f.wx && other.wy == f.wy)
+            || f.present
+                && data[f.base + output + 65536..f.base + output + 81920]
+                    .iter()
+                    .any(|&v| v != 0)
+        {
+            return bad();
+        }
+    }
+    let mode = int(data, 160);
+    let value = float(data, 164);
+    let low = float(data, 168);
+    let high = float(data, 172);
+    let min = int(data, 176) as f32;
+    let tall = int(data, 180) != 0;
+    // Height filters observe previous edits, including diagonals across tile boundaries.
+    for wx in ox..ex {
+        for wy in oy..ey {
+            let Some(frame) = frames.iter().find(|f| {
+                f.present
+                    && wx >= f.wx + f.x as i64
+                    && wx < f.wx + (f.x + f.w) as i64
+                    && wy >= f.wy + f.y as i64
+                    && wy < f.wy + (f.y + f.h) as i64
+            }) else {
+                continue;
+            };
+            let x = (wx - frame.wx) as usize;
+            let y = (wy - frame.wy) as usize;
+            let current = float(data, frame.base + HEIGHT + ((x + 1) * 130 + y + 1) * 4);
+            let strength = float(
+                data,
+                frame.base + forces + ((y - frame.y) * frame.w + x - frame.x) * 4,
+            );
+            let filtered = float(data, 24)
+                * program.modify_strength(
+                    &Cell {
+                        data,
+                        frame,
+                        planes,
+                        palette,
+                        cell: y * 128 + x,
+                        x,
+                        y,
+                    },
+                    strength,
+                );
+            if !(filtered > 0.0) {
+                continue;
+            }
+            let target = match mode {
+                0 => java_bound(current + value, high, false),
+                1 => java_bound(current - value, low, true),
+                _ => value,
+            };
+            let edited = filtered * target + (1.0 - filtered) * current;
+            if mode != 2
+                && !(if mode == 0 || mode == 3 {
+                    edited > current
+                } else {
+                    edited < current
+                })
+            {
+                continue;
+            }
+            let raw = ((edited - min) * 256.0) as i32;
+            let raw = if tall { raw } else { raw as u16 as i32 };
+            let p = frame.base + output + (x * 128 + y) * 4;
+            data[p..p + 4].copy_from_slice(&raw.to_le_bytes());
+            data[frame.base + output + 65536 + x * 128 + y] = 1;
+            let writes = int(data, frame.record + 28) + 1;
+            data[frame.record + 28..frame.record + 32].copy_from_slice(&writes.to_le_bytes());
+            let quantised = raw as f32 / 256.0 + min;
+            for neighbour in frames.iter().filter(|f| f.present) {
+                let hx = wx - neighbour.wx + 1;
+                let hy = wy - neighbour.wy + 1;
+                if (0..130).contains(&hx) && (0..130).contains(&hy) {
+                    let p = neighbour.base + HEIGHT + (hx as usize * 130 + hy as usize) * 4;
+                    data[p..p + 4].copy_from_slice(&quantised.to_bits().to_le_bytes());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+fn java_bound(a: f32, b: f32, maximum: bool) -> f32 {
+    if a.is_nan() || b.is_nan() {
+        f32::NAN
+    } else if a == 0.0 && b == 0.0 {
+        f32::from_bits(if maximum {
+            a.to_bits() & b.to_bits()
+        } else {
+            a.to_bits() | b.to_bits()
+        })
+    } else if maximum {
+        a.max(b)
+    } else {
+        a.min(b)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,6 +665,52 @@ mod tests {
         }
         put(&mut data, 256 + LAYERS, 1f32.to_bits() as i32);
         data
+    }
+    fn height_fixture() -> Vec<u8> {
+        let old = fixture();
+        let mut data = vec![0; old.len() + 32 + 81920];
+        data[..160].copy_from_slice(&old[..160]);
+        data[192..288 + LAYERS].copy_from_slice(&old[160..256 + LAYERS]);
+        for (p, v) in [
+            (4, 5),
+            (28, 240),
+            (40, 256),
+            (44, 256),
+            (48, 288),
+            (280, 288),
+            (160, 0),
+            (164, 8.0f32.to_bits() as i32),
+            (168, (-64.0f32).to_bits() as i32),
+            (172, 319.0f32.to_bits() as i32),
+            (176, -64),
+            (180, 1),
+        ] {
+            put(&mut data, p, v);
+        }
+        for i in 0..130 * 130 {
+            put(&mut data, 288 + HEIGHT + i * 4, 85.0f32.to_bits() as i32);
+        }
+        put(&mut data, 288 + LAYERS + 81920, 0.5f32.to_bits() as i32);
+        data
+    }
+    #[test]
+    fn height_filter_output_keeps_quantisation_and_mutable_neighbourhood() {
+        let mut data = height_fixture();
+        paint(&mut data).unwrap();
+        assert_eq!(int(&data, 284), 1);
+        assert_eq!(int(&data, 288 + LAYERS), (89 + 64) * 256);
+        assert_eq!(data[288 + LAYERS + 65536], 1);
+        assert_eq!(float(&data, 288 + HEIGHT + 131 * 4), 89.0);
+    }
+    #[test]
+    fn unsupported_height_frames_reject_atomically() {
+        for (p, v) in [(4, 4), (160, 5), (180, 2), (184, 1), (256, i32::MAX)] {
+            let mut data = height_fixture();
+            put(&mut data, p, v);
+            let before = data.clone();
+            assert!(paint(&mut data).is_err());
+            assert_eq!(before, data);
+        }
     }
     fn nibble_fixture(mode: i32, strength: f32, current: u8) -> Vec<u8> {
         let mut data = fixture();

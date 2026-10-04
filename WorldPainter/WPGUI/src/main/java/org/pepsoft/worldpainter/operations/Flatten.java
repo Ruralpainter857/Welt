@@ -10,6 +10,8 @@ import org.pepsoft.util.IconUtils;
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.TerrainHeightAccess;
 import org.pepsoft.worldpainter.HeightBrushAccess;
+import org.pepsoft.worldpainter.FilteredPaintAccess;
+import org.pepsoft.worldpainter.panels.EditorFilterPlan;
 import org.pepsoft.worldpainter.WorldPainter;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
@@ -116,7 +118,7 @@ public class Flatten extends AbstractBrushOperation {
 
     private boolean flattenNative(Dimension dimension, int centreX, int centreY, int radius,
                                   float dynamicLevel, boolean applyTheme) {
-        if (getFilter() != null || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) {
             return false;
         }
         long diameterLong = 2L * radius + 1L;
@@ -128,6 +130,15 @@ public class Flatten extends AbstractBrushOperation {
         if (nativeStrengths == null || nativeStrengths.length != area) nativeStrengths = new float[area];
         final int diameter = (int) diameterLong;
 
+        if(getFilter()!=null){
+            if(applyTheme||area<16384)return false;
+            EditorFilterPlan plan=EditorFilterPlan.compile(getFilter(),dimension);if(plan==null)return false;
+            for(int y=0;y<diameter;y++)for(int x=0;x<diameter;x++)
+                nativeStrengths[y*diameter+x]=getBrush().getStrength(x-radius,y-radius);
+            int filteredMode=mode==Mode.FLATTEN?HeightBrushAccess.FLATTEN:mode==Mode.RAISE?HeightBrushAccess.FLATTEN_RAISE:HeightBrushAccess.FLATTEN_LOWER;
+            return FilteredPaintAccess.applyHeight(dimension,plan,centreX-radius,centreY-radius,diameter,diameter,
+                    nativeStrengths,filteredMode,targetHeight,dimension.getMinHeight(),dimension.getMaxHeight()-1,dynamicLevel);
+        }
         int index = 0;
         for (int x = centreX - radius; x <= centreX + radius; x++) {
             for (int y = centreY - radius; y <= centreY + radius; y++) {
