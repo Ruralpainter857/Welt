@@ -5,6 +5,54 @@ fn word(data: &[u8], offset: usize) -> i32 {
     i32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
 }
 
+/// Shared Java automatic-biome priority for compact editor and bake transactions.
+/// Depth already contains Java's wrapping water-minus-rounded-height subtraction.
+pub fn classify(
+    constant: i32,
+    depth: i32,
+    flags: u8,
+    terrain_biome: i32,
+    biomes: &[i32; 10],
+) -> i32 {
+    let forest = flags & 16 != 0;
+    let swamp = flags & 4 != 0;
+    let jungle = flags & 8 != 0;
+    let flooded = depth > 0 && flags & 32 == 0;
+    if constant >= 0 {
+        constant
+    } else if flags & 1 != 0 {
+        if flags & 2 != 0 {
+            biomes[0]
+        } else if forest || swamp || jungle {
+            biomes[1]
+        } else if flags & 64 != 0 || (flooded && depth <= 5) {
+            biomes[0]
+        } else if flooded {
+            biomes[2]
+        } else {
+            biomes[3]
+        }
+    } else if flags & 2 != 0 {
+        biomes[4]
+    } else if swamp {
+        biomes[5]
+    } else if jungle {
+        biomes[6]
+    } else if flooded {
+        if depth <= 5 {
+            biomes[4]
+        } else if depth <= 20 {
+            biomes[7]
+        } else {
+            biomes[8]
+        }
+    } else if forest && flags & 128 != 0 {
+        biomes[9]
+    } else {
+        terrain_biome
+    }
+}
+
 pub fn bake(data: &mut [u8]) -> Result<(), WeltError> {
     if data.len() != BYTES
         || word(data, 0) != 0x4d424157
@@ -18,13 +66,13 @@ pub fn bake(data: &mut [u8]) -> Result<(), WeltError> {
     if !(-1..=254).contains(&constant) {
         return Err(WeltError::IllegalArgument);
     }
-    let mut biomes = [0u8; 10];
+    let mut biomes = [0i32; 10];
     for (i, biome) in biomes.iter_mut().enumerate() {
         let value = word(data, 16 + i * 4);
         if !(0..=254).contains(&value) {
             return Err(WeltError::IllegalArgument);
         }
-        *biome = value as u8;
+        *biome = value;
     }
     let mut changed = 0i32;
     for i in 0..16384 {
@@ -34,43 +82,7 @@ pub fn bake(data: &mut [u8]) -> Result<(), WeltError> {
         }
         let depth = word(data, offset);
         let flags = data[offset + 4];
-        let forest = flags & 16 != 0;
-        let swamp = flags & 4 != 0;
-        let jungle = flags & 8 != 0;
-        let flooded = depth > 0 && flags & 32 == 0;
-        let biome = if constant >= 0 {
-            constant as u8
-        } else if flags & 1 != 0 {
-            if flags & 2 != 0 {
-                biomes[0]
-            } else if forest || swamp || jungle {
-                biomes[1]
-            } else if flags & 64 != 0 || (flooded && depth <= 5) {
-                biomes[0]
-            } else if flooded {
-                biomes[2]
-            } else {
-                biomes[3]
-            }
-        } else if flags & 2 != 0 {
-            biomes[4]
-        } else if swamp {
-            biomes[5]
-        } else if jungle {
-            biomes[6]
-        } else if flooded {
-            if depth <= 5 {
-                biomes[4]
-            } else if depth <= 20 {
-                biomes[7]
-            } else {
-                biomes[8]
-            }
-        } else if forest && flags & 128 != 0 {
-            biomes[9]
-        } else {
-            data[offset + 6]
-        };
+        let biome = classify(constant, depth, flags, data[offset + 6] as i32, &biomes) as u8;
         data[offset + 5] = biome;
         changed += 1;
     }

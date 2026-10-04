@@ -110,47 +110,23 @@ impl CellData for Cell<'_> {
         if constant >= 0 {
             return constant;
         }
-        let frost = self.helper(5) != 0;
-        let river = self.helper(6) != 0;
-        let forest = self.helper(7) > 0 || self.helper(8) > 0;
-        let swamp = self.helper(9) > 0;
-        let jungle = self.helper(10) > 0;
-        let depth = self.water().wrapping_sub(self.height());
-        let flooded = depth > 0 && !self.lava();
-        if frost {
-            if river {
-                self.biome_id(0)
-            } else if forest || swamp || jungle {
-                self.biome_id(1)
-            } else if self.terrain() == int(self.data, 56) || (flooded && depth <= 5) {
-                self.biome_id(0)
-            } else if flooded {
-                self.biome_id(2)
-            } else {
-                self.biome_id(3)
-            }
-        } else if river {
-            self.biome_id(4)
-        } else if swamp {
-            self.biome_id(5)
-        } else if jungle {
-            self.biome_id(6)
-        } else if flooded {
-            if depth <= 5 {
-                self.biome_id(4)
-            } else if depth <= 20 {
-                self.biome_id(7)
-            } else {
-                self.biome_id(8)
-            }
-        } else {
-            let entry = self.palette + self.terrain() as usize * 8;
-            if forest && int(self.data, entry + 4) != 0 {
-                self.biome_id(9)
-            } else {
-                int(self.data, entry)
-            }
-        }
+        let entry = self.palette + self.terrain() as usize * 8;
+        let flags = u8::from(self.helper(5) != 0)
+            | (u8::from(self.helper(6) != 0) << 1)
+            | (u8::from(self.helper(9) > 0) << 2)
+            | (u8::from(self.helper(10) > 0) << 3)
+            | (u8::from(self.helper(7) > 0 || self.helper(8) > 0) << 4)
+            | (u8::from(self.lava()) << 5)
+            | (u8::from(self.terrain() == int(self.data, 56)) << 6)
+            | (u8::from(int(self.data, entry + 4) != 0) << 7);
+        let biomes = std::array::from_fn(|i| self.biome_id(i));
+        crate::auto_biome::classify(
+            constant,
+            self.water().wrapping_sub(self.height()),
+            flags,
+            int(self.data, entry),
+            &biomes,
+        )
     }
     fn lava(&self) -> bool {
         self.helper(1) != 0

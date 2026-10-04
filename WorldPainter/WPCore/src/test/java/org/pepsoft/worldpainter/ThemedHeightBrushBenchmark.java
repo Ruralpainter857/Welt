@@ -2,7 +2,7 @@ package org.pepsoft.worldpainter;
 
 import java.lang.management.ManagementFactory;
 import java.util.Arrays;
-import org.pepsoft.worldpainter.themes.SimpleTheme;
+import java.util.Locale;
 
 /** Complete strokes include force preparation, height edits, themes and notifications. */
 public final class ThemedHeightBrushBenchmark {
@@ -21,30 +21,80 @@ public final class ThemedHeightBrushBenchmark {
             if(inverse?edited<current:edited>current){d.setHeightAt(wx,wy,edited);d.applyTheme(wx,wy);}
         }
     }
-    public static void main(String[] args) throws Exception {
-        boolean rust=args.length>0&&args[0].equals("rust");
-        int radius=args.length>1?Integer.parseInt(args[1]):127,side=2*radius+1,origin=-radius/2;
-        var nativeStroke=rust?HeightBrushAccess.class.getMethod("tryApplyThemed",Dimension.class,int.class,int.class,int.class,int.class,
-                float[].class,int.class,float.class,float.class,float.class):null;
-        var bean=(com.sun.management.ThreadMXBean)ManagementFactory.getThreadMXBean();
-        double[] times=new double[7];long[] allocated=new long[7];
-        for(int trial=-5;trial<7;trial++) {
-            Dimension d=fixture();float[] forces=new float[side*side];ThemeResetParityTest.random().setSeed(99);
-            long before=bean.getThreadAllocatedBytes(Thread.currentThread().getId()),start=System.nanoTime();
-            for(int stroke=0;stroke<8;stroke++) {
-                HeightBrushBenchmark.strengths(forces,radius,stroke);d.setEventsInhibited(true);
-                try {
-                    if(rust){if(!(Boolean)nativeStroke.invoke(null,d,origin,origin,side,side,forces,stroke%2,7.5f,
-                            (float)d.getMinHeight(),(float)(d.getMaxHeight()-1))) {
-                        if(side>=128)throw new AssertionError("Native themed brush unavailable");
-                        scalar(d,origin,origin,side,forces,stroke%2!=0,7.5f);
-                    }}
-                    else scalar(d,origin,origin,side,forces,stroke%2!=0,7.5f);
-                }finally{d.setEventsInhibited(false);}
+    private record Result(double millis, long allocated, Dimension dimension, long randomState) { }
+
+    private static Result run(boolean rust, int radius) throws Exception {
+        int side = 2 * radius + 1, origin = -radius / 2;
+        Dimension dimension = fixture();
+        float[] forces = new float[side * side];
+        ThemeResetParityTest.random().setSeed(99);
+        var meter = (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
+        long thread = Thread.currentThread().getId();
+        long calls = HeightBrushAccess.completedThemedCalls();
+        long allocated = meter.getThreadAllocatedBytes(thread), start = System.nanoTime();
+        for (int stroke = 0; stroke < 8; stroke++) {
+            HeightBrushBenchmark.strengths(forces, radius, stroke);
+            dimension.setEventsInhibited(true);
+            try {
+                if (rust) {
+                    if (!HeightBrushAccess.tryApplyThemed(dimension, origin, origin, side, side,
+                            forces, stroke % 2, 7.5f, dimension.getMinHeight(), dimension.getMaxHeight() - 1)) {
+                        throw new AssertionError("Native themed brush unavailable");
+                    }
+                } else {
+                    scalar(dimension, origin, origin, side, forces, stroke % 2 != 0, 7.5f);
+                }
+            } finally {
+                dimension.setEventsInhibited(false);
             }
-            if(trial>=0){times[trial]=(System.nanoTime()-start)/1e6;allocated[trial]=bean.getThreadAllocatedBytes(Thread.currentThread().getId())-before;}
         }
-        Arrays.sort(times);Arrays.sort(allocated);
-        System.out.printf("%s radius=%d themed_height_8_strokes_ms=%.3f heap_allocated_bytes=%d%n",rust?"Rust":"Java",radius,times[3],allocated[3]);
+        double millis = (System.nanoTime() - start) / 1e6;
+        long bytes = meter.getThreadAllocatedBytes(thread) - allocated;
+        if (HeightBrushAccess.completedThemedCalls() - calls != (rust ? 8 : 0)) {
+            throw new AssertionError("Unexpected grouped transaction count");
+        }
+        return new Result(millis, bytes, dimension, ThemeResetParityTest.random().nextLong());
+    }
+
+    public static void main(String[] args) throws Exception {
+        String selected = args.length == 0 ? "java" : args[0];
+        int radius = args.length > 1 ? Integer.parseInt(args[1]) : 127;
+        int warmups = Integer.getInteger("welt.benchmark.themedHeightWarmups", 20);
+        int trials = Integer.getInteger("welt.benchmark.themedHeightTrials", 9);
+        if ((!selected.equals("java") && !selected.equals("rust") && !selected.equals("compare"))
+                || radius < 64 || radius > 127 || warmups < 0 || trials < 1) {
+            throw new IllegalArgumentException("Invalid benchmark parameters");
+        }
+        boolean paired = selected.equals("compare");
+        double[] times = new double[trials], nativeTimes = new double[trials], ratios = new double[trials];
+        long[] bytes = new long[trials], nativeBytes = new long[trials];
+        for (int trial = -warmups; trial < trials; trial++) {
+            if (paired) {
+                Result java = null, rust = null;
+                for (int pass = 0; pass < 2; pass++) {
+                    if (((trial + pass) & 1) == 0) java = run(false, radius);
+                    else rust = run(true, radius);
+                }
+                ThemedFlattenBrushBenchmark.same(java.dimension, rust.dimension);
+                if (java.randomState != rust.randomState) throw new AssertionError("Theme RNG differs");
+                if (trial >= 0) {
+                    times[trial] = java.millis; nativeTimes[trial] = rust.millis;
+                    ratios[trial] = java.millis / rust.millis;
+                    bytes[trial] = java.allocated; nativeBytes[trial] = rust.allocated;
+                }
+            } else {
+                Result result = run(selected.equals("rust"), radius);
+                if (trial >= 0) { times[trial] = result.millis; bytes[trial] = result.allocated; }
+            }
+        }
+        Arrays.sort(times); Arrays.sort(nativeTimes); Arrays.sort(ratios);
+        Arrays.sort(bytes); Arrays.sort(nativeBytes);
+        int middle = trials / 2;
+        if (paired) System.out.printf(Locale.ROOT,
+                "themedHeight radius=%d javaMs=%.3f rustMs=%.3f ratio=%.3f range=%.3f..%.3f allocated=%d rustAllocated=%d parity=exact%n",
+                radius, times[middle], nativeTimes[middle], ratios[middle], ratios[0], ratios[trials - 1],
+                bytes[middle], nativeBytes[middle]);
+        else System.out.printf(Locale.ROOT, "themedHeight radius=%d mode=%s medianMs=%.3f allocated=%d%n",
+                radius, selected, times[middle], bytes[middle]);
     }
 }

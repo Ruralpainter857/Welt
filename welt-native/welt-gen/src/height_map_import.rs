@@ -177,6 +177,18 @@ impl Theme {
         }
         Ok(end)
     }
+    /// Shared preparation for a transaction that must interleave filters and theme mutations.
+    pub(crate) fn prepare_cell_terrains(&mut self) {
+        SimpleThemeTerrainBulk::prepare_tile_axes(&mut self.axes);
+    }
+
+    pub(crate) fn terrain_at_cell(&self, cell: usize, height: i32) -> u8 {
+        self.terrain
+            .as_ref()
+            .unwrap()
+            .terrain_at_tile_cell(cell, height, &self.axes)
+    }
+
     pub(crate) fn prepare_selected_terrains(
         &mut self,
         heights: &[i32],

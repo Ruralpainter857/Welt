@@ -189,6 +189,30 @@ impl SimpleThemeTerrainBulk {
         }
     }
 
+    /// Prepare local Java tile coordinates once for interleaved height/filter/theme edits.
+    pub(crate) fn prepare_tile_axes(scratch: &mut SimpleThemeTerrainScratch) {
+        Self::prepare_axes(0, 0, 128, 128, scratch);
+    }
+
+    /// Evaluate one quantised height using the same prepared axes as the bulk path.
+    /// The caller supplies a validated local tile index and a prepared worker scratch.
+    pub(crate) fn terrain_at_tile_cell(
+        &self,
+        cell: usize,
+        height: i32,
+        scratch: &SimpleThemeTerrainScratch,
+    ) -> u8 {
+        let x = cell % 128;
+        let y = cell / 128;
+        self.get_terrain_ordinal_with_axes(
+            scratch.small_x[x],
+            scratch.small_y[y],
+            scratch.tiny_x[x],
+            scratch.tiny_y[y],
+            height,
+        ) as u8
+    }
+
     pub fn fill_bulk(
         &self,
         origin_x: i32,
@@ -349,7 +373,7 @@ impl SimpleThemeTerrainBulk {
 
 #[cfg(test)]
 mod tests {
-    use super::{SimpleThemeTerrainBulk, SimpleThemeTerrainError};
+    use super::{SimpleThemeTerrainBulk, SimpleThemeTerrainError, SimpleThemeTerrainScratch};
 
     #[test]
     fn bulk_matches_scalar_for_randomised_beach_and_clamped_heights() {
@@ -382,6 +406,56 @@ mod tests {
                         input[index]
                     )
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn interleaved_cell_terrain_matches_scalar_and_bulk_after_reconfiguration() {
+        let mut scratch = SimpleThemeTerrainScratch::default();
+        for seed in [0, 42, -17, i64::MAX] {
+            for (min, max, water) in [(-64, 320, 62), (0, 256, 1)] {
+                let ranges: Vec<_> = (min..max).map(|h| (h - min) % 251).collect();
+                for beaches in [false, true] {
+                    let terrain = SimpleThemeTerrainBulk::new(
+                        min, max, water, true, beaches, 255, seed, &ranges,
+                    )
+                    .unwrap();
+                    SimpleThemeTerrainBulk::prepare_tile_axes(&mut scratch);
+                    let capacities = (
+                        scratch.small_x.capacity(),
+                        scratch.small_y.capacity(),
+                        scratch.tiny_x.capacity(),
+                        scratch.tiny_y.capacity(),
+                    );
+                    for cell in 0..16384 {
+                        let height = match cell % 7 {
+                            0 => min - 20,
+                            1 => max + 20,
+                            2 => water - 2,
+                            3 => water + 1,
+                            _ => min + (cell % ((max - min) as usize)) as i32,
+                        };
+                        assert_eq!(
+                            terrain.terrain_at_tile_cell(cell, height, &scratch) as i32,
+                            terrain.get_terrain_ordinal(
+                                (cell % 128) as i32,
+                                (cell / 128) as i32,
+                                height
+                            )
+                        );
+                    }
+                    SimpleThemeTerrainBulk::prepare_tile_axes(&mut scratch);
+                    assert_eq!(
+                        capacities,
+                        (
+                            scratch.small_x.capacity(),
+                            scratch.small_y.capacity(),
+                            scratch.tiny_x.capacity(),
+                            scratch.tiny_y.capacity()
+                        )
+                    );
+                }
             }
         }
     }

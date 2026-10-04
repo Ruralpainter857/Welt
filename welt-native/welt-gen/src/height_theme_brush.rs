@@ -1,5 +1,6 @@
-//! WHTB v1/v2/v3 groups all intersecting tiles to preserve the global X/Y theme RNG order.
-//! One frame carries forces, a theme, and compact planes reused by both passes.
+//! WHTB v1/v2/v3/v4 groups all intersecting tiles to preserve the global X/Y theme RNG order.
+//! V4 interleaves height and theme writes; earlier versions retain the bulk terrain path.
+//! The shared packed planes retain Java global X/Y mutation and random-draw order.
 //! V3 adds mode 5 (smooth), border offset/count at bytes 88/92, and reserves bytes 96..128.
 //! Border floats precede the theme: left/right are 5 x (height + 10), top/bottom width x 5,
 //! each in X-major order. Interior heights are captured from packed planes, never recopied by Java.
@@ -37,6 +38,9 @@ struct TileWork {
 impl Default for TileWork {
     fn default() -> Self {
         Self {
+            heights: Vec::new(),
+            terrains: Vec::new(),
+            changed: Vec::new(),
             base: 0,
             tx: 0,
             ty: 0,
@@ -47,9 +51,6 @@ impl Default for TileWork {
                 order: [255; 64],
                 count: 0,
             },
-            heights: vec![0; AREA],
-            terrains: vec![0; AREA],
-            changed: vec![false; AREA],
         }
     }
 }
@@ -65,9 +66,13 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     if d.len() < 128
         || d.len() > MAX_BYTES
         || word(d, 0) != 0x42544857
-        || !matches!(word(d, 4), 1..=3)
+        || !matches!(word(d, 4), 1..=4)
         || word(d, 8) as usize != d.len()
-        || d[if word(d, 4) == 3 { 96 } else { 88 }..128]
+        || d[if word(d, 4) >= 3 && word(d, 28) == 5 {
+            96
+        } else {
+            88
+        }..128]
             .iter()
             .any(|v| *v != 0)
     {
@@ -90,7 +95,8 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     let start = word(d, 68) as usize;
     let step = word(d, 72) as usize;
     let beach = word(d, 76) as i32;
-    let smooth = word(d, 4) == 3;
+    let cell_ordered = word(d, 4) == 4;
+    let smooth = word(d, 4) >= 3 && mode == 5;
     let halo_count = if smooth && w <= 246 && h <= 246 {
         10 * (w + h + 10)
     } else {
@@ -98,10 +104,11 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     };
     if !(3..=64).contains(&n)
         || nt > 9
+        || word(d, 4) == 3 && mode != 5
         || mode
             > if word(d, 4) == 1 {
                 1
-            } else if smooth {
+            } else if word(d, 4) >= 3 {
                 5
             } else {
                 4
@@ -163,11 +170,25 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     if s.tiles.len() < nt {
         s.tiles.resize_with(nt, TileWork::default);
     }
+    if cell_ordered {
+        // Include inactive tiles cached by a previous larger transaction.
+        for tile in &mut s.tiles {
+            tile.heights = Vec::new();
+            tile.terrains = Vec::new();
+            tile.changed = Vec::new();
+        }
+    }
     for t in 0..nt {
         let b = start + t * step;
         let tile = &mut s.tiles[t];
         if d[b..b + 256].iter().any(|v| *v != 0) || long(d, b + 280) != 0 || long(d, b + 272) != 0 {
             return Err(bad);
+        }
+        if !cell_ordered {
+            tile.heights.resize(16384, 0);
+            tile.terrains.resize(16384, 0);
+            tile.changed.resize(16384, false);
+            tile.changed.fill(false);
         }
         tile.base = b;
         tile.tx = word(d, b + 256) as i32;
@@ -193,7 +214,6 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
             order: [255; 64],
             count: 0,
         };
-        tile.changed.fill(false);
     }
     for a in 0..nt {
         for b in 0..a {
@@ -251,6 +271,9 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
             }
         }
     }
+    if cell_ordered {
+        s.theme.prepare_cell_terrains();
+    }
     // Height decisions use exactly the scalar float expression before quantization.
     for x in 0..w {
         for y in 0..h {
@@ -303,39 +326,55 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
                     if tall { raw as u32 } else { raw as u16 as u32 },
                     true,
                 );
-                t.changed[i] = true;
+                if cell_ordered {
+                    let quantised = t.planes[0].get(d, i) as i32 as f32 / 256.0 + min as f32;
+                    let height = (f64::from(quantised) + 0.5).floor() as i32;
+                    let terrain = s.theme.terrain_at_cell(i, height);
+                    s.theme.apply_cell(
+                        d,
+                        &t.planes[..n],
+                        &mut t.state,
+                        i,
+                        (height, terrain),
+                        &mut random,
+                    );
+                } else {
+                    t.changed[i] = true;
+                }
             }
         }
     }
-    for t in &mut s.tiles[..nt] {
-        for i in 0..AREA {
-            let height = t.planes[0].get(d, i) as i32 as f32 / 256.0 + min as f32;
-            t.heights[i] = (f64::from(height) + 0.5).floor() as i32;
+    if !cell_ordered {
+        for t in &mut s.tiles[..nt] {
+            for i in 0..AREA {
+                let height = t.planes[0].get(d, i) as i32 as f32 / 256.0 + min as f32;
+                t.heights[i] = (f64::from(height) + 0.5).floor() as i32;
+            }
+            s.theme
+                .prepare_selected_terrains(&t.heights, &t.changed, &mut t.terrains);
         }
-        s.theme
-            .prepare_selected_terrains(&t.heights, &t.changed, &mut t.terrains);
-    }
-    // This global traversal is essential: processing one whole tile at a time changes bit-layer draws.
-    for x in 0..w {
-        for y in 0..h {
-            let wx = ox + x as i32;
-            let wy = oy + y as i32;
-            let Some(t) = s.tiles[..nt]
-                .iter_mut()
-                .find(|t| t.tx == wx >> 7 && t.ty == wy >> 7)
-            else {
-                continue;
-            };
-            let i = (wx & 127) as usize + (wy & 127) as usize * 128;
-            if t.changed[i] {
-                s.theme.apply_cell(
-                    d,
-                    &t.planes[..n],
-                    &mut t.state,
-                    i,
-                    (t.heights[i], t.terrains[i]),
-                    &mut random,
-                );
+        // This global traversal is essential: processing one whole tile at a time changes bit-layer draws.
+        for x in 0..w {
+            for y in 0..h {
+                let wx = ox + x as i32;
+                let wy = oy + y as i32;
+                let Some(t) = s.tiles[..nt]
+                    .iter_mut()
+                    .find(|t| t.tx == wx >> 7 && t.ty == wy >> 7)
+                else {
+                    continue;
+                };
+                let i = (wx & 127) as usize + (wy & 127) as usize * 128;
+                if t.changed[i] {
+                    s.theme.apply_cell(
+                        d,
+                        &t.planes[..n],
+                        &mut t.state,
+                        i,
+                        (t.heights[i], t.terrains[i]),
+                        &mut random,
+                    );
+                }
             }
         }
     }
@@ -447,33 +486,68 @@ mod tests {
             rng.next_int_bound(15);
         }
         assert_eq!(long(&d, 80), rng.lcg_state());
-        let capacities: Vec<_> = s
-            .tiles
-            .iter()
-            .map(|t| {
-                (
-                    t.heights.capacity(),
-                    t.terrains.capacity(),
-                    t.changed.capacity(),
-                )
-            })
-            .collect();
+        let capacity = s.tiles.capacity();
         let expected = d.clone();
         d = original;
         apply(&mut d, &mut s).unwrap();
         assert_eq!(d, expected);
-        assert_eq!(
-            capacities,
-            s.tiles
-                .iter()
-                .map(|t| (
-                    t.heights.capacity(),
-                    t.terrains.capacity(),
-                    t.changed.capacity()
-                ))
-                .collect::<Vec<_>>()
-        );
+        assert_eq!(capacity, s.tiles.capacity());
     }
+    #[test]
+    fn cell_ordered_frames_match_bulk_planes_events_and_random_without_work_planes() {
+        let mut scratch = BrushScratch::default();
+        for mode in 0..=5 {
+            let mut bulk = if mode == 5 { smooth_frame() } else { frame() };
+            if mode > 1 && mode < 5 {
+                put(&mut bulk, 4, 2);
+            }
+            put(&mut bulk, 28, mode);
+            put(
+                &mut bulk,
+                32,
+                if mode < 2 {
+                    8f32.to_bits()
+                } else {
+                    63.5f32.to_bits()
+                },
+            );
+            let forces = word(&bulk, 60) as usize;
+            for (i, force) in [0.0f32, 0.25, 0.75, 1.25].into_iter().enumerate() {
+                put(&mut bulk, forces + i * 4, force.to_bits());
+            }
+            let version = word(&bulk, 4);
+            let mut ordered = bulk.clone();
+            put(&mut ordered, 4, 4);
+            apply(&mut bulk, &mut scratch).unwrap();
+            assert!(scratch.tiles.iter().any(|t| !t.heights.is_empty()));
+            apply(&mut ordered, &mut scratch).unwrap();
+            put(&mut ordered, 4, version);
+            assert_eq!(bulk, ordered, "mode {mode}");
+            assert!(scratch.tiles.iter().all(|t| t.heights.capacity() == 0
+                && t.terrains.capacity() == 0
+                && t.changed.capacity() == 0));
+        }
+    }
+
+    #[test]
+    fn cell_ordered_worker_releases_inactive_legacy_tile_arrays() {
+        let mut scratch = BrushScratch::default();
+        apply(&mut frame(), &mut scratch).unwrap();
+        scratch.tiles.resize_with(9, TileWork::default);
+        for tile in &mut scratch.tiles[4..] {
+            tile.heights.resize(AREA, 0);
+            tile.terrains.resize(AREA, 0);
+            tile.changed.resize(AREA, false);
+        }
+        let mut data = frame();
+        put(&mut data, 4, 4);
+        apply(&mut data, &mut scratch).unwrap();
+        assert_eq!(scratch.tiles.len(), 9);
+        assert!(scratch.tiles.iter().all(|t| t.heights.capacity() == 0
+            && t.terrains.capacity() == 0
+            && t.changed.capacity() == 0));
+    }
+
     #[test]
     fn flatten_modes_and_legacy_rejection_preserve_the_frame_contract() {
         for mode in 2..=4 {

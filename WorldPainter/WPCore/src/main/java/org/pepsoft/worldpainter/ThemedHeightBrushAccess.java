@@ -55,7 +55,7 @@ final class ThemedHeightBrushAccess {
         long sizeLong=(long)start+(long)step*count;if(sizeLong>MAX_BYTES)return false;int size=(int)sizeLong;
         ByteBuffer d=scratch.data;if(d==null||d.capacity()<size){d=ByteBuffer.allocateDirect(size).order(ByteOrder.LITTLE_ENDIAN);scratch.data=d;}
         d.clear().limit(size);for(int i=0;i<128;i+=8)d.putLong(i,0);
-        d.putInt(0,0x42544857).putInt(4,mode==5?3:mode<2?1:2).putInt(8,size).putInt(12,n).putInt(16,count)
+        d.putInt(0,0x42544857).putInt(4,Boolean.getBoolean("welt.native.interleavedTheme")?4:mode==5?3:mode<2?1:2).putInt(8,size).putInt(12,n).putInt(16,count)
                 .putInt(20,dimension.getMinHeight()).putInt(24,dimension.getMaxHeight()).putInt(28,mode).putFloat(32,value)
                 .putFloat(36,low).putFloat(40,high).putInt(44,ox).putInt(48,oy).putInt(52,width).putInt(56,height)
                 .putInt(60,forceBase).putInt(64,themeBase).putInt(68,start).putInt(72,step).putInt(76,Terrain.BEACHES.ordinal());
