@@ -46,3 +46,4 @@ pub mod combined_layer;
 pub mod line_stroke;
 
 pub mod line_set_stroke;
+pub mod map_surface;

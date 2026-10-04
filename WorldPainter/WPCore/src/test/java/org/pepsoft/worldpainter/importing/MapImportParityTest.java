@@ -13,7 +13,7 @@ import org.pepsoft.worldpainter.layers.Layer;
 import static org.junit.Assert.*;
 
 public class MapImportParityTest extends AbstractTool {
-    private static final String[] KEYS={"user.home","org.pepsoft.worldpainter.threads","welt.native.chunkNbt","welt.native.chunkNbtKernel","welt.native.regionHeader","welt.native.regionHeaderKernel","welt.profile.mapImport","welt.benchmark.importReadOnly"};
+    private static final String[] KEYS={"user.home","org.pepsoft.worldpainter.threads","welt.native.chunkNbt","welt.native.chunkNbtKernel","welt.native.regionHeader","welt.native.regionHeaderKernel","welt.profile.mapImport","welt.benchmark.importReadOnly","welt.native.mapSurface","welt.packedArrayCube.compactPaletteStorage"};
     private static final String[] SAVED=new String[KEYS.length];
     private static Configuration previousConfiguration;
     private static File fixture;
@@ -43,6 +43,35 @@ public class MapImportParityTest extends AbstractTool {
             System.setProperty("welt.native.chunkNbt","true");System.setProperty("welt.native.chunkNbtKernel","true");long nbtCalls=ChunkTagReader.completedCalls();System.setProperty("welt.native.regionHeader","true");System.setProperty("welt.native.regionHeaderKernel","true");long calls=RegionHeaderAccess.completedCalls();World2 actual=MapImportBenchmark.importWorld(fixture);
             assertTrue(RegionHeaderAccess.completedCalls()>calls);assertEquals(16,ChunkTagReader.completedCalls()-nbtCalls);same(expected,actual);
         }
+    }
+    @Test public void nativeSurfacesMatchAllReadOnlyModesAndWorkerCounts() throws Exception {
+        System.setProperty("welt.native.chunkNbt","false");
+        System.setProperty("welt.native.regionHeader","false");
+        System.setProperty("welt.packedArrayCube.compactPaletteStorage","true");
+        MapImportBenchmark.quietLogging();
+        for(String workers:new String[]{"1","4"})for(MapImporter.ReadOnlyOption option:MapImporter.ReadOnlyOption.values()){
+            System.setProperty("org.pepsoft.worldpainter.threads",workers);
+            System.setProperty("welt.benchmark.importReadOnly",option.name());
+            System.setProperty("welt.native.mapSurface","false");
+            World2 expected=MapImportBenchmark.importWorld(fixture);
+            long calls=org.pepsoft.minecraft.ChunkSurfaceAccess.completedCalls();
+            System.setProperty("welt.native.mapSurface","true");
+            World2 actual=MapImportBenchmark.importWorld(fixture);
+            assertEquals(16,org.pepsoft.minecraft.ChunkSurfaceAccess.completedCalls()-calls);
+            same(expected,actual);
+        }
+    }
+    @Test public void objectStorageKeepsTheJavaSurfaceFallback() throws Exception {
+        System.setProperty("welt.native.chunkNbt","false");
+        System.setProperty("welt.native.regionHeader","false");
+        System.setProperty("welt.packedArrayCube.compactPaletteStorage","false");
+        System.setProperty("welt.native.mapSurface","false");
+        World2 expected=MapImportBenchmark.importWorld(fixture);
+        long calls=org.pepsoft.minecraft.ChunkSurfaceAccess.completedCalls();
+        System.setProperty("welt.native.mapSurface","true");
+        World2 actual=MapImportBenchmark.importWorld(fixture);
+        assertEquals(calls,org.pepsoft.minecraft.ChunkSurfaceAccess.completedCalls());
+        same(expected,actual);
     }
     @Test public void diagnosticsAndGroupedJavaFallbackPreserveTheWholeImportedWorld() throws Exception {
         System.setProperty("org.pepsoft.worldpainter.threads","1");System.setProperty("welt.benchmark.importReadOnly","MAN_MADE");System.setProperty("welt.native.regionHeader","false");System.setProperty("welt.profile.mapImport","false");

@@ -64,6 +64,9 @@ public class JavaMapImporter extends MapImporter {
     private static final LongAdder PROFILE_CHUNKS=new LongAdder(), PROFILE_VISITOR=new LongAdder(),
             PROFILE_SURFACE=new LongAdder(), PROFILE_WRITES=new LongAdder(), PROFILE_BIOMES=new LongAdder();
 
+    private static final Terrain[] IMPORT_TERRAINS=Terrain.values();
+    private static int terrainOrdinal(String name){Terrain terrain=TERRAIN_MAPPING.get(name);return terrain==null?-1:terrain.ordinal();}
+
     public JavaMapImporter(Platform platform, TileFactory tileFactory, File levelDatFile, Set<MinecraftCoords> chunksToSkip, ReadOnlyOption readOnlyOption, Set<Integer> dimensionsToImport) {
         if ((tileFactory == null) || (levelDatFile == null) || (readOnlyOption == null) || (dimensionsToImport == null)) {
             throw new NullPointerException();
@@ -323,6 +326,11 @@ public class JavaMapImporter extends MapImporter {
                         final boolean collectDebugInfo = logger.isDebugEnabled();
                         boolean markReadOnly = false;
                         try {
+                            final long nativeSurfaceStart=profileImport?System.nanoTime():0;
+                            final ChunkSurfaceAccess.Result surfaces=collectDebugInfo?null:ChunkSurfaceAccess.analyze(chunk,
+                                    chunkMinHeight,maxY,minHeight,DEFAULT_WATER_LEVEL,Terrain.BEDROCK.ordinal(),
+                                    IMPORT_TERRAINS.length,readOnlyOption==MAN_MADE,JavaMapImporter::terrainOrdinal);
+                            if(profileImport)PROFILE_SURFACE.add(System.nanoTime()-nativeSurfaceStart);
                             for (int xx = 0; xx < 16; xx++) {
                                 for (int zz = 0; zz < 16; zz++) {
                                     final long surfaceStart=profileImport?System.nanoTime():0;
@@ -330,65 +338,72 @@ public class JavaMapImporter extends MapImporter {
                                     int waterLevel = Integer.MIN_VALUE;
                                     boolean floodWithLava = false, frost = false;
                                     Terrain terrain = Terrain.BEDROCK;
-                                    for (int y = Math.min(maxY, chunk.getHighestNonAirBlock(xx, zz)); y >= chunkMinHeight; y--) {
-                                        Material material = chunk.getMaterial(xx, y, zz);
-                                        if (! material.natural) {
-                                            if (height == -Float.MAX_VALUE) {
-                                                manMadeStructuresAboveGround = true;
+                                    if (surfaces != null) {
+                                        height=surfaces.height(xx,zz);waterLevel=surfaces.water(xx,zz);
+                                        terrain=IMPORT_TERRAINS[surfaces.terrain(xx,zz)];
+                                        int flags=surfaces.flags(xx,zz);frost=(flags&1)!=0;floodWithLava=(flags&2)!=0;
+                                        manMadeStructuresAboveGround|=(flags&8)!=0;manMadeStructuresBelowGround|=(flags&16)!=0;
+                                    } else {
+                                        for (int y = Math.min(maxY, chunk.getHighestNonAirBlock(xx, zz)); y >= chunkMinHeight; y--) {
+                                            Material material = chunk.getMaterial(xx, y, zz);
+                                            if (! material.natural) {
+                                                if (height == -Float.MAX_VALUE) {
+                                                    manMadeStructuresAboveGround = true;
+                                                } else {
+                                                    manMadeStructuresBelowGround = true;
+                                                }
+                                                if (collectDebugInfo) {
+                                                    manMadeBlockTypes.add(material.name);
+                                                }
+                                            }
+                                            String name = material.name;
+                                            if ((name == MC_SNOW) || (name == MC_ICE)) {
+                                                frost = true;
+                                            }
+                                            if ((waterLevel == Integer.MIN_VALUE)
+                                                    && ((name == MC_ICE)
+                                                    || (name == MC_FROSTED_ICE)
+                                                    || (material.watery)
+                                                    || (((name == MC_WATER) || (name == MC_LAVA)) && (material.getProperty(LEVEL) == 0))
+                                                    || material.is(WATERLOGGED))) {
+                                                waterLevel = y;
+                                                if (name == MC_LAVA) {
+                                                    floodWithLava = true;
+                                                }
+                                            } else if (height == -Float.MAX_VALUE) {
+                                                if (TERRAIN_MAPPING.containsKey(name)) {
+                                                    // Terrain found
+                                                    height = y - 0.4375f; // Value that falls in the middle of the lowest one eighth which will still round to the same integer value and will receive a one layer thick smooth snow block (principle of least surprise)
+                                                    terrain = TERRAIN_MAPPING.get(name);
+                                                    if (waterLevel == Integer.MIN_VALUE) {
+                                                        waterLevel = (y >= DEFAULT_WATER_LEVEL) ? DEFAULT_WATER_LEVEL : minHeight;
+                                                    }
+                                                    if (readOnlyOption != MAN_MADE) {
+                                                        // We only need to keep going if we're going to mark chunks with
+                                                        // underground man-made blocks as read-only
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        // Use smooth snow, if present, to better approximate world height, so smooth snow will survive merge
+                                        final int intHeight = Math.round(height);
+                                        if ((height != -Float.MAX_VALUE) && (intHeight < maxY)) {
+                                            Material materialAbove = chunk.getMaterial(xx, intHeight + 1, zz);
+                                            if (materialAbove.isNamed(MC_SNOW)) {
+                                                int layers = materialAbove.getProperty(LAYERS);
+                                                height += layers * 0.125;
+                                            }
+                                        }
+                                        if (waterLevel == Integer.MIN_VALUE) {
+                                            if (height >= 61.5f) {
+                                                waterLevel = DEFAULT_WATER_LEVEL;
                                             } else {
-                                                manMadeStructuresBelowGround = true;
-                                            }
-                                            if (collectDebugInfo) {
-                                                manMadeBlockTypes.add(material.name);
+                                                waterLevel = minHeight;
                                             }
                                         }
-                                        String name = material.name;
-                                        if ((name == MC_SNOW) || (name == MC_ICE)) {
-                                            frost = true;
-                                        }
-                                        if ((waterLevel == Integer.MIN_VALUE)
-                                                && ((name == MC_ICE)
-                                                || (name == MC_FROSTED_ICE)
-                                                || (material.watery)
-                                                || (((name == MC_WATER) || (name == MC_LAVA)) && (material.getProperty(LEVEL) == 0))
-                                                || material.is(WATERLOGGED))) {
-                                            waterLevel = y;
-                                            if (name == MC_LAVA) {
-                                                floodWithLava = true;
-                                            }
-                                        } else if (height == -Float.MAX_VALUE) {
-                                            if (TERRAIN_MAPPING.containsKey(name)) {
-                                                // Terrain found
-                                                height = y - 0.4375f; // Value that falls in the middle of the lowest one eighth which will still round to the same integer value and will receive a one layer thick smooth snow block (principle of least surprise)
-                                                terrain = TERRAIN_MAPPING.get(name);
-                                                if (waterLevel == Integer.MIN_VALUE) {
-                                                    waterLevel = (y >= DEFAULT_WATER_LEVEL) ? DEFAULT_WATER_LEVEL : minHeight;
-                                                }
-                                                if (readOnlyOption != MAN_MADE) {
-                                                    // We only need to keep going if we're going to mark chunks with
-                                                    // underground man-made blocks as read-only
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    // Use smooth snow, if present, to better approximate world height, so smooth snow will survive merge
-                                    final int intHeight = Math.round(height);
-                                    if ((height != -Float.MAX_VALUE) && (intHeight < maxY)) {
-                                        Material materialAbove = chunk.getMaterial(xx, intHeight + 1, zz);
-                                        if (materialAbove.isNamed(MC_SNOW)) {
-                                            int layers = materialAbove.getProperty(LAYERS);
-                                            height += layers * 0.125;
-                                        }
-                                    }
-                                    if (waterLevel == Integer.MIN_VALUE) {
-                                        if (height >= 61.5f) {
-                                            waterLevel = DEFAULT_WATER_LEVEL;
-                                        } else {
-                                            waterLevel = minHeight;
-                                        }
-                                    }
 
+                                    }
                                     if(profileImport)PROFILE_SURFACE.add(System.nanoTime()-surfaceStart);
                                     final long writesStart=profileImport?System.nanoTime():0;
                                     final int blockX = (chunkX << 4) | xx;

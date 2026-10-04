@@ -74,6 +74,7 @@ use welt_nbt::packed_array::{pack_indices, unpack_indices};
 use welt_render::shade::{shade_pixels, shade_pixels_compact};
 
 mod chunk_buffer;
+mod map_surface;
 mod fluid_flow;
 mod resource_palette;
 
