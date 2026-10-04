@@ -132,8 +132,9 @@ public class HeightMapExporter {
                     final ImageTypeSpecifier imageTypeSpecifier = ImageTypeSpecifiers.createGrayscale(32, TYPE_FLOAT);
                     image = imageTypeSpecifier.createBufferedImage(dimension.getWidth() * TILE_SIZE, dimension.getHeight() * TILE_SIZE);
                     final Iterator<ImageWriter> writers = ImageIO.getImageWriters(imageTypeSpecifier, type);
-                    if (writers.hasNext()) {
-                        writer = writers.next();
+                    final ImageWriter floatingPointWriter = selectFloatingPointWriter(writers);
+                    if (floatingPointWriter != null) {
+                        writer = floatingPointWriter;
                         params = writer.getDefaultWriteParam();
                         params.setCompressionMode(MODE_EXPLICIT);
                         params.setCompressionType("LZW");
@@ -195,10 +196,26 @@ public class HeightMapExporter {
                 writer.setOutput(out);
                 writer.write(null, new IIOImage(image, null, null), params);
                 return true;
+            } finally {
+                writer.dispose();
             }
         } catch (IOException e) {
             throw new RuntimeException("I/O error while exporting image", e);
         }
+    }
+
+    private static ImageWriter selectFloatingPointWriter(Iterator<ImageWriter> writers) {
+        while (writers.hasNext()) {
+            ImageWriter candidate = writers.next();
+            // The bundled TwelveMonkeys writer advertises float images but rejects TYPE_FLOAT
+            // in writeImageData. Keep other providers eligible, including the JDK TIFF writer.
+            if (candidate.getClass().getName().equals("com.twelvemonkeys.imageio.plugins.tiff.TIFFImageWriter")) {
+                candidate.dispose();
+                continue;
+            }
+            return candidate;
+        }
+        return null;
     }
 
     public String getFormatDescription() {
