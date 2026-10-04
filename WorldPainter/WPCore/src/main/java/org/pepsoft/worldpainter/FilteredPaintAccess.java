@@ -132,8 +132,7 @@ public final class FilteredPaintAccess {
         }
         int header=edit==null?HEADER:192;
         if(edit!=null&&(long)dimension.getMaxHeight()-dimension.getMinHeight()>65536)return false;
-        int programBytes = 0;
-        for (Node node : plan.nodes()) programBytes += 48 + (node instanceof CombinedNode n ? n.children().size() * 4 : 0);
+        int programBytes = plan.encodedBytes();
         int planeDefinitions = header + programBytes + TERRAINS.length * 8;
         int tileDefinitions = planeDefinitions + layers.size() * 8;
         int tileCount = (tx2 - tx1 + 1) * (ty2 - ty1 + 1);
@@ -165,7 +164,7 @@ public final class FilteredPaintAccess {
         for (int i = 0; i < BIOMES.length; i++) data.putInt(112 + i * 4, BIOMES[i]);
         if(edit!=null)data.putInt(160,edit.mode).putFloat(164,edit.value).putFloat(168,edit.low).putFloat(172,edit.high)
                 .putInt(176,dimension.getMinHeight()).putInt(180,dimension.getMaxHeight()-dimension.getMinHeight()>256?1:0);
-        writeProgram(data, plan,header);
+        plan.writeTo(data, header);
         int palette = header + programBytes;
         for (Terrain terrain : TERRAINS) {
             int biome = terrain.isConfigured() ? terrain.getDefaultBiome() : -1;
@@ -249,26 +248,6 @@ public final class FilteredPaintAccess {
         }
     }
 
-    private static void writeProgram(ByteBuffer data, EditorFilterPlan plan,int header) {
-        int offset = header;
-        for (Node node : plan.nodes()) {
-            for (int i = 0; i < 48; i += 8) data.putLong(offset + i, 0);
-            if (node instanceof PredicateNode n) {
-                data.putInt(offset, 0).putInt(offset + 4, n.type().ordinal()).putInt(offset + 8, n.value())
-                        .putInt(offset + 12, n.plane()).putInt(offset + 16, n.except() ? 1 : 0);
-            } else if (node instanceof CombinedNode n) {
-                data.putInt(offset, 1).putInt(offset + 4, n.children().size());
-                for (int i = 0; i < n.children().size(); i++) data.putInt(offset + 48 + i * 4, n.children().get(i));
-            } else if (node instanceof DefaultNode n) {
-                data.putInt(offset, 2).putInt(offset + 4, n.selection()).putInt(offset + 8, n.except())
-                        .putInt(offset + 12, n.only()).putInt(offset + 16, n.levels() == null ? -1 : n.levels().ordinal())
-                        .putInt(offset + 20, n.above()).putInt(offset + 24, n.below()).putInt(offset + 28, n.feather() ? 1 : 0)
-                        .putInt(offset + 32, n.checkSlope() ? 1 : 0).putFloat(offset + 36, n.slope())
-                        .putInt(offset + 40, n.slopeIsAbove() ? 1 : 0);
-            }
-            offset += 48 + (node instanceof CombinedNode n ? n.children().size() * 4 : 0);
-        }
-    }
     private static int bits(Layer layer) { return switch (layer.dataSize) {
         case BIT_PER_CHUNK -> 0; case BIT -> 1; case NIBBLE -> 4; case BYTE -> 8; default -> throw new IllegalArgumentException();
     }; }

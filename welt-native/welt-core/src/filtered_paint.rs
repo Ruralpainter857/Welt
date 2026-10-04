@@ -1,5 +1,5 @@
 //! WFPT v1..v5: shared filter and painting transactions for terrain, numeric and bit layers.
-use crate::editor_filter::{CellData, Levels, Node, Predicate, Program};
+use crate::editor_filter::{CellData, Program};
 use crate::error::WeltError;
 use crate::nibble_paint::{target as nibble_target, NibblePaintMode};
 
@@ -31,14 +31,6 @@ fn boolean(d: &[u8], p: usize) -> Result<bool, WeltError> {
         _ => bad(),
     }
 }
-fn child(value: i32) -> Option<usize> {
-    if value == -1 {
-        None
-    } else {
-        Some(value as usize)
-    }
-}
-
 struct Frame {
     record: usize,
     wx: i64,
@@ -245,84 +237,10 @@ pub fn paint(data: &mut [u8]) -> Result<(), WeltError> {
             return bad();
         }
     }
-    let mut nodes = Vec::with_capacity(count);
-    let mut cursor = header;
-    for _ in 0..count {
-        if cursor + 48 > data.len() {
-            return bad();
-        }
-        let node = match int(data, cursor) {
-            0 => {
-                let value = int(data, cursor + 8);
-                let plane = int(data, cursor + 12) as usize;
-                let predicate = match int(data, cursor + 4) {
-                    0 => Predicate::Terrain(value),
-                    1 => Predicate::BitLayer(plane),
-                    2 => Predicate::LayerAny(plane),
-                    3 => Predicate::LayerEqual(plane, value),
-                    4 => Predicate::LayerAtLeast(plane, value),
-                    5 => Predicate::LayerAtMost(plane, value),
-                    6 => Predicate::Biome(value),
-                    7 => Predicate::Water,
-                    8 => Predicate::Land,
-                    9 => Predicate::Lava,
-                    10 => Predicate::AutoBiome(value),
-                    11 => Predicate::AnnotationAny,
-                    12 => Predicate::Annotation(value),
-                    _ => return bad(),
-                };
-                Node::Predicate {
-                    predicate,
-                    except: boolean(data, cursor + 16)?,
-                }
-            }
-            1 => {
-                let children = int(data, cursor + 4) as usize;
-                if children > 128 || cursor + 48 + children * 4 > data.len() {
-                    return bad();
-                }
-                let node = Node::Combined(
-                    (0..children)
-                        .map(|i| int(data, cursor + 48 + i * 4) as usize)
-                        .collect(),
-                );
-                cursor += children * 4;
-                node
-            }
-            2 => {
-                let above = int(data, cursor + 20);
-                let below = int(data, cursor + 24);
-                let levels = match int(data, cursor + 16) {
-                    -1 => None,
-                    0 => Some(Levels::Between(above, below)),
-                    1 => Some(Levels::Outside(above, below)),
-                    2 => Some(Levels::Above(above)),
-                    3 => Some(Levels::Below(below)),
-                    _ => return bad(),
-                };
-                let selection = int(data, cursor + 4);
-                if !(-1..=1).contains(&selection) {
-                    return bad();
-                }
-                Node::Default {
-                    selection: selection as i8,
-                    except: child(int(data, cursor + 8)),
-                    only: child(int(data, cursor + 12)),
-                    levels,
-                    feather: boolean(data, cursor + 28)?,
-                    slope: boolean(data, cursor + 32)?
-                        .then_some((float(data, cursor + 36), boolean(data, cursor + 40)?)),
-                }
-            }
-            _ => return bad(),
-        };
-        cursor += 48;
-        nodes.push(node);
-    }
+    let (program, mut cursor) = Program::read(data, header, count, plane_count)?;
     if cursor != int(data, 28) as usize {
         return bad();
     }
-    let program = Program::new(nodes, plane_count)?;
     let palette = cursor;
     cursor += palette_count * 8;
     if cursor != int(data, 40) as usize || cursor + plane_count * 8 > data.len() {

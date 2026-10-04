@@ -1,5 +1,7 @@
 package org.pepsoft.worldpainter.panels;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
 import org.pepsoft.worldpainter.Dimension;
@@ -30,6 +32,56 @@ public record EditorFilterPlan(List<Node> nodes, List<Layer> layers, int depende
                               DefaultFilter.LevelType levels, int above, int below,
                               boolean feather, boolean checkSlope, float slope,
                               boolean slopeIsAbove) implements Node { }
+
+    /** Size of the shared filter program, excluding any transaction-specific header. */
+    public int encodedBytes() {
+        int bytes = 0;
+        for (Node node : nodes) {
+            bytes += 48 + (node instanceof CombinedNode n ? n.children().size() * 4 : 0);
+        }
+        return bytes;
+    }
+
+    public int writeTo(ByteBuffer data, int offset) {
+        return writeTo(data, offset, null);
+    }
+
+    /** Remap filter layers into a shared theme/filter palette without duplicating planes. */
+    public int writeTo(ByteBuffer data, int offset, int[] planeIndices) {
+        int bytes = encodedBytes();
+        if (data.order() != ByteOrder.LITTLE_ENDIAN || offset < 0
+                || (long) offset + bytes > data.limit() || data.isReadOnly()) {
+            throw new IllegalArgumentException("Invalid filter program destination");
+        }
+        if (planeIndices != null) {
+            if (planeIndices.length != layers.size()) {
+                throw new IllegalArgumentException("Invalid filter plane mapping");
+            }
+            for (int plane : planeIndices) {
+                if (plane < 0) {
+                    throw new IllegalArgumentException("Negative filter plane index");
+                }
+            }
+        }
+        for (Node node : nodes) {
+            for (int i = 0; i < 48; i += 8) data.putLong(offset + i, 0);
+            if (node instanceof PredicateNode n) {
+                data.putInt(offset, 0).putInt(offset + 4, n.type().ordinal()).putInt(offset + 8, n.value())
+                        .putInt(offset + 12, (n.plane() < 0 || planeIndices == null ? n.plane() : planeIndices[n.plane()])).putInt(offset + 16, n.except() ? 1 : 0);
+            } else if (node instanceof CombinedNode n) {
+                data.putInt(offset, 1).putInt(offset + 4, n.children().size());
+                for (int i = 0; i < n.children().size(); i++) data.putInt(offset + 48 + i * 4, n.children().get(i));
+            } else if (node instanceof DefaultNode n) {
+                data.putInt(offset, 2).putInt(offset + 4, n.selection()).putInt(offset + 8, n.except())
+                        .putInt(offset + 12, n.only()).putInt(offset + 16, n.levels() == null ? -1 : n.levels().ordinal())
+                        .putInt(offset + 20, n.above()).putInt(offset + 24, n.below()).putInt(offset + 28, n.feather() ? 1 : 0)
+                        .putInt(offset + 32, n.checkSlope() ? 1 : 0).putFloat(offset + 36, n.slope())
+                        .putInt(offset + 40, n.slopeIsAbove() ? 1 : 0);
+            }
+            offset += 48 + (node instanceof CombinedNode n ? n.children().size() * 4 : 0);
+        }
+        return offset;
+    }
 
     /** Returns null before any mutation when a custom filter cannot be represented. */
     public static EditorFilterPlan compile(Filter filter, Dimension dimension) {

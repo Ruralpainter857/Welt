@@ -73,6 +73,95 @@ pub struct Program {
 }
 
 impl Program {
+    /// Read the shared little-endian editor-filter program without modifying its frame.
+    /// The returned cursor is the first byte after the variable-sized node records.
+    /// Each caller validates that cursor against its own versioned frame layout.
+    pub fn read(
+        data: &[u8],
+        offset: usize,
+        count: usize,
+        planes: usize,
+    ) -> Result<(Self, usize), WeltError> {
+        if !(1..=128).contains(&count) || offset > data.len() {
+            return bad();
+        }
+        let mut nodes = Vec::with_capacity(count);
+        let mut cursor = offset;
+        for _ in 0..count {
+            if cursor.checked_add(48).is_none_or(|end| end > data.len()) {
+                return bad();
+            }
+            let node = match int(data, cursor) {
+                0 => {
+                    let value = int(data, cursor + 8);
+                    let plane = int(data, cursor + 12) as usize;
+                    let predicate = match int(data, cursor + 4) {
+                        0 => Predicate::Terrain(value),
+                        1 => Predicate::BitLayer(plane),
+                        2 => Predicate::LayerAny(plane),
+                        3 => Predicate::LayerEqual(plane, value),
+                        4 => Predicate::LayerAtLeast(plane, value),
+                        5 => Predicate::LayerAtMost(plane, value),
+                        6 => Predicate::Biome(value),
+                        7 => Predicate::Water,
+                        8 => Predicate::Land,
+                        9 => Predicate::Lava,
+                        10 => Predicate::AutoBiome(value),
+                        11 => Predicate::AnnotationAny,
+                        12 => Predicate::Annotation(value),
+                        _ => return bad(),
+                    };
+                    Node::Predicate {
+                        predicate,
+                        except: boolean(data, cursor + 16)?,
+                    }
+                }
+                1 => {
+                    let children = int(data, cursor + 4) as usize;
+                    if children > 128 || cursor + 48 + children * 4 > data.len() {
+                        return bad();
+                    }
+                    let node = Node::Combined(
+                        (0..children)
+                            .map(|i| int(data, cursor + 48 + i * 4) as usize)
+                            .collect(),
+                    );
+                    cursor += children * 4;
+                    node
+                }
+                2 => {
+                    let above = int(data, cursor + 20);
+                    let below = int(data, cursor + 24);
+                    let levels = match int(data, cursor + 16) {
+                        -1 => None,
+                        0 => Some(Levels::Between(above, below)),
+                        1 => Some(Levels::Outside(above, below)),
+                        2 => Some(Levels::Above(above)),
+                        3 => Some(Levels::Below(below)),
+                        _ => return bad(),
+                    };
+                    let selection = int(data, cursor + 4);
+                    if !(-1..=1).contains(&selection) {
+                        return bad();
+                    }
+                    Node::Default {
+                        selection: selection as i8,
+                        except: child(int(data, cursor + 8)),
+                        only: child(int(data, cursor + 12)),
+                        levels,
+                        feather: boolean(data, cursor + 28)?,
+                        slope: boolean(data, cursor + 32)?
+                            .then_some((float(data, cursor + 36), boolean(data, cursor + 40)?)),
+                    }
+                }
+                _ => return bad(),
+            };
+            cursor += 48;
+            nodes.push(node);
+        }
+        Ok((Self::new(nodes, planes)?, cursor))
+    }
+
     pub fn new(nodes: Vec<Node>, planes: usize) -> Result<Self, WeltError> {
         if nodes.is_empty() || nodes.len() > 128 {
             return Err(WeltError::IllegalArgument);
@@ -187,6 +276,30 @@ impl Program {
                 strength
             }
         }
+    }
+}
+
+fn int(data: &[u8], offset: usize) -> i32 {
+    i32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
+}
+fn float(data: &[u8], offset: usize) -> f32 {
+    f32::from_bits(int(data, offset) as u32)
+}
+fn bad<T>() -> Result<T, WeltError> {
+    Err(WeltError::IllegalArgument)
+}
+fn boolean(data: &[u8], offset: usize) -> Result<bool, WeltError> {
+    match int(data, offset) {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => bad(),
+    }
+}
+fn child(value: i32) -> Option<usize> {
+    if value == -1 {
+        None
+    } else {
+        Some(value as usize)
     }
 }
 
@@ -316,6 +429,152 @@ mod tests {
             layer: 5,
         }
     }
+    fn put(data: &mut [u8], offset: usize, value: i32) {
+        data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    fn wire_program() -> Vec<u8> {
+        let mut data = vec![0; 48 * 3 + 4];
+        // Predicate, feathered height filter, then a combined root.
+        put(&mut data, 4, 3);
+        put(&mut data, 8, 6);
+        put(&mut data, 12, 0);
+        put(&mut data, 48, 2);
+        put(&mut data, 48 + 8, -1);
+        put(&mut data, 48 + 12, 0);
+        put(&mut data, 48 + 16, 2);
+        put(&mut data, 48 + 20, 62);
+        put(&mut data, 48 + 28, 1);
+        put(&mut data, 48 + 32, 1);
+        put(&mut data, 48 + 36, 0.5f32.to_bits() as i32);
+        put(&mut data, 96, 1);
+        put(&mut data, 96 + 4, 1);
+        put(&mut data, 144, 1);
+        data
+    }
+    #[test]
+    fn wire_reader_preserves_evaluation_and_returns_exact_end_offset() {
+        let wire = wire_program();
+        let direct = Program::new(
+            vec![
+                Node::Predicate {
+                    predicate: Predicate::LayerEqual(0, 6),
+                    except: false,
+                },
+                Node::Default {
+                    selection: 0,
+                    except: None,
+                    only: Some(0),
+                    levels: Some(Levels::Above(62)),
+                    feather: true,
+                    slope: Some((0.5, false)),
+                },
+                Node::Combined(vec![1]),
+            ],
+            1,
+        )
+        .unwrap();
+        for offset in [0, 1, 128, 192] {
+            let mut framed = vec![0xab; offset];
+            framed.extend_from_slice(&wire);
+            framed.extend_from_slice(&[0xcd; 32]);
+            let before = framed.clone();
+            let (read, end) = Program::read(&framed, offset, 3, 1).unwrap();
+            assert_eq!(end, offset + wire.len());
+            for strength in [-1.0, -0.0, 0.8, 1.0, f32::NAN] {
+                assert_eq!(
+                    read.modify_strength(&cell(), strength).to_bits(),
+                    direct.modify_strength(&cell(), strength).to_bits()
+                );
+            }
+            assert_eq!(framed, before);
+        }
+    }
+    #[test]
+    fn wire_reader_rejects_every_truncation_invalid_count_and_offset() {
+        let data = wire_program();
+        for end in 0..data.len() {
+            assert!(
+                Program::read(&data[..end], 0, 3, 1).is_err(),
+                "length {end}"
+            );
+        }
+        for count in [0, 129, usize::MAX] {
+            assert!(Program::read(&data, 0, count, 1).is_err());
+        }
+        for offset in [data.len(), data.len() + 1, usize::MAX] {
+            assert!(Program::read(&data, offset, 3, 1).is_err());
+        }
+    }
+    #[test]
+    fn wire_reader_rejects_malformed_fields_and_forward_references() {
+        let data = wire_program();
+        for (offset, value) in [
+            (0, 3),
+            (4, 13),
+            (12, -1),
+            (12, 1),
+            (16, 2),
+            (48 + 4, 2),
+            (48 + 8, -2),
+            (48 + 8, 1),
+            (48 + 16, 4),
+            (48 + 28, 2),
+            (48 + 32, 2),
+            (48 + 40, 2),
+            (96 + 4, -1),
+            (96 + 4, 129),
+            (144, 2),
+        ] {
+            let mut invalid = data.clone();
+            put(&mut invalid, offset, value);
+            let before = invalid.clone();
+            assert!(
+                Program::read(&invalid, 0, 3, 1).is_err(),
+                "field {offset}={value}"
+            );
+            assert_eq!(invalid, before);
+        }
+        assert!(Program::read(&data, 0, 3, 0).is_err());
+    }
+    #[test]
+    fn wire_reader_preserves_all_predicate_tags_and_except_polarity() {
+        let predicates = [
+            Predicate::Terrain(7),
+            Predicate::BitLayer(0),
+            Predicate::LayerAny(0),
+            Predicate::LayerEqual(0, 7),
+            Predicate::LayerAtLeast(0, 7),
+            Predicate::LayerAtMost(0, 7),
+            Predicate::Biome(7),
+            Predicate::Water,
+            Predicate::Land,
+            Predicate::Lava,
+            Predicate::AutoBiome(7),
+            Predicate::AnnotationAny,
+            Predicate::Annotation(7),
+        ];
+        for (tag, predicate) in predicates.into_iter().enumerate() {
+            for except in [false, true] {
+                let mut data = vec![0; 48];
+                put(&mut data, 4, tag as i32);
+                put(&mut data, 8, 7);
+                put(&mut data, 16, i32::from(except));
+                let (read, end) = Program::read(&data, 0, 1, 1).unwrap();
+                let direct = Program::new(vec![Node::Predicate { predicate, except }], 1).unwrap();
+                assert_eq!(end, 48);
+                for height in [61, 62, 63] {
+                    let mut c = cell();
+                    c.height = height;
+                    assert_eq!(
+                        read.modify_strength(&c, 0.8).to_bits(),
+                        direct.modify_strength(&c, 0.8).to_bits(),
+                        "tag {tag}"
+                    );
+                }
+            }
+        }
+    }
+
     fn default(levels: Option<Levels>, feather: bool) -> Node {
         Node::Default {
             selection: 0,
