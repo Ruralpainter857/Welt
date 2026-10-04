@@ -20,7 +20,7 @@ public class FlattenThemePipelineParityTest {
         String old=System.getProperty(Native.GEN_KEY);
         try{System.setProperty(Native.GEN_KEY,"true");
             for(Flatten.Mode mode:Flatten.Mode.values())for(int radius:new int[]{64,127}){
-                Dimension expected=fixture(),actual=fixture();Flatten brush=new Flatten(null);
+                Dimension expected=fixture(),actual=fixture();Flatten brush=new Flatten(new BrushPipelineTestView());
                 brush.setBrush(SymmetricBrush.LINEAR_CIRCLE.clone());brush.setRadius(radius);brush.setLevel(.63f);
                 Field setting=Flatten.class.getDeclaredField("mode");setting.setAccessible(true);setting.set(brush,mode);
                 Field target=Flatten.class.getDeclaredField("targetHeight");target.setAccessible(true);target.setFloat(brush,87.125f);

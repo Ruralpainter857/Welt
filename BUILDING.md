@@ -1,10 +1,10 @@
-# Building WorldPainter
-## Installing dependencies
-WorldPainter needs some dependencies that are not in public Maven repos and cannot be distributed on WorldPainter's private repo due to their licence. You need to install these dependencies into your local Maven repo manually:
-### JIDE Docking Framework
-For the docks, WorldPainter uses the [JIDE Docking Framework](https://www.jidesoft.com/products/dock.htm), which is a commercial product. For development, you can download an evaluation version of the product [here](https://www.jidesoft.com/evaluation/), with user ID and password documented [here](https://www.jidesoft.com/forum/viewtopic.php?t=10) (note that you need to create a forum account to access the second link). The evaluation version will expire after two months, but you can keep downloading it again whenever it expires for two more months of development time.
+# Building Welt
 
-Once you have your copy, install the `jide-common.jar`, `jide-dock.jar` and `jide-plaf-jdk7.jar` files in your local Maven repository. If necessary, update the version numbers in the pom.xml of the WPGUI module if you downloaded a different version!
+## UI dependencies
+
+Welt uses [Modern Docking](https://github.com/andrewauclair/ModernDocking) 1.4.9 for its Swing tool panels. Maven resolves it from Maven Central; commercial JIDE docking JARs, evaluation downloads and licence keys are not required. The remaining checkbox-tree, tri-state and rotated-label widgets use the open source `jide-oss` 3.7.15 artifact from Maven Central.
+
+Modern Docking layout data is stored separately from legacy JIDE layout data. Existing JIDE layouts remain in the configuration for recovery; they are not interpreted as Modern Docking XML. The first run uses the default arrangement until a Modern Docking arrangement is saved.
 
 ## Set up Maven toolchain
 WorldPainter uses the [Maven toolchain framework](https://maven.apache.org/guides/mini/guide-using-toolchains.html) to find the JDK it needs. You need to follow the instructions on that page to configure a toolchain of type jdk and version 17 pointing to a Java 17 JDK. Note that it has not been tested whether WorldPainter will run correctly on older Java versions if you substitute a newer JDK for version 17, although in theory that should work.
@@ -111,10 +111,22 @@ Use `FilteredHeightBrushBenchmark compare` with twenty warmups and nine alternat
 
 ## Actual GUI brush pipeline tests
 
-The `welt-brush-tests` Maven profile runs the actual frontend pipeline parity tests with Core's freshly compiled test fixtures on the GUI test classpath, native generation enabled and headless AWT. This tests the production Height, Flatten and Smooth methods rather than substitutes for the GUI operation classes. From the repository root, after supplying compatible JIDE development JARs, run:
+The `welt-brush-tests` Maven profile runs the actual frontend pipeline parity tests with Core's freshly compiled test fixtures on the GUI test classpath, native generation enabled and headless AWT. This tests the production Height, Flatten and Smooth methods rather than substitutes for the GUI operation classes. From the repository root, run:
 
 ```powershell
-./tools/build-welt.ps1 -Native -RustToolchain 1.98.1-x86_64-pc-windows-gnu -JideDirectory <directory> -Goal test -MavenArguments '-Pwelt-brush-tests','-pl','WPGUI','-am','-Dsurefire.failIfNoSpecifiedTests=false'
+./tools/build-welt.ps1 -Native -RustToolchain 1.98.1-x86_64-pc-windows-gnu -Goal test -MavenArguments '-Pwelt-brush-tests','-pl','WPGUI','-am','-Dsurefire.failIfNoSpecifiedTests=false'
 ```
 
-Omit `-JideDirectory` when the required development artifacts are already installed in the local Maven repository. The reactor must include Core so its test fixtures are compiled before GUI tests start. The profile selects `*PipelineParityTest` only in WPGUI; it does not alter the normal application runtime or bypass the existing dependencies. The profile's effective Maven configuration is checked, but GUI tests and full packaging remain unverified while JIDE is unavailable. A fresh reactor compile confirmed that WPDynmapPreviewer builds; the remaining dependency failure is `com.jidesoft:jide-common` and `jide-dock` version 3.8.1. JIDE Docking is an inherited commercial UI dependency; the vendor's time-limited evaluation is not a release artifact.
+The reactor must include Core so its test fixtures are compiled before GUI tests start. The profile selects `*PipelineParityTest` only in WPGUI and uses the actual production operation classes. The GUI dependency graph now uses public docking and widget artifacts; the Java 17 GUI reactor packaging, four actual brush pipeline tests and seven docking/application checks pass.
+
+## Docking regression tests
+
+Run the desktop docking checks on a machine with a graphical session:
+
+```powershell
+./tools/build-welt.ps1 -Goal test -MavenArguments '-Pwelt-docking-tests','-pl','WPGUI','-am','-Dtest=WeltDockingManagerTest,AppDockingIntegrationTest','-Dsurefire.failIfNoSpecifiedTests=false'
+```
+
+These checks cover registration, default groups, layout round trips, dynamic palette rename/removal and floating windows. Use the brush profile separately: it deliberately uses headless AWT, while the docking profile exercises real desktop windows.
+
+The docking profile isolates APPDATA under WPGUI/target/docking-test-config and uses separate JVMs for the real application and panel fixtures. It checks a four-tile world opening, panel registration, reset/restoration, floating windows, automatic hiding, palette ID changes, legacy configuration preservation and the remaining free widgets on the Windows system look and feel. It does not read or change the normal application configuration. Optional -Dwelt.docking.appSnapshot=<absolute PNG path> renders the test application's root pane. These functional checks do not establish a speed or memory improvement.

@@ -3,7 +3,6 @@
 param(
     [ValidateSet('compile', 'test', 'package', 'verify')]
     [string] $Goal = 'compile',
-    [string] $JideDirectory,
     [switch] $Native,
     [string] $RustToolchain,
     [switch] $SkipTests,
@@ -42,26 +41,6 @@ try {
         Expand-Archive -LiteralPath $archive -DestinationPath $toolsRoot -Force
     }
 
-    if ($JideDirectory) {
-        $jideRoot = (Resolve-Path -LiteralPath $JideDirectory).Path
-        [xml] $pom = Get-Content -LiteralPath (Join-Path $repoRoot 'WorldPainter/pom.xml') -Raw
-        $versionNode = $pom.SelectSingleNode("//*[local-name()='properties']/*[local-name()='jide.version']")
-        if (!$versionNode) { throw 'Version JIDE introuvable dans le POM.' }
-        $jideVersion = $versionNode.InnerText
-        foreach ($artifact in @('jide-common', 'jide-dock', 'jide-plaf-jdk7')) {
-            $jar = Join-Path $jideRoot ($artifact + '.jar')
-            if (!(Test-Path -LiteralPath $jar)) {
-                if ($artifact -eq 'jide-plaf-jdk7') { continue }
-                throw "JAR JIDE manquant : $artifact.jar"
-            }
-            # Les versions des JAR fournis doivent correspondre à celle du POM.
-            & $mavenCmd -B -ntp 'org.apache.maven.plugins:maven-install-plugin:3.1.3:install-file' `
-                "-Dfile=$jar" '-DgroupId=com.jidesoft' "-DartifactId=$artifact" `
-                "-Dversion=$jideVersion" '-Dpackaging=jar' '-DgeneratePom=true' 2>&1 | Show-SafeOutput
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        }
-    }
-
     if ($Native) {
         if (!(Get-Command cargo -ErrorAction SilentlyContinue)) { throw 'Cargo doit être disponible dans le PATH.' }
         $cargoArguments = @()
@@ -84,7 +63,7 @@ try {
     & $mavenCmd @arguments 2>&1 | Show-SafeOutput
     $buildExitCode = $LASTEXITCODE
     if ($buildExitCode -ne 0) {
-        Write-Output "Build incomplet : consulter l'erreur Maven ci-dessus. Pour une dépendance JIDE manquante, utiliser -JideDirectory; voir BUILDING.md."
+        Write-Output "Build incomplete: see the Maven diagnostics above and BUILDING.md."
     }
     exit $buildExitCode
 } catch {

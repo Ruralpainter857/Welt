@@ -18,7 +18,7 @@ public class FilteredHeightPipelineParityTest {
     @Test public void actualFilteredHeightPipelineKeepsJavaResultsInBothDirections() throws Exception {
         String old=System.getProperty(Native.GEN_KEY);try{System.setProperty(Native.GEN_KEY,"true");
             for(boolean inverse:new boolean[]{false,true}){
-                Dimension a=fixture(),b=fixture();Height brush=new Height(null);brush.setBrush(SymmetricBrush.LINEAR_CIRCLE.clone());brush.setRadius(64);brush.setLevel(.63f);
+                Dimension a=fixture(),b=fixture();Height brush=new Height(new BrushPipelineTestView());brush.setBrush(SymmetricBrush.LINEAR_CIRCLE.clone());brush.setRadius(64);brush.setLevel(.63f);
                 Class<?>[] signature={Dimension.class,int.class,int.class,int.class,boolean.class,float.class,float.class,float.class,boolean.class};
                 Method java=Height.class.getDeclaredMethod("applyJavaHeightBrush",signature),rust=Height.class.getDeclaredMethod("applyNativeHeightBrush",signature);java.setAccessible(true);rust.setAccessible(true);
                 a.setEventsInhibited(true);b.setEventsInhibited(true);brush.setFilter(filter(a));java.invoke(brush,a,-3,-3,64,inverse,8f,68f,110f,false);
@@ -30,7 +30,7 @@ public class FilteredHeightPipelineParityTest {
     @Test public void actualFilteredFlattenPipelinePreservesStrengthOrderForEveryMode() throws Exception {
         String old=System.getProperty(Native.GEN_KEY);try{System.setProperty(Native.GEN_KEY,"true");
             for(Flatten.Mode mode:Flatten.Mode.values()){
-                Dimension a=fixture(),b=fixture();Flatten brush=new Flatten(null);brush.setBrush(SymmetricBrush.LINEAR_CIRCLE.clone());brush.setRadius(64);brush.setLevel(.63f);
+                Dimension a=fixture(),b=fixture();Flatten brush=new Flatten(new BrushPipelineTestView());brush.setBrush(SymmetricBrush.LINEAR_CIRCLE.clone());brush.setRadius(64);brush.setLevel(.63f);
                 Field setting=Flatten.class.getDeclaredField("mode"),target=Flatten.class.getDeclaredField("targetHeight");setting.setAccessible(true);target.setAccessible(true);setting.set(brush,mode);target.setFloat(brush,85.125f);
                 a.setEventsInhibited(true);b.setEventsInhibited(true);DefaultFilter f=filter(a);
                 for(int x=-67;x<=61;x++)for(int y=-67;y<=61;y++){

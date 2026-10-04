@@ -5,8 +5,7 @@
  */
 package org.pepsoft.worldpainter.palettes;
 
-import com.jidesoft.docking.DockContext;
-import com.jidesoft.docking.DockableFrame;
+import org.pepsoft.worldpainter.docking.WeltDockPanel;
 import com.jidesoft.swing.JideLabel;
 import org.jetbrains.annotations.NotNull;
 import org.pepsoft.util.IconUtils;
@@ -76,7 +75,7 @@ public class Palette {
         // Row: components provided to constructor
         LayoutUtils.addRowOfComponents(panel, constraints, buttonComponents);
 
-        dockableFrame = new DockableFrameBuilder(panel, name, DockContext.DOCK_SIDE_WEST, 3).withIcon(ICON_LAYERS).scrollable().build();
+        dockableFrame = new DockableFrameBuilder(panel, name, WeltDockPanel.Side.WEST, 3).withIcon(ICON_LAYERS).scrollable().build();
         dockableFrame.setKey("customLayerPalette." + name);
     }
 
@@ -90,7 +89,6 @@ public class Palette {
             layer.setPalette(name);
         }
         dockableFrame.setTitle(name);
-        dockableFrame.setTabTitle(name);
         dockableFrame.setKey("customLayerPalette." + name);
     }
 
@@ -125,7 +123,7 @@ public class Palette {
         return layers.contains(layer);
     }
 
-    public DockableFrame getDockableFrame() {
+    public WeltDockPanel getDockableFrame() {
         return dockableFrame;
     }
 
@@ -196,7 +194,7 @@ public class Palette {
     private final JPanel panel;
     private final List<CustomLayer> layers = new ArrayList<>();
     private final Map<CustomLayer, List<Component>> layerButtonComponents = new HashMap<>();
-    private final DockableFrame dockableFrame;
+    private final WeltDockPanel dockableFrame;
     private final JCheckBox showCheckBox, soloCheckBox;
     private final PaletteManager paletteManager;
     private final PropertyChangeSupport propertyChangeSupport = new PropertyChangeSupport(this);

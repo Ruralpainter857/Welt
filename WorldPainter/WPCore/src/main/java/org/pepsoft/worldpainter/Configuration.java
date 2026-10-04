@@ -535,6 +535,23 @@ public final class Configuration implements Serializable, EventLogger, Minecraft
         defaultGameTypeObj = defaultGameType;
     }
 
+    /** Modern Docking state is separate so existing JIDE layouts remain recoverable. */
+    public synchronized byte[] getDefaultModernDockingLayoutData() {
+        return defaultModernDockingLayoutData;
+    }
+
+    public synchronized void setDefaultModernDockingLayoutData(byte[] data) {
+        defaultModernDockingLayoutData = data;
+    }
+
+    public synchronized Map<String, byte[]> getModernDockingLayoutData() {
+        return modernDockingLayoutData;
+    }
+
+    public synchronized void setModernDockingLayoutData(Map<String, byte[]> data) {
+        modernDockingLayoutData = data;
+    }
+
     public synchronized byte[] getDefaultJideLayoutData() {
         return defaultJideLayoutData;
     }
@@ -1300,6 +1317,8 @@ public final class Configuration implements Serializable, EventLogger, Minecraft
     private int defaultGameType;
     @Deprecated
     private String defaultGeneratorOptions;
+    private byte[] defaultModernDockingLayoutData;
+    private Map<String, byte[]> modernDockingLayoutData;
     private byte[] defaultJideLayoutData;
     private Map<String, byte[]> jideLayoutData;
     private LookAndFeel lookAndFeel;

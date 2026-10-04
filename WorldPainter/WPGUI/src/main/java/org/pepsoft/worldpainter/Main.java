@@ -10,7 +10,6 @@ import ch.qos.logback.classic.joran.JoranConfigurator;
 import ch.qos.logback.core.joran.spi.JoranException;
 import ch.qos.logback.core.util.StatusPrinter;
 import com.jidesoft.plaf.LookAndFeelFactory;
-import com.jidesoft.utils.Lm;
 import org.intellij.lang.annotations.Language;
 import org.pepsoft.util.*;
 import org.pepsoft.util.plugins.PluginManager;
@@ -422,18 +421,6 @@ public class Main {
             world = null;
         }
 
-        // Install JIDE licence, if present
-        InputStream in = ClassLoader.getSystemResourceAsStream("jide_licence.properties");
-        if (in != null) {
-            try {
-                Properties jideLicenceProps = new Properties();
-                jideLicenceProps.load(in);
-                Lm.verifyLicense(jideLicenceProps.getProperty("companyName"), jideLicenceProps.getProperty("projectName"), jideLicenceProps.getProperty("licenceKey"));
-            } finally {
-                in.close();
-            }
-        }
-
         final Configuration.LookAndFeel lookAndFeel = (config.getLookAndFeel() != null) ? config.getLookAndFeel() : Configuration.LookAndFeel.SYSTEM;
         SwingUtilities.invokeLater(() -> {
             Configuration myConfig = Configuration.getInstance();
@@ -467,7 +454,7 @@ public class Main {
                     }
                     logger.debug("Installing look and feel: " + laf);
                     UIManager.setLookAndFeel(laf);
-                    LookAndFeelFactory.installJideExtension();
+                    LookAndFeelFactory.installJideExtension(LookAndFeelFactory.VSNET_STYLE_WITHOUT_MENU);
                     if (((lookAndFeel == Configuration.LookAndFeel.DARK_METAL)
                             || (lookAndFeel == Configuration.LookAndFeel.DARK_NIMBUS))) {
                         // Patch some things to make dark themes look better

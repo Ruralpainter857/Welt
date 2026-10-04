@@ -20,7 +20,7 @@ public class SmoothThemePipelineParityTest {
         String old=System.getProperty(Native.GEN_KEY);
         try{System.setProperty(Native.GEN_KEY,"true");
             for(int radius:new int[]{64,122}){
-                Dimension expected=fixture(),actual=fixture();Smooth brush=new Smooth(null);
+                Dimension expected=fixture(),actual=fixture();Smooth brush=new Smooth(new BrushPipelineTestView());
                 brush.setBrush(SymmetricBrush.LINEAR_CIRCLE.clone());brush.setRadius(radius);brush.setLevel(.63f);
                 Class<?>[] signature={Dimension.class,int.class,int.class,int.class,float.class,boolean.class};
                 Method java=Smooth.class.getDeclaredMethod("smoothJava",signature),nativeMethod=Smooth.class.getDeclaredMethod("smoothNative",signature);
