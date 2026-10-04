@@ -1,12 +1,14 @@
 //! Complete surface projection over section palettes, without Minecraft objects or per-cell JNI.
 //!
-//! WMSF v1 is little endian. Its 64-byte header stores magic/version/length/section count,
+//! WMSF v1/v2 is little endian. Its 64-byte header stores magic/version/length/section count,
 //! source minimum Y, inclusive scan floor/top, destination minimum Y, default water,
 //! bedrock terrain, deep-scan flag, terrain count, palette base, result offset/count,
 //! and a reserved zero word. Each 16-byte section descriptor stores palette offset/count,
 //! a uniform flag and a reserved zero word. Palette records are flags/terrain/snow (12 bytes).
 //! Nonuniform sections borrow exactly 4096 indices in X + Z*16 + localY*256 order;
-//! uniform sections have one palette record and no array. All 256 results are X-major
+//! uniform sections have one palette record and no array. V2 source kind 2 retains padded
+//! NBT longs (width max(4, ceil(log2(palette count)))), with no expanded index array.
+//! All 256 results are X-major
 //! height-f32/water-i32/terrain-i32/flags-u32 records. Only those result bytes may change.
 //! JNI owns the array borrows until this synchronous operation finishes; the direct
 //! metadata/result frame belongs to one Java worker and is reused for its next chunk.
@@ -28,10 +30,33 @@ struct MaterialInfo {
     terrain: i32,
     snow: i32,
 }
+/// A section can retain its serialized padded longs throughout the complete projection.
+#[derive(Clone, Copy)]
+pub enum SectionSource<'a> {
+    Uniform,
+    Indices(&'a [i32]),
+    Packed { words: &'a [i64], bits: u32 },
+}
+impl SectionSource<'_> {
+    fn index(self, position: usize) -> usize {
+        match self {
+            Self::Uniform => 0,
+            Self::Indices(a) => a[position] as usize,
+            Self::Packed { words, bits } => {
+                if bits == 4 {
+                    return ((words[position >> 4] as u64 >> ((position & 15) * 4)) & 15) as usize;
+                }
+                let per_word = 64 / bits as usize;
+                ((words[position / per_word] as u64 >> ((position % per_word) * bits as usize))
+                    & ((1u64 << bits) - 1)) as usize
+            }
+        }
+    }
+}
 struct View<'a> {
     palettes: &'a [MaterialInfo],
     offsets: &'a [usize],
-    sections: &'a [Option<&'a [i32]>],
+    sections: &'a [SectionSource<'a>],
     min: i32,
 }
 impl View<'_> {
@@ -45,8 +70,7 @@ impl View<'_> {
             };
         }
         let section = dy as usize / 16;
-        let index =
-            self.sections[section].map_or(0, |a| a[x + z * 16 + (dy as usize & 15) * 256] as usize);
+        let index = self.sections[section].index(x + z * 16 + (dy as usize & 15) * 256);
         self.palettes[self.offsets[section] + index]
     }
 }
@@ -66,11 +90,23 @@ pub fn analyze_with_scratch(
     sections: &[Option<&[i32]>],
     scratch: &mut Scratch,
 ) -> Result<(), WeltError> {
+    let sources: Vec<_> = sections
+        .iter()
+        .map(|s| s.map_or(SectionSource::Uniform, SectionSource::Indices))
+        .collect();
+    analyze_sources_with_scratch(d, &sources, scratch)
+}
+/// WMSF v2 source kind 2 borrows validated padded longs, without a 4096-index expansion.
+pub fn analyze_sources_with_scratch(
+    d: &mut [u8],
+    sections: &[SectionSource<'_>],
+    scratch: &mut Scratch,
+) -> Result<(), WeltError> {
     let bad = WeltError::IllegalArgument;
     if d.len() < 64
         || d.len() > MAX_BYTES
         || word(d, 0) != MAGIC
-        || word(d, 4) != 1
+        || !(1..=2).contains(&word(d, 4))
         || word(d, 8) as usize != d.len()
     {
         return Err(bad);
@@ -111,19 +147,32 @@ pub fn analyze_with_scratch(
         let uniform = word(d, p + 8);
         if !(1..=65536).contains(&count)
             || word(d, p) as usize != cursor
-            || uniform > 1
+            || uniform > if word(d, 4) == 2 { 2 } else { 1 }
             || word(d, p + 12) != 0
             || cursor
                 .checked_add(count * 12)
                 .is_none_or(|end| end > output)
-            || (uniform == 1 && (count != 1 || indices.is_some()))
-            || (uniform == 0 && indices.is_none())
+            || (uniform == 1 && (count != 1 || !matches!(indices, SectionSource::Uniform)))
+            || (uniform == 0 && !matches!(indices, SectionSource::Indices(_)))
+            || (uniform == 2 && !matches!(indices, SectionSource::Packed { .. }))
         {
             return Err(bad);
         }
-        if let Some(indices) = indices {
-            if indices.len() != 4096 || indices.iter().any(|&i| i < 0 || i as usize >= count) {
-                return Err(bad);
+        match indices {
+            SectionSource::Uniform => {}
+            SectionSource::Indices(a) => {
+                if a.len() != 4096 || a.iter().any(|&i| i < 0 || i as usize >= count) {
+                    return Err(bad);
+                }
+            }
+            SectionSource::Packed { words, bits } => {
+                let expected_bits = (usize::BITS - (count - 1).leading_zeros()).max(4);
+                if *bits != expected_bits
+                    || words.len() != 4096usize.div_ceil(64 / *bits as usize)
+                    || (0..4096).any(|i| indices.index(i) >= count)
+                {
+                    return Err(bad);
+                }
             }
         }
         for i in 0..count {
@@ -169,7 +218,7 @@ pub fn analyze_with_scratch(
             // Skip uniform air sections as the Java chunk does, rather than probing every air cell.
             let ceiling = (0..n).rev().find_map(|s| {
                 let base = min + s as i32 * 16;
-                if sections[s].is_none() {
+                if matches!(sections[s], SectionSource::Uniform) {
                     return (view.material(x, base, z).flags & AIR == 0).then_some(base + 15);
                 }
                 (0..16)
@@ -309,6 +358,72 @@ mod tests {
         let p = word(&d, 52) as usize;
         assert_eq!(word(&d, p + 12), 8);
         assert_eq!(word(&d, p + 16 + 12), 4);
+    }
+    #[test]
+    fn packed_sources_match_indices_and_reuse_the_worker_scratch() {
+        let mut indices = vec![0i32; 4096];
+        for column in 0..256 {
+            indices[column + 5 * 256] = 1;
+            indices[column + 6 * 256] = 2;
+            indices[column + 8 * 256] = 3;
+        }
+        let mut expected = frame();
+        analyze(&mut expected, &[Some(&indices)]).unwrap();
+        let mut words = vec![0i64; 256];
+        for (i, &index) in indices.iter().enumerate() {
+            words[i / 16] |= i64::from(index) << ((i % 16) * 4);
+        }
+        let mut scratch = Scratch::default();
+        for deep in [1, 0, 1] {
+            let mut reference = frame();
+            put(&mut reference, 40, deep);
+            analyze(&mut reference, &[Some(&indices)]).unwrap();
+            let mut packed = frame();
+            put(&mut packed, 4, 2);
+            put(&mut packed, 40, deep);
+            put(&mut packed, 72, 2);
+            analyze_sources_with_scratch(
+                &mut packed,
+                &[SectionSource::Packed {
+                    words: &words,
+                    bits: 4,
+                }],
+                &mut scratch,
+            )
+            .unwrap();
+            let output = word(&packed, 52) as usize;
+            assert_eq!(&packed[output..], &reference[output..]);
+        }
+    }
+    #[test]
+    fn malformed_packed_sources_never_write_results() {
+        let mut packed = frame();
+        put(&mut packed, 4, 2);
+        put(&mut packed, 72, 2);
+        let before = packed.clone();
+        let mut scratch = Scratch::default();
+        assert!(analyze_sources_with_scratch(
+            &mut packed,
+            &[SectionSource::Packed {
+                words: &[0; 255],
+                bits: 4
+            }],
+            &mut scratch
+        )
+        .is_err());
+        assert_eq!(packed, before);
+        let mut words = [0i64; 256];
+        words[255] = 15i64 << 60;
+        assert!(analyze_sources_with_scratch(
+            &mut packed,
+            &[SectionSource::Packed {
+                words: &words,
+                bits: 4
+            }],
+            &mut scratch
+        )
+        .is_err());
+        assert_eq!(packed, before);
     }
     #[test]
     fn invalid_index_and_metadata_preserve_the_output() {

@@ -13,7 +13,7 @@ import org.pepsoft.worldpainter.layers.Layer;
 import static org.junit.Assert.*;
 
 public class MapImportParityTest extends AbstractTool {
-    private static final String[] KEYS={"user.home","org.pepsoft.worldpainter.threads","welt.native.chunkNbt","welt.native.chunkNbtKernel","welt.native.regionHeader","welt.native.regionHeaderKernel","welt.profile.mapImport","welt.benchmark.importReadOnly","welt.native.mapSurface","welt.packedArrayCube.compactPaletteStorage"};
+    private static final String[] KEYS={"user.home","org.pepsoft.worldpainter.threads","welt.native.chunkNbt","welt.native.chunkNbtKernel","welt.native.regionHeader","welt.native.regionHeaderKernel","welt.profile.mapImport","welt.benchmark.importReadOnly","welt.native.mapSurface","welt.packedArrayCube.compactPaletteStorage","welt.native.mapSurfacePacked","welt.import.packedSections"};
     private static final String[] SAVED=new String[KEYS.length];
     private static Configuration previousConfiguration;
     private static File fixture;
@@ -60,6 +60,26 @@ public class MapImportParityTest extends AbstractTool {
             assertEquals(16,org.pepsoft.minecraft.ChunkSurfaceAccess.completedCalls()-calls);
             same(expected,actual);
         }
+    }
+    @Test public void packedNbtSurfacesAndTheirJavaFallbackMatchCompleteImports() throws Exception {
+        System.setProperty("welt.native.chunkNbt","false");System.setProperty("welt.native.regionHeader","false");
+        System.setProperty("welt.packedArrayCube.compactPaletteStorage","false");
+        System.setProperty("welt.native.mapSurface","false");
+        MapImportBenchmark.quietLogging();
+        for(String workers:new String[]{"1","4"})for(MapImporter.ReadOnlyOption option:MapImporter.ReadOnlyOption.values()) {
+            System.setProperty("org.pepsoft.worldpainter.threads",workers);System.setProperty("welt.benchmark.importReadOnly",option.name());
+            System.setProperty("welt.native.mapSurfacePacked","false");System.setProperty("welt.import.packedSections","false");
+            World2 expected=MapImportBenchmark.importWorld(fixture);
+            long calls=org.pepsoft.minecraft.ChunkSurfaceAccess.completedCalls();
+            System.setProperty("welt.native.mapSurfacePacked","true");
+            World2 actual=MapImportBenchmark.importWorld(fixture);
+            assertEquals(16,org.pepsoft.minecraft.ChunkSurfaceAccess.completedCalls()-calls);same(expected,actual);
+            System.setProperty("welt.native.mapSurfacePacked","false");System.setProperty("welt.import.packedSections","true");
+            calls=org.pepsoft.minecraft.ChunkSurfaceAccess.completedCalls();
+            same(expected,MapImportBenchmark.importWorld(fixture));
+            assertEquals(calls,org.pepsoft.minecraft.ChunkSurfaceAccess.completedCalls());
+        }
+        System.setProperty("welt.import.packedSections","false");
     }
     @Test public void objectStorageKeepsTheJavaSurfaceFallback() throws Exception {
         System.setProperty("welt.native.chunkNbt","false");

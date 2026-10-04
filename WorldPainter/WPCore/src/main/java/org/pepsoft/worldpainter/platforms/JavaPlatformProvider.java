@@ -60,6 +60,8 @@ public final class JavaPlatformProvider extends AbstractPlatformProvider impleme
         return implementations.get(platform).createChunk(tags, minHeight, maxHeight, readOnly);
     }
 
+    public NBTChunk createChunk(Platform platform,Map<DataType,Tag> tags,int minHeight,int maxHeight,boolean readOnly,boolean packedImport){return implementations.get(platform).createChunk(tags,minHeight,maxHeight,readOnly,packedImport);}
+
     public File getDimensionDir(Platform platform, File worldDir, int dim) {
         if (platform.getAttribute(ATTRIBUTE_MC_VERSION).isAtLeast(V_26_1)) {
             // Minecraft 26.1 or later

@@ -72,13 +72,17 @@ public final class MapImportBenchmark extends AbstractTool {
     private static Result run(File levelDat,String mode) throws Exception {
         boolean nbtMode=mode.startsWith("nbt-");
         boolean surfaceMode=mode.startsWith("surface-");
+        boolean packedMode=mode.startsWith("packed-");
+        System.setProperty("welt.native.mapSurfacePacked",Boolean.toString(mode.equals("packed-rust")));
+        System.setProperty("welt.import.packedSections","false");
+        if(packedMode)System.setProperty("welt.packedArrayCube.compactPaletteStorage","false");
         System.setProperty("welt.native.mapSurface",Boolean.toString(mode.equals("surface-rust")));
         if(surfaceMode)System.setProperty("welt.packedArrayCube.compactPaletteStorage","true");
         long surfaceCalls=ChunkSurfaceAccess.completedCalls();
         System.setProperty("welt.native.chunkNbt",Boolean.toString(nbtMode&&!mode.equals("nbt-java")));
         System.setProperty("welt.native.chunkNbtKernel",Boolean.toString(!mode.equals("nbt-grouped")));
         long nbtCalls=ChunkTagReader.completedCalls();
-        System.setProperty("welt.native.regionHeader",Boolean.toString(!surfaceMode&&(nbtMode||!mode.equals("java"))));
+        System.setProperty("welt.native.regionHeader",Boolean.toString(!surfaceMode&&!packedMode&&(nbtMode||!mode.equals("java"))));
         System.setProperty("welt.native.regionHeaderKernel",Boolean.toString(!mode.equals("grouped-java")));
         long calls=RegionHeaderAccess.completedCalls();
         var memory=(com.sun.management.ThreadMXBean)ManagementFactory.getThreadMXBean();
@@ -92,7 +96,7 @@ public final class MapImportBenchmark extends AbstractTool {
         if(!mode.equals("nbt-rust")&&nbtDelta!=0)throw new AssertionError("Reference unexpectedly used native NBT");
         long surfaceDelta=ChunkSurfaceAccess.completedCalls()-surfaceCalls;
         long chunks=(long)Integer.getInteger("welt.benchmark.importSide",4)*Integer.getInteger("welt.benchmark.importSide",4);
-        if(mode.equals("surface-rust")?surfaceDelta!=chunks:surfaceDelta!=0)throw new AssertionError("Unexpected native surface count: "+surfaceDelta);
+        if((mode.equals("surface-rust")||mode.equals("packed-rust"))?surfaceDelta!=chunks:surfaceDelta!=0)throw new AssertionError("Unexpected native surface count: "+surfaceDelta);
         return new Result(elapsed,bytes,hash(world),delta,nbtDelta,surfaceDelta);
     }
     static void quietLogging() throws Exception {
@@ -112,8 +116,8 @@ public final class MapImportBenchmark extends AbstractTool {
         quietLogging();
         File levelDat=fixture(root);int warm=Integer.getInteger("welt.benchmark.importWarmups",6),trials=Integer.getInteger("welt.benchmark.importTrials",9);
         double[] millis=new double[trials],rust=new double[trials],ratios=new double[trials];long[] allocated=new long[trials],rustAllocated=new long[trials];long expected=0;Result last=null;
-        String reference=selected.equals("compare-surface")?"surface-java":selected.equals("compare-nbt-grouped")?"nbt-grouped":selected.equals("compare-nbt")?"nbt-java":selected.equals("compare-grouped")?"grouped-java":"java";
-        String nativeMode=selected.equals("compare-surface")?"surface-rust":selected.startsWith("compare-nbt")?"nbt-rust":"rust";
+        String reference=selected.equals("compare-packed")?"packed-java":selected.equals("compare-surface")?"surface-java":selected.equals("compare-nbt-grouped")?"nbt-grouped":selected.equals("compare-nbt")?"nbt-java":selected.equals("compare-grouped")?"grouped-java":"java";
+        String nativeMode=selected.equals("compare-packed")?"packed-rust":selected.equals("compare-surface")?"surface-rust":selected.startsWith("compare-nbt")?"nbt-rust":"rust";
         for(int i=-warm;i<trials;i++){
             if(paired){Result j=null,r=null;for(int pass=0;pass<2;pass++){if(((i+pass)&1)==0)j=run(levelDat,reference);else r=run(levelDat,nativeMode);}
                 if(j.hash!=r.hash)throw new AssertionError("Whole imported worlds differ");last=r;

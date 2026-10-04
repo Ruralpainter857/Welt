@@ -278,6 +278,7 @@ public class JavaMapImporter extends MapImporter {
             final StringBuffer reportBuilder = new StringBuffer();
             final Map<Platform, AtomicInteger> nonNativePlatformsEncountered = synchronizedMap(new HashMap<>());
             if (! chunkStore.visitChunks(new ChunkVisitor() {
+                @Override public boolean prefersPackedSections(){return (Boolean.getBoolean("welt.native.mapSurfacePacked") || Boolean.getBoolean("welt.import.packedSections")) && !logger.isDebugEnabled();}
                 @Override
                 public boolean visitChunk(Chunk chunk) {
                     final long visitStart=profileImport?System.nanoTime():0;

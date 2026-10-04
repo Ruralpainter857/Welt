@@ -61,6 +61,11 @@ public final class MC118AnvilChunk extends MCNamedBlocksChunk implements Section
 
     @SuppressWarnings("ConstantConditions") // Guaranteed by containsTag()
     public MC118AnvilChunk(Map<DataType, CompoundTag> tags, int minHeight, int maxHeight, boolean readOnly) {
+        this(tags,minHeight,maxHeight,readOnly,false);
+    }
+
+    /** Packed import sections are read-only. Borrowed NBT arrays must remain unchanged for this view lifetime. */
+    public MC118AnvilChunk(Map<DataType,CompoundTag> tags,int minHeight,int maxHeight,boolean readOnly,boolean packedImport) {
         super(tags);
         try {
             this.minHeight = minHeight;
@@ -76,7 +81,7 @@ public final class MC118AnvilChunk extends MCNamedBlocksChunk implements Section
             if (sectionTags != null) {
                 for (CompoundTag sectionTag: sectionTags) {
                     try {
-                        Section section = new Section(sectionTag);
+                        Section section = new Section(sectionTag,readOnly && packedImport);
                         if ((section.level >= -undergroundSections) && (section.level < (sections.length - undergroundSections))) {
                             sections[section.level + undergroundSections] = section;
                             if ((section.skyLight != null) && (section.level > highestSectionWithSkylight)) {
@@ -491,7 +496,7 @@ public final class MC118AnvilChunk extends MCNamedBlocksChunk implements Section
             if (section.singleMaterial != null) {
                 return section.singleMaterial;
             } else {
-                Material material = section.materials.getValue(x, z, y & 0xf);
+                Material material = section.materialAt(x,z,y & 0xf);
                 return (material != null) ? material : AIR;
             }
         }
@@ -560,7 +565,7 @@ public final class MC118AnvilChunk extends MCNamedBlocksChunk implements Section
                     return ((yy - undergroundSections) << 4) | (blockOffset(x, 15, z) >> 8);
                 }
                 for (int y = 15; y >= 0; y--) {
-                    final Material material = sections[yy].materials.getValue(x, z, y);
+                    final Material material = sections[yy].materialAt(x,z,y);
                     if ((material != null) && (material != AIR)) {
                         return ((yy - undergroundSections) << 4) | y;
                     }
@@ -582,7 +587,7 @@ public final class MC118AnvilChunk extends MCNamedBlocksChunk implements Section
                 for (int y = 15; y >= 0; y--) {
                     for (int x = 0; x < 16; x++) {
                         for (int z = 0; z < 16; z++) {
-                            final Material material = sections[yy].materials.getValue(x, z, y);
+                            final Material material = sections[yy].materialAt(x,z,y);
                             if ((material != null) && (material != AIR)) {
                                 return ((yy - undergroundSections) << 4) | y;
                             }
@@ -799,7 +804,8 @@ public final class MC118AnvilChunk extends MCNamedBlocksChunk implements Section
 
     public static class Section extends AbstractNBTItem implements SectionedChunk.Section {
         @SuppressWarnings("unchecked") // Guaranteed by Minecraft
-        Section(CompoundTag tag) {
+        Section(CompoundTag tag) { this(tag,false); }
+        Section(CompoundTag tag,boolean packedImport) {
             super(tag);
             try {
                 Tag levelTag = getTag(TAG_Y);
@@ -817,7 +823,8 @@ public final class MC118AnvilChunk extends MCNamedBlocksChunk implements Section
                     final LongArrayTag blockStatesDataTag = (LongArrayTag) blockStatesTag.getTag(TAG_DATA_);
                     if (blockStatesDataTag != null) {
                         final long[] blockStates = blockStatesDataTag.getValue();
-                        materials = new PackedArrayCube<>(16, blockStates, palette, 4, false, Material.class);
+                        packedMaterials=packedImport?PackedMaterialSection.tryCreate(blockStates,palette):null;
+                        if(packedMaterials==null)materials = new PackedArrayCube<>(16, blockStates, palette, 4, false, Material.class);
                     } else if (palette.length == 1) {
                         // Entire section filled with one material
                         singleMaterial = (palette[0] == null) ? AIR : palette[0];
@@ -874,7 +881,7 @@ public final class MC118AnvilChunk extends MCNamedBlocksChunk implements Section
 
             if (singleMaterial != null) {
                 setMap(TAG_BLOCK_STATES_, ImmutableMap.of(TAG_PALETTE_, new ListTag<>(TAG_PALETTE_, CompoundTag.class, singletonList(createPaletteEntry(singleMaterial)))));
-            } else {
+            } else if (packedMaterials == null) {
                 PackedArrayCube<Material>.PackedData packedMaterials = materials.pack();
                 List<CompoundTag> palette = new ArrayList<>(packedMaterials.palette.length);
                 for (Material material: packedMaterials.palette) {
@@ -912,6 +919,8 @@ public final class MC118AnvilChunk extends MCNamedBlocksChunk implements Section
         @Override
         public boolean isEmpty() {
             if ((singleMaterial != null) && (singleMaterial != AIR)) {
+                return false;
+            } else if ((packedMaterials != null) && (! packedMaterials.isEmpty())) {
                 return false;
             } else if ((materials != null) && (! materials.isEmpty())) {
                 return false;
@@ -991,6 +1000,8 @@ public final class MC118AnvilChunk extends MCNamedBlocksChunk implements Section
         byte[] skyLight;
         byte[] blockLight;
         // Exactly one of these should be set:
+        Material materialAt(int x,int z,int y){return packedMaterials==null?materials.getValue(x,z,y):packedMaterials.get(x,z,y);}
+        PackedMaterialSection packedMaterials;
         PackedArrayCube<Material> materials;
         Material singleMaterial;
         // At most one of these should be set:

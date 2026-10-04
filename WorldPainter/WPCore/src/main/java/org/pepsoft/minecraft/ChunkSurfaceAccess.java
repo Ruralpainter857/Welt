@@ -20,7 +20,7 @@ public final class ChunkSurfaceAccess {
     public static void resetProfile(){PREPARATION.reset();NATIVE.reset();}
     private record Semantics(int flags,int snow) { }
     private static final class Scratch {
-        ByteBuffer frame;int[][] indexes=new int[0][];
+        ByteBuffer frame;int[][] indexes=new int[0][];long[][] packed=new long[0][];
         final IdentityHashMap<Material,Semantics> semantics=new IdentityHashMap<>();
     }
     private ChunkSurfaceAccess() { }
@@ -34,25 +34,27 @@ public final class ChunkSurfaceAccess {
     /** The result is invalidated by the next call on this worker. Unsupported storage retains Java. */
     public static Result analyze(Chunk chunk,int floor,int top,int worldMin,int defaultWater,int bedrock,
                                  int terrains,boolean deep,ToIntFunction<String> terrainMapping) {
-        if(!Boolean.getBoolean("welt.native.mapSurface") || !NativeLoader.areSlicesAvailable()
+        if(!(Boolean.getBoolean("welt.native.mapSurface") || Boolean.getBoolean("welt.native.mapSurfacePacked")) || !NativeLoader.areSlicesAvailable()
                 || (chunk.getClass()!=MC118AnvilChunk.class && chunk.getClass()!=MC115AnvilChunk.class))return null;
         boolean profile=Boolean.getBoolean("welt.profile.mapImport");
         long preparationStart=profile?System.nanoTime():0;
         int min=chunk.getMinHeight(),max=chunk.getMaxHeight(),n=(max-min)>>4;
         if(min>=max || (min&15)!=0 || (max&15)!=0 || n<1 || n>256 || floor<min || floor>top || top>=max)return null;
-        Scratch scratch=SCRATCH.get();if(scratch.indexes.length!=n)scratch.indexes=new int[n][];
+        Scratch scratch=SCRATCH.get();if(scratch.indexes.length!=n){scratch.indexes=new int[n][];scratch.packed=new long[n][];}
         @SuppressWarnings("unchecked") PackedArrayCube<Material>[] cubes=(PackedArrayCube<Material>[])new PackedArrayCube<?>[n];
         Material[] uniform=new Material[n];int[] counts=new int[n];int palettes=0;
+        PackedMaterialSection[] sources=new PackedMaterialSection[n];boolean hasPacked=false;
         for(int i=0;i<n;i++){
             if(chunk instanceof MC118AnvilChunk c){int index=(min>>4)+c.undergroundSections+i;
                 if(index<0 || index>=c.getSections().length)return null;
                 var section=c.getSections()[index];cubes[i]=section==null?null:section.materials;
                 uniform[i]=section==null || section.singleMaterial==null?AIR:section.singleMaterial;
+                sources[i]=section==null?null:section.packedMaterials;hasPacked|=sources[i]!=null;
             }else{var c=(MC115AnvilChunk)chunk;if(i>=c.getSections().length)return null;
                 var section=c.getSections()[i];cubes[i]=section==null?null:section.materials;uniform[i]=AIR;
             }
             if(cubes[i]!=null && !cubes[i].hasPaletteIndexStorage())return null;
-            counts[i]=cubes[i]==null?1:cubes[i].getPaletteIndexCount();
+            counts[i]=sources[i]!=null?sources[i].palette.length:cubes[i]==null?1:cubes[i].getPaletteIndexCount();
             if(counts[i]<1 || counts[i]>65536)return null;
             palettes+=counts[i];
         }
@@ -60,7 +62,7 @@ public final class ChunkSurfaceAccess {
         int output=(int)size-4096;
         if(scratch.frame==null || scratch.frame.capacity()<size)scratch.frame=ByteBuffer.allocateDirect((int)size).order(ByteOrder.LITTLE_ENDIAN);
         ByteBuffer d=scratch.frame;d.clear().limit((int)size);for(int i=0;i<64+n*16;i+=4)d.putInt(i,0);
-        d.putInt(0,0x46534d57).putInt(4,1).putInt(8,(int)size).putInt(12,n).putInt(16,min)
+        d.putInt(0,0x46534d57).putInt(4,hasPacked?2:1).putInt(8,(int)size).putInt(12,n).putInt(16,min)
                 .putInt(20,floor).putInt(24,top).putInt(28,worldMin).putInt(32,defaultWater).putInt(36,bedrock)
                 .putInt(40,deep?1:0).putInt(44,terrains).putInt(48,64+n*16).putInt(52,output).putInt(56,256);
         int cursor=64+n*16;
@@ -68,9 +70,10 @@ public final class ChunkSurfaceAccess {
         try{
             for(int s=0;s<n;s++){
                 scratch.indexes[s]=cubes[s]==null?null:cubes[s].getPaletteIndexesForBulkUpdate();
-                d.putInt(64+s*16,cursor).putInt(68+s*16,counts[s]).putInt(72+s*16,cubes[s]==null?1:0);
+                scratch.packed[s]=sources[s]==null?null:sources[s].words;
+                d.putInt(64+s*16,cursor).putInt(68+s*16,counts[s]).putInt(72+s*16,sources[s]!=null?2:cubes[s]==null?1:0);
                 for(int p=0;p<counts[s];p++){
-                    Material material=cubes[s]==null?uniform[s]:cubes[s].getPaletteValue(p);
+                    Material material=sources[s]!=null?sources[s].palette[p]:cubes[s]==null?uniform[s]:cubes[s].getPaletteValue(p);
                     if(material==null)material=AIR;
                     Semantics semantics=scratch.semantics.get(material);
                     if(semantics==null){
@@ -88,11 +91,13 @@ public final class ChunkSurfaceAccess {
                 }
             }
             long nativeStart=profile?System.nanoTime():0;
-            if(nativeAnalyze(scratch.indexes,d,(int)size)!=0)return null;
+            int code=hasPacked?nativeAnalyzeSections(scratch.indexes,scratch.packed,d,(int)size):nativeAnalyze(scratch.indexes,d,(int)size);
+            if(code!=0)return null;
             if(profile){PREPARATION.add(nativeStart-preparationStart);NATIVE.add(System.nanoTime()-nativeStart);}
             CALLS.incrementAndGet();return new Result(d,output);
         }catch(UnsatisfiedLinkError | IllegalArgumentException | NullPointerException ex){return null;}
-        finally{java.util.Arrays.fill(scratch.indexes,null);}
+        finally{java.util.Arrays.fill(scratch.indexes,null);java.util.Arrays.fill(scratch.packed,null);}
     }
     private static native int nativeAnalyze(int[][] sections,ByteBuffer frame,int length);
+    private static native int nativeAnalyzeSections(int[][] sections,long[][] packed,ByteBuffer frame,int length);
 }

@@ -425,7 +425,7 @@ public class JavaChunkStore implements ChunkStore {
                                 }
                                 final long constructionStart=profileImport?System.nanoTime():0;
                                 if(profileImport)PROFILE_NBT.add(constructionStart-nbtStart);
-                                Chunk chunk = platformProvider.createChunk(platform, tags, minHeight, maxHeight, readOnly);
+                                Chunk chunk = platformProvider.createChunk(platform, tags, minHeight, maxHeight, readOnly,readOnly && visitor.prefersPackedSections());
                                 if(profileImport){
                                     PROFILE_CONSTRUCTION.add(System.nanoTime()-constructionStart);PROFILE_DECODE_CHUNKS.increment();
                                     long after=allocatedBytes();if(decodeBytes>=0 && after>=decodeBytes)PROFILE_DECODE_BYTES.add(after-decodeBytes);
