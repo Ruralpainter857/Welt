@@ -25,6 +25,32 @@ public final class NativeSlices {
     }
     private static native int nativeConvertHeightmapImage(ByteBuffer buffer, int length);
 
+    private static volatile boolean schematicSymbolUnavailable;
+    public static boolean isSchematicLoadingAvailable() {
+        return !schematicSymbolUnavailable && Boolean.getBoolean("welt.native.schem")
+                && Native.isGenEnabled() && NativeLoader.areSlicesAvailable();
+    }
+    /** Schematic ABI v1; owned arrays are borrowed for one synchronous call. */
+    public static boolean decodeSchematic(byte[] bytes, int[] indices, byte[] flags, byte[] output,
+                                         int[] summary, int width, int length, int height) {
+        if (!isSchematicLoadingAvailable() || (bytes == null) == (indices == null)
+                || flags == null || flags.length < 1 || flags.length > 65536
+                || output == null || summary == null || summary.length != 8
+                || width <= 0 || length <= 0 || height <= 0) return false;
+        long plane = (long) width * length;
+        if (plane > 4 * 1024 * 1024) return false;
+        long count = plane * height;
+        int stride = flags.length <= 256 ? 1 : 2;
+        if (count < 1 || count > 4 * 1024 * 1024 || output.length != count * stride
+                || bytes != null && (bytes == output || bytes.length > 20 * 1024 * 1024)
+                || flags == output || indices != null && (indices == summary || indices.length != count)) return false;
+        try { return nativeDecodeSchematic(bytes, indices, flags, output, summary, width, length, height) == 0
+                && summary[0] == 0x5753434d && summary[7] == count; }
+        catch (UnsatisfiedLinkError e) { schematicSymbolUnavailable = true; return false; }
+    }
+    private static native int nativeDecodeSchematic(byte[] bytes, int[] indices, byte[] flags, byte[] output,
+                                                   int[] summary, int width, int length, int height);
+
     private static volatile boolean chunkNbtSymbolUnavailable;
 
     /** Index all NBT payloads once; malformed or oversized trees retain the Java reader. */
