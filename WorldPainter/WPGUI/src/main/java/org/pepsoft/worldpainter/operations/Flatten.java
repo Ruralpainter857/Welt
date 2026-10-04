@@ -131,8 +131,16 @@ public class Flatten extends AbstractBrushOperation {
         final int diameter = (int) diameterLong;
 
         if(getFilter()!=null){
-            if(applyTheme||area<16384)return false;
+            if(area<16384)return false;
             EditorFilterPlan plan=EditorFilterPlan.compile(getFilter(),dimension);if(plan==null)return false;
+            if(applyTheme){
+                if(!HeightBrushAccess.isFilteredThemedEnabled())return false;
+                for(int x=0;x<diameter;x++)for(int y=0;y<diameter;y++)
+                    nativeStrengths[x*diameter+y]=getBrush().getStrength(x-radius,y-radius);
+                return HeightBrushAccess.tryApplyFilteredThemed(dimension,centreX-radius,centreY-radius,
+                        diameter,diameter,nativeStrengths,mode==Mode.FLATTEN?HeightBrushAccess.FLATTEN:mode==Mode.RAISE?HeightBrushAccess.FLATTEN_RAISE:HeightBrushAccess.FLATTEN_LOWER,
+                        targetHeight,dimension.getMinHeight(),dimension.getMaxHeight()-1,plan,dynamicLevel);
+            }
             for(int y=0;y<diameter;y++)for(int x=0;x<diameter;x++)
                 nativeStrengths[y*diameter+x]=getBrush().getStrength(x-radius,y-radius);
             int filteredMode=mode==Mode.FLATTEN?HeightBrushAccess.FLATTEN:mode==Mode.RAISE?HeightBrushAccess.FLATTEN_RAISE:HeightBrushAccess.FLATTEN_LOWER;

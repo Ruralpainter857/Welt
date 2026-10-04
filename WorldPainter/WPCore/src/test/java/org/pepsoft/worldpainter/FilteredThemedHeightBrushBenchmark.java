@@ -4,6 +4,7 @@ import java.lang.management.ManagementFactory;
 import java.util.Arrays;
 import java.util.Locale;
 import org.pepsoft.worldpainter.panels.DefaultFilter;
+import org.pepsoft.worldpainter.panels.EditorFilterPlan;
 
 /** Full filtered themed strokes; fixture creation and parity inspection are outside timing. */
 public final class FilteredThemedHeightBrushBenchmark {
@@ -35,13 +36,13 @@ public final class FilteredThemedHeightBrushBenchmark {
         }
     }
 
-    private static Result run(int radius, int selectedMode) throws Exception {
+    private static Result run(boolean rust, int radius, int selectedMode) throws Exception {
         Dimension dimension = FilteredHeightBrushBenchmark.fixture();
         DefaultFilter filter = FilteredHeightBrushBenchmark.filter(dimension);
         int side = 2 * radius + 1, origin = -radius / 2;
         float[] forces = new float[side * side];
         ThemeResetParityTest.random().setSeed(99);
-        long change = dimension.getChangeNo();
+        long change = dimension.getChangeNo(), calls = HeightBrushAccess.completedThemedCalls();
         var meter = (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
         long thread = Thread.currentThread().getId();
         StrokeEvent event = new StrokeEvent();
@@ -53,7 +54,13 @@ public final class FilteredThemedHeightBrushBenchmark {
             float value = mode < 2 ? 8.0f : stroke % 2 == 0 ? 85.125f : 110.5f;
             dimension.setEventsInhibited(true);
             try {
-                scalar(dimension, origin, side, forces, filter, mode, value);
+                if (rust) {
+                    if (!HeightBrushAccess.tryApplyFilteredThemed(dimension, origin, origin, side, side,
+                            forces, mode, value, dimension.getMinHeight(), dimension.getMaxHeight() - 1,
+                            EditorFilterPlan.compile(filter, dimension), 1f)) {
+                        throw new AssertionError("Native transaction rejected");
+                    }
+                } else scalar(dimension, origin, side, forces, filter, mode, value);
             } finally {
                 dimension.setEventsInhibited(false);
             }
@@ -65,6 +72,7 @@ public final class FilteredThemedHeightBrushBenchmark {
         if (dimension.getChangeNo() == change) {
             throw new AssertionError("Fixture did not edit heights");
         }
+        if (rust && HeightBrushAccess.completedThemedCalls() != calls + 8) throw new AssertionError("Expected eight JNI transactions");
         return new Result(millis, bytes, dimension, ThemeResetParityTest.random().nextLong());
     }
 
@@ -76,23 +84,29 @@ public final class FilteredThemedHeightBrushBenchmark {
         if (radius < 1 || radius > 127 || warmups < 0 || trials < 1 || mode < -1 || mode > 4) {
             throw new IllegalArgumentException("Invalid benchmark parameters");
         }
-        double[] times = new double[trials];
-        long[] bytes = new long[trials];
+        String path = args.length == 0 ? "compare" : args[0];
+        if (!path.equals("compare") && !path.equals("java") && !path.equals("rust")) throw new IllegalArgumentException("Unknown path");
+        double[] javaTimes = new double[trials], rustTimes = new double[trials], ratios = new double[trials];
+        long[] javaBytes = new long[trials], rustBytes = new long[trials];
         for (int i = -warmups; i < trials; i++) {
-            Result first = run(radius, mode), repeat = run(radius, mode);
-            ThemedFlattenBrushBenchmark.same(first.dimension, repeat.dimension);
-            if (first.randomState != repeat.randomState) {
-                throw new AssertionError("Theme RNG is not reproducible");
+            Result java, rust;
+            if (path.equals("compare")) {
+                if ((i & 1) == 0) {java = run(false,radius,mode);rust = run(true,radius,mode);}
+                else {rust = run(true,radius,mode);java = run(false,radius,mode);}
+                ThemedFlattenBrushBenchmark.same(java.dimension, rust.dimension);
+                if (java.randomState != rust.randomState) throw new AssertionError("Theme RNG parity failed");
+            } else {
+                Result result = run(path.equals("rust"),radius,mode);java = result;rust = result;
             }
             if (i >= 0) {
-                times[i] = first.millis;
-                bytes[i] = first.allocated;
+                javaTimes[i] = java.millis;rustTimes[i] = rust.millis;ratios[i] = java.millis / rust.millis;
+                javaBytes[i] = java.allocated;rustBytes[i] = rust.allocated;
             }
         }
-        Arrays.sort(times);
-        Arrays.sort(bytes);
+        Arrays.sort(javaTimes);Arrays.sort(rustTimes);Arrays.sort(ratios);Arrays.sort(javaBytes);Arrays.sort(rustBytes);
         System.out.printf(Locale.ROOT,
-                "filteredThemedHeight radius=%d mode=%d javaMs=%.3f range=%.3f..%.3f allocated=%d parity=repeatable%n",
-                radius, mode, times[trials / 2], times[0], times[trials - 1], bytes[trials / 2]);
+                "filteredThemedHeight path=%s radius=%d mode=%d javaMs=%.3f rustMs=%.3f ratio=%.3f javaAllocated=%d rustAllocated=%d parity=%s%n",
+                path,radius,mode,javaTimes[trials/2],rustTimes[trials/2],ratios[trials/2],
+                javaBytes[trials/2],rustBytes[trials/2],path.equals("compare")?"identical":"standalone");
     }
 }

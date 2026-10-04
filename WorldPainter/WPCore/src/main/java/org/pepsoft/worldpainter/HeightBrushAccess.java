@@ -6,7 +6,7 @@ import static org.pepsoft.worldpainter.Constants.*;
 
 /**
  * Shared compact height, flatten and smooth brush operations, including exact SimpleTheme transactions.
- * Mutating filters retain Java. The caller serialises dimension edits and supplies X-major forces.
+ * Supported filters read evolving packed planes. The caller serialises edits and supplies X-major forces.
  * Unthemed operations use one call per tile; themed operations share one frame across all tiles.
  */
 public final class HeightBrushAccess {
@@ -41,6 +41,19 @@ public final class HeightBrushAccess {
         // Complete small-stroke measurements still favour the original path over full packed-tile copies.
         if ((long)width * height < 16384) return false;
         return ThemedHeightBrushAccess.apply(dimension,ox,oy,width,height,strengths,mode,value,minClamp,maxClamp);
+    }
+
+    /** Experimental GUI dispatch until complete stroke performance is established. */
+    public static boolean isFilteredThemedEnabled() {
+        return Boolean.getBoolean("welt.native.filteredThemedHeight");
+    }
+
+    /** Filter, quantised height and theme share one ordered native transaction. */
+    public static boolean tryApplyFilteredThemed(Dimension dimension,int ox,int oy,int width,int height,
+            float[] strengths,int mode,float value,float low,float high,
+            org.pepsoft.worldpainter.panels.EditorFilterPlan filter,float dynamic) {
+        if(filter==null || (long)width*height<16384)return false;
+        return ThemedHeightBrushAccess.apply(dimension,ox,oy,width,height,strengths,mode,value,low,high,filter,dynamic);
     }
 
     static Scratch edit(int minZ, int x, int y, int width, int height, float[] strengths, int offset, int stride,

@@ -177,7 +177,11 @@ impl Theme {
         }
         Ok(end)
     }
-    /// Shared preparation for a transaction that must interleave filters and theme mutations.
+    /// Validate theme outputs against the shared terrain palette before editing.
+    pub(crate) fn terrain_palette_fits(&self, count: usize) -> bool {
+        self.ranges.iter().all(|&v| v >= 0 && (v as usize) < count)
+    }
+    /// Shared preparation for a transaction that interleaves filters and theme mutations.
     pub(crate) fn prepare_cell_terrains(&mut self) {
         SimpleThemeTerrainBulk::prepare_tile_axes(&mut self.axes);
     }

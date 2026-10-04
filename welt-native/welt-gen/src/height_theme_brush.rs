@@ -5,6 +5,8 @@
 //! Border floats precede the theme: left/right are 5 x (height + 10), top/bottom width x 5,
 //! each in X-major order. Interior heights are captured from packed planes, never recopied by Java.
 //! All neighbourhood sums retain Java's X/Y addition order; the worker snapshot is reused.
+#[path = "height_theme_filter.rs"]
+mod filter;
 use crate::height_map_import::{Plane, Theme, TileState};
 use welt_core::{error::WeltError, rng::JavaRandom};
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -66,16 +68,22 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     if d.len() < 128
         || d.len() > MAX_BYTES
         || word(d, 0) != 0x42544857
-        || !matches!(word(d, 4), 1..=4)
+        || !matches!(word(d, 4), 1..=5)
         || word(d, 8) as usize != d.len()
-        || d[if word(d, 4) >= 3 && word(d, 28) == 5 {
-            96
-        } else {
-            88
-        }..128]
-            .iter()
-            .any(|v| *v != 0)
+        || word(d, 4) < 5
+            && d[if word(d, 4) >= 3 && word(d, 28) == 5 {
+                96
+            } else {
+                88
+            }..128]
+                .iter()
+                .any(|v| *v != 0)
     {
+        return Err(bad);
+    }
+    let filtered = word(d, 4) == 5;
+    let header = if filtered { 256 } else { 128 };
+    if d.len() < header {
         return Err(bad);
     }
     let n = word(d, 12) as usize;
@@ -95,7 +103,7 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     let start = word(d, 68) as usize;
     let step = word(d, 72) as usize;
     let beach = word(d, 76) as i32;
-    let cell_ordered = word(d, 4) == 4;
+    let cell_ordered = word(d, 4) >= 4;
     let smooth = word(d, 4) >= 3 && mode == 5;
     let halo_count = if smooth && w <= 246 && h <= 246 {
         10 * (w + h + 10)
@@ -117,7 +125,8 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
         || !(1..=256).contains(&h)
         || !(1..=65536).contains(&(i64::from(max) - i64::from(min)))
         || !(0..=255).contains(&beach)
-        || forces != 128 + n * 16
+        || forces != header + n * 16
+        || forces + w * h * 4 + halo_count * 4 > d.len()
         || smooth
             && (mode != 5
                 || w > 246
@@ -128,7 +137,7 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
                 || i64::from(oy) + h as i64 + 4 > i64::from(i32::MAX)
                 || word(d, 88) as usize != forces + w * h * 4
                 || word(d, 92) as usize != halo_count)
-        || theme != forces + w * h * 4 + halo_count * 4
+        || !filtered && theme != forces + w * h * 4 + halo_count * 4
         || theme + 32 > d.len()
         || i64::from(ox) + w as i64 - 1 > i64::from(i32::MAX)
         || i64::from(oy) + h as i64 - 1 > i64::from(i32::MAX)
@@ -139,7 +148,7 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     let mut kinds = [0u32; 64];
     let mut bytes = 0;
     for p in 0..n {
-        let desc = 128 + p * 16;
+        let desc = header + p * 16;
         let k = word(d, desc);
         let role = word(d, desc + 4);
         let default = word(d, desc + 8);
@@ -230,6 +239,22 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     if s.theme.read(d, theme, &descriptors[..n], beach)? != start {
         return Err(bad);
     }
+    let prepared_filter = if filtered {
+        let filter = filter::PreparedFilter::read(
+            d,
+            &kinds[..n],
+            &s.tiles[..nt],
+            forces + w * h * 4 + halo_count * 4,
+        )?;
+        if beach as usize >= filter.palette_count()
+            || !s.theme.terrain_palette_fits(filter.palette_count())
+        {
+            return Err(bad);
+        }
+        Some(filter)
+    } else {
+        None
+    };
     let mut random = JavaRandom::from_lcg_state(long(d, 80)).ok_or(bad)?;
     let tall = i64::from(max) - i64::from(min) > 256;
     if smooth {
@@ -279,14 +304,18 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
         for y in 0..h {
             let wx = ox + x as i32;
             let wy = oy + y as i32;
-            let Some(t) = s.tiles[..nt]
-                .iter_mut()
-                .find(|t| t.tx == wx >> 7 && t.ty == wy >> 7)
+            let Some(tile) = s.tiles[..nt]
+                .iter()
+                .position(|t| t.tx == wx >> 7 && t.ty == wy >> 7)
             else {
                 continue;
             };
             let i = (wx & 127) as usize + (wy & 127) as usize * 128;
-            let force = f32::from_bits(word(d, forces + (x * h + y) * 4));
+            let raw_force = f32::from_bits(word(d, forces + (x * h + y) * 4));
+            let force = prepared_filter.as_ref().map_or(raw_force, |f| {
+                f.strength(d, &s.tiles[..nt], tile, i, wx, wy, raw_force)
+            });
+            let t = &mut s.tiles[tile];
             if !(force > 0.0) {
                 continue;
             }
@@ -563,6 +592,86 @@ mod tests {
             assert_eq!(before, legacy);
         }
     }
+    fn filtered_frame() -> Vec<u8> {
+        let old = frame();
+        let old_theme = word(&old, 64) as usize;
+        let border = old_theme + 128;
+        let program = border + 48;
+        let palette = program + 48;
+        let theme = palette + 48;
+        let shift = theme - old_theme;
+        let mut data = vec![0; old.len() + shift];
+        data[..128].copy_from_slice(&old[..128]);
+        data[256..border].copy_from_slice(&old[128..old_theme]);
+        data[theme..].copy_from_slice(&old[old_theme..]);
+        let size = data.len() as u32;
+        for (p, v) in [
+            (4, 5),
+            (8, size),
+            (60, word(&old, 60) + 128),
+            (64, theme as u32),
+            (68, word(&old, 68) + shift as u32),
+            (76, 0),
+            (96, program as u32),
+            (100, 1),
+            (104, palette as u32),
+            (108, 1),
+            (112, border as u32),
+            (116, 12),
+            (120, 1f32.to_bits()),
+            (172, (-1i32) as u32),
+            (180, 8f32.sqrt().to_bits()),
+        ] {
+            put(&mut data, p, v);
+        }
+        for i in 0..11 {
+            put(&mut data, 128 + i * 4, (-1i32) as u32);
+        }
+        for i in 0..12 {
+            put(&mut data, border + i * 4, 61f32.to_bits());
+        }
+        data
+    }
+    #[test]
+    fn filtered_frames_reuse_planes_and_preserve_random_draws() {
+        let mut data = filtered_frame();
+        let mut scratch = BrushScratch::default();
+        apply(&mut data, &mut scratch).unwrap();
+        let mut rng = JavaRandom::new(9);
+        for _ in 0..4 {
+            rng.next_int_bound(15);
+        }
+        assert_eq!(long(&data, 80), rng.lcg_state());
+        assert!(scratch.tiles.iter().all(|t| t.heights.capacity() == 0));
+    }
+    #[test]
+    fn malformed_filter_metadata_is_rejected_without_plane_or_rng_mutation() {
+        for (offset, value) in [
+            (96, 0),
+            (100, 0),
+            (108, 0),
+            (116, 11),
+            (128, 2),
+            (172, 255),
+            (176, 1),
+            (180, f32::NAN.to_bits()),
+            (184, 1),
+            (76, 1),
+        ] {
+            let mut data = filtered_frame();
+            put(&mut data, offset, value);
+            let before = data.clone();
+            assert!(
+                apply(&mut data, &mut BrushScratch::default()).is_err(),
+                "offset {offset}"
+            );
+            assert_eq!(data, before, "offset {offset}");
+        }
+        let mut short = filtered_frame();
+        short.truncate(200);
+        assert!(apply(&mut short, &mut BrushScratch::default()).is_err());
+    }
+
     fn smooth_frame() -> Vec<u8> {
         let old = frame();
         let forces = word(&old, 60) as usize;

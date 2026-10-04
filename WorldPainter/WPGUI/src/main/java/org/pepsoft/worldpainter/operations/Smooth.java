@@ -10,6 +10,7 @@ import org.pepsoft.worldpainter.TerrainHeightAccess;
 import org.pepsoft.worldpainter.SmoothHeightAccess;
 import org.pepsoft.worldpainter.HeightBrushAccess;
 import org.pepsoft.worldpainter.WorldPainter;
+import org.pepsoft.worldpainter.panels.EditorFilterPlan;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.nativeapi.NativeSlices;
@@ -53,7 +54,7 @@ public class Smooth extends AbstractBrushOperation {
 
     private boolean smoothNative(Dimension dimension, int centreX, int centreY, int radius,
                                  float dynamicLevel, boolean applyTheme) {
-        if (getFilter() != null || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) {
             return false;
         }
         long diameterLong = 2L * radius + 1L;
@@ -69,6 +70,15 @@ public class Smooth extends AbstractBrushOperation {
         int inputArea = (int) inputAreaLong;
         int outputArea = (int) outputAreaLong;
         if (nativeStrengths == null || nativeStrengths.length != outputArea) nativeStrengths = new float[outputArea];
+        if(getFilter()!=null){
+            if(!applyTheme || !HeightBrushAccess.isFilteredThemedEnabled() || outputArea<16384)return false;
+            EditorFilterPlan plan=EditorFilterPlan.compile(getFilter(),dimension);if(plan==null)return false;
+            for(int x=0;x<diameter;x++)for(int y=0;y<diameter;y++)
+                nativeStrengths[x*diameter+y]=getBrush().getStrength(x-radius,y-radius);
+            return HeightBrushAccess.tryApplyFilteredThemed(dimension,centreX-radius,centreY-radius,
+                    diameter,diameter,nativeStrengths,HeightBrushAccess.SMOOTH,0,
+                    dimension.getMinHeight(),dimension.getMaxHeight()-1,plan,dynamicLevel);
+        }
         for (int x = 0; x < diameter; x++) {
             for (int y = 0; y < diameter; y++) {
                 nativeStrengths[x * diameter + y] = dynamicLevel * getStrength(

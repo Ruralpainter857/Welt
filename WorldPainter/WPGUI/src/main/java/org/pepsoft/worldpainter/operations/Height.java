@@ -89,8 +89,16 @@ public class Height extends AbstractBrushOperation {
         if (nativeStrengths == null || nativeStrengths.length != area) nativeStrengths = new float[area];
 
         if(getFilter()!=null){
-            if(applyTheme||area<16384)return false;
+            if(area<16384)return false;
             EditorFilterPlan plan=EditorFilterPlan.compile(getFilter(),dimension);if(plan==null)return false;
+            if(applyTheme){
+                if(!HeightBrushAccess.isFilteredThemedEnabled())return false;
+                for(int x=0;x<diameter;x++)for(int y=0;y<diameter;y++)
+                    nativeStrengths[x*diameter+y]=getBrush().getFullStrength(x-radius,y-radius);
+                return HeightBrushAccess.tryApplyFilteredThemed(dimension,centreX-radius,centreY-radius,
+                        diameter,diameter,nativeStrengths,inverse?HeightBrushAccess.LOWER:HeightBrushAccess.RAISE,
+                        adjustment,minZ,maxZ,plan,1f);
+            }
             for(int y=0;y<diameter;y++)for(int x=0;x<diameter;x++)
                 nativeStrengths[y*diameter+x]=getBrush().getFullStrength(x-radius,y-radius);
             return FilteredPaintAccess.applyHeight(dimension,plan,centreX-radius,centreY-radius,diameter,diameter,

@@ -9,7 +9,7 @@ import org.pepsoft.worldpainter.operations.Filter;
 import static org.junit.Assert.*;
 /** Exercise evolving filters, quantisation and ordered cross-tile writes for all height modes. */
 public class FilteredHeightBrushParityTest {
-    private static Filter filter(Dimension d,int i){return switch(i){
+    static Filter filter(Dimension d,int i){return switch(i){
         case 0 -> new DefaultFilter(d,false,false,Integer.MIN_VALUE,Integer.MIN_VALUE,false,false,null,false,null,75,false);
         case 1 -> new DefaultFilter(d,false,false,70,110,true,true,Terrain.GRASS,false,null,30,false);
         case 2 -> new DefaultFilter(d,false,false,100,80,true,false,null,true,TerrainOrLayerFilter.WATER,20,true);
