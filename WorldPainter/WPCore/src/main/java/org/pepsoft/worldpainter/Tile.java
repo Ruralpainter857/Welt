@@ -209,6 +209,14 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         }
     }
 
+    /** Snapshot storage words under one lock without changing undo or notification state. */
+    synchronized void copyRawImageHeights(java.nio.IntBuffer destination) {
+        if (destination.remaining() != TILE_SIZE * TILE_SIZE) throw new IllegalArgumentException("Expected one tile plane");
+        ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+        if (tall) destination.put(tallHeightMap);
+        else for (short value : heightMap) destination.put(value & 0xffff);
+    }
+
     /** Copie les hauteurs arrondies dans l'ordre de stockage, sous un seul verrou. */
     public synchronized void copyQuantisedHeights(int[] destination) {
         if (destination.length != TILE_SIZE * TILE_SIZE) throw new IllegalArgumentException("Expected one height per cell");

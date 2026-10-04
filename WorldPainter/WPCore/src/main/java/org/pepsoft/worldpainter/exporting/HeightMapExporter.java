@@ -4,6 +4,7 @@ import com.google.common.collect.ImmutableList;
 import com.twelvemonkeys.imageio.util.ImageTypeSpecifiers;
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.Tile;
+import org.pepsoft.worldpainter.HeightMapImageAccess;
 
 import javax.imageio.*;
 import javax.imageio.stream.ImageOutputStream;
@@ -161,6 +162,7 @@ public class HeightMapExporter {
             for (Tile tile: dimension.getTiles()) {
                 final int tileOffsetX = (tile.getX() - dimension.getLowestX()) * TILE_SIZE;
                 final int tileOffsetY = (tile.getY() - dimension.getLowestY()) * TILE_SIZE;
+                if (HeightMapImageAccess.writeTile(tile, raster, tileOffsetX, tileOffsetY, format, minHeight, offset, scale)) continue;
                 switch (format) {
                     case INTEGER_HIGH_RESOLUTION:
                         for (int dx = 0; dx < TILE_SIZE; dx++) {

@@ -13,6 +13,18 @@ import java.nio.ByteBuffer;
 
 /** Bulk JNI entry points. A null result asks the caller to use its Java path. */
 public final class NativeSlices {
+    private static volatile boolean heightmapImageSymbolUnavailable;
+
+    /** Convert one raw-height plane; an old native library retains the Java image path. */
+    public static boolean convertHeightmapImage(ByteBuffer buffer) {
+        if (heightmapImageSymbolUnavailable || !Native.isRenderEnabled() || !NativeLoader.areSlicesAvailable()
+                || buffer == null || !buffer.isDirect() || buffer.isReadOnly()
+                || buffer.position() != 0 || buffer.limit() != 65568) return false;
+        try { return nativeConvertHeightmapImage(buffer, buffer.limit()) == 0; }
+        catch (UnsatisfiedLinkError e) { heightmapImageSymbolUnavailable = true; return false; }
+    }
+    private static native int nativeConvertHeightmapImage(ByteBuffer buffer, int length);
+
     private static volatile boolean chunkNbtSymbolUnavailable;
 
     /** Index all NBT payloads once; malformed or oversized trees retain the Java reader. */
