@@ -40,7 +40,7 @@ public final class GenericObject extends NamedObjectWithAttributes {
         this.dimX = dims.x;
         this.dimY = dims.y;
         this.dimZ = dims.z;
-        data = new Material[dimX * dimY * dimY];
+        data = new Material[dimX * dimY * dimZ];
         for (int x = 0; x < dimX; x++) {
             for (int y = 0; y < dimY; y++) {
                 for (int z = 0; z < dimZ; z++) {
