@@ -30,6 +30,26 @@ public class ProceduralTileGenerationParityTest {
             compare(new ConstantHeightMap(100000),0,256,0,0,true);
         } finally {restore(Native.GEN_KEY,gen);restore("welt.native.proceduralGeneration",flag);}
     }
+    @Test public void composedDisplacementPreservesCompleteTilesAndOperandOrder() throws Exception {
+        String gen=System.getProperty(Native.GEN_KEY), flag=System.getProperty("welt.native.proceduralGeneration");
+        try {
+            System.setProperty("welt.native.proceduralGeneration","true");
+            for(boolean displacedFirst:new boolean[]{false,true})for(int operator=0;operator<5;operator++) {
+                HeightMap displaced=BitmapWorldCreationBenchmark.proceduralMap("displacement");
+                HeightMap other=new SumHeightMap(new ConstantHeightMap(73),new NoiseHeightMap(30,.8,2,5));
+                HeightMap left=displacedFirst?displaced:other,right=displacedFirst?other:displaced;
+                HeightMap composition=switch(operator) {
+                    case 0 -> new MaximisingHeightMap(left,right);
+                    case 1 -> new MinimisingHeightMap(left,right);
+                    case 2 -> new SumHeightMap(left,right);
+                    case 3 -> new DifferenceHeightMap(left,right);
+                    default -> new ProductHeightMap(left,right);
+                };
+                compare(composition,-64,320,-1,1,true);compare(composition,0,256,1,-1,true);
+                composition.setSeed(-89173);compare(composition,-64,320,0,0,true);
+            }
+        } finally {restore(Native.GEN_KEY,gen);restore("welt.native.proceduralGeneration",flag);}
+    }
     @Test public void transformedDisplacementPreservesLiveSettingsAndFallbacks() throws Exception {
         String gen=System.getProperty(Native.GEN_KEY), flag=System.getProperty("welt.native.proceduralGeneration");
         try {

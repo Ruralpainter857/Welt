@@ -30,6 +30,10 @@ public final class BitmapWorldCreationBenchmark {
                 new NoiseHeightMap(100, 1.7, 4, 17), new NoiseHeightMap(60, .7, 3, -123)));
         return switch(source) {
             case "noise" -> map;
+            case "sum-displacement" -> new SumHeightMap(proceduralMap("displacement"),new ConstantHeightMap(17));
+            case "difference-displacement" -> new DifferenceHeightMap(new ConstantHeightMap(180),proceduralMap("displacement"));
+            case "product-displacement" -> new ProductHeightMap(proceduralMap("displacement"),new ConstantHeightMap(.7));
+            case "minimum-displacement" -> new MinimisingHeightMap(new ConstantHeightMap(90),proceduralMap("displacement"));
             case "fnl" -> new SumHeightMap(new ConstantHeightMap(32), new FastNoiseLiteHeightMap(160, .7, 3, 17));
             case "affine" -> new TransformingHeightMap("Creation", map, 1.7f, .65f, 31, -47, .37f);
             case "slope" -> new SlopeHeightMap(map, 3.7f);

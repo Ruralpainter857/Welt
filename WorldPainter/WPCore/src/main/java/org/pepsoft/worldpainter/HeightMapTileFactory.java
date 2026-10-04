@@ -148,7 +148,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
     static ProceduralTileSource prepareProceduralSource(HeightMap map, int x, int y, int width, int height) {
         if (map == null || width < 1 || height < 1 || width > 256 || height > 256) return null;
         GenerationBuffers b = GENERATION_BUFFERS.get();
-        int mode = 0, third = 0, order = 0;
+        int mode = 0, third = 0, order = 0, composition = 0;
         float scaling = 0;
         double[] matrix = null;
         // Compile the complete transformed displacement chain before creating any tile planes.
@@ -168,19 +168,22 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 matrix = b.previewAffineMatrix;
                 createTransformingHeightMapTransform(transform).getMatrix(matrix);
             }
-        } else if (map.getClass() == MaximisingHeightMap.class
-                && ((((MaximisingHeightMap)map).getHeightMap1().getClass() == DisplacementHeightMap.class)
-                != (((MaximisingHeightMap)map).getHeightMap2().getClass() == DisplacementHeightMap.class))) {
-            MaximisingHeightMap maximum = (MaximisingHeightMap) map;
-            boolean displacedFirst = maximum.getHeightMap1().getClass() == DisplacementHeightMap.class;
-            DisplacementHeightMap displacement = (DisplacementHeightMap)(displacedFirst ? maximum.getHeightMap1() : maximum.getHeightMap2());
-            HeightMap other = displacedFirst ? maximum.getHeightMap2() : maximum.getHeightMap1();
+        } else if ((map.getClass() == MaximisingHeightMap.class || map.getClass() == MinimisingHeightMap.class
+                || map.getClass() == SumHeightMap.class || map.getClass() == DifferenceHeightMap.class || map.getClass() == ProductHeightMap.class)
+                && ((((CombiningHeightMap)map).getHeightMap1().getClass() == DisplacementHeightMap.class)
+                != (((CombiningHeightMap)map).getHeightMap2().getClass() == DisplacementHeightMap.class))) {
+            CombiningHeightMap compositionMap = (CombiningHeightMap) map;
+            boolean displacedFirst = compositionMap.getHeightMap1().getClass() == DisplacementHeightMap.class;
+            DisplacementHeightMap displacement = (DisplacementHeightMap)(displacedFirst ? compositionMap.getHeightMap1() : compositionMap.getHeightMap2());
+            HeightMap other = displacedFirst ? compositionMap.getHeightMap2() : compositionMap.getHeightMap1();
             if (!b.prepareHeightMapProgramPair(displacement.getAngleMap(), displacement.getDistanceMap())) return null;
             int before = b.heightMapNodeCount;
             if (!b.appendHeightMapNode(displacement.getBaseHeightMap())) return null;
             third = b.heightMapNodeCount - before;
             if (!b.appendHeightMapNode(other)) return null;
             order = displacedFirst ? 1 : 0;
+            composition = map.getClass() == MaximisingHeightMap.class ? 0 : map.getClass() == MinimisingHeightMap.class ? 1
+                    : map.getClass() == SumHeightMap.class ? 2 : map.getClass() == DifferenceHeightMap.class ? 3 : 4;
             mode = 4;
         } else if (map.getClass() == DisplacementHeightMap.class) {
             DisplacementHeightMap displacement = (DisplacementHeightMap) map;
@@ -212,7 +215,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 || (long) x + width - 1L + margin > 16777216 || (long) y + height - 1L + margin > 16777216
                 || b.heightMapNodeCount > 64 || (b.heightMapNinePatchCount != 0 && !Native.isNinePatchGenEnabled())) return null;
         return new ProceduralTileSource(mode, x, y, width, height, scaling, matrix, b.heightMapFirstNodeCount,
-                b.heightMapSecondNodeCount, third, order, b.heightMapNodeCount, b.heightMapOpcodes, b.heightMapValues,
+                b.heightMapSecondNodeCount, third, order, composition, b.heightMapNodeCount, b.heightMapOpcodes, b.heightMapValues,
                 b.heightMapScales, b.heightMapOctaves, b.heightMapSeeds);
     }
 

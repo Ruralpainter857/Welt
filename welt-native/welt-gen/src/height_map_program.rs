@@ -1,4 +1,4 @@
-//! WTGP v1: bounded procedural source for the complete packed factory transaction.
+//! WTGP v1/v2: bounded procedural source for the complete packed factory transaction.
 use crate::height_map_affine::fill_affine_height_map_tree;
 use crate::height_map_displacement::{
     fill_affine_displacement_height_map_tree, fill_displacement_height_map_tree,
@@ -6,7 +6,7 @@ use crate::height_map_displacement::{
 use crate::height_map_slope::fill_slope_height_map_tree;
 use crate::height_map_tree::{fill_height_map_tree, HeightMapNode};
 use welt_core::error::WeltError;
-thread_local! { static MAXIMUM_SCRATCH: std::cell::RefCell<Vec<f64>> = const { std::cell::RefCell::new(Vec::new()) }; }
+thread_local! { static COMPOSITION_SCRATCH: std::cell::RefCell<Vec<f64>> = const { std::cell::RefCell::new(Vec::new()) }; }
 pub fn unpack_fast_noise_lite_settings(packed: i32) -> (i32, i32, i32) {
     if packed & 0x4000_0000 == 0 {
         (packed, 0, 1)
@@ -83,10 +83,12 @@ pub(crate) fn fill_source(data: &[u8], base: usize, output: &mut [f64]) -> Resul
     if base > data.len()
         || data.len() - base < 128
         || word(data, base) != 0x50475457
-        || word(data, base + 4) != 1
+        || !(1..=2).contains(&word(data, base + 4))
     {
         return Err(bad);
     }
+    let version = word(data, base + 4);
+    let composition = word(data, base + 60);
     let count = word(data, base + 12) as usize;
     let mode = word(data, base + 16);
     let width = word(data, base + 28) as usize;
@@ -99,10 +101,10 @@ pub(crate) fn fill_source(data: &[u8], base: usize, output: &mut [f64]) -> Resul
         || !(1..=256).contains(&height)
         || width.checked_mul(height) != Some(output.len())
         || word(data, base + 36) != 0
-        || data[base + 60..base + 64]
-            .iter()
-            .chain(data[base + 112..base + 128].iter())
-            .any(|v| *v != 0)
+        || (version == 2 && mode != 4)
+        || !(0..=4).contains(&composition)
+        || ((version == 1 || mode != 4) && composition != 0)
+        || data[base + 112..base + 128].iter().any(|v| *v != 0)
     {
         return Err(bad);
     }
@@ -171,7 +173,7 @@ pub(crate) fn fill_source(data: &[u8], base: usize, output: &mut [f64]) -> Resul
             {
                 return Err(bad);
             }
-            MAXIMUM_SCRATCH.with(|cell| {
+            COMPOSITION_SCRATCH.with(|cell| {
                 let mut displaced = cell.borrow_mut();
                 displaced.resize(output.len(), 0.0);
                 fill_displacement_height_map_tree(
@@ -192,21 +194,7 @@ pub(crate) fn fill_source(data: &[u8], base: usize, output: &mut [f64]) -> Resul
                     } else {
                         (*other, *displaced)
                     };
-                    *other = if left.is_nan() {
-                        left
-                    } else if right.is_nan() {
-                        right
-                    } else if left == 0.0 && right == 0.0 {
-                        if left.is_sign_negative() {
-                            right
-                        } else {
-                            left
-                        }
-                    } else if left >= right {
-                        left
-                    } else {
-                        right
-                    };
+                    *other = combine(left, right, composition);
                 }
                 Ok(())
             })
@@ -220,4 +208,95 @@ pub(crate) fn fill_source(data: &[u8], base: usize, output: &mut [f64]) -> Resul
         _ => unreachable!(),
     };
     result.map_err(|_| bad)
+}
+
+/// Java arithmetic order and Math.min/max rules, including NaN payloads and signed zero.
+fn combine(left: f64, right: f64, operation: i32) -> f64 {
+    match operation {
+        2 => left + right,
+        3 => left - right,
+        4 => left * right,
+        0 | 1 => {
+            if left.is_nan() {
+                left
+            } else if right.is_nan() {
+                right
+            } else if left == 0.0 && right == 0.0 {
+                if left.is_sign_negative() == (operation == 1) {
+                    left
+                } else {
+                    right
+                }
+            } else if (operation == 0 && left >= right) || (operation == 1 && left <= right) {
+                left
+            } else {
+                right
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+#[cfg(test)]
+mod composition_tests {
+    use super::*;
+    #[test]
+    fn extrema_preserve_signed_zero_and_nan_operand_order() {
+        let nan = f64::from_bits(0x7ff8000000000051);
+        assert_eq!(combine(-0.0, 0.0, 0).to_bits(), 0.0f64.to_bits());
+        assert_eq!(combine(0.0, -0.0, 1).to_bits(), (-0.0f64).to_bits());
+        for op in [0, 1] {
+            assert_eq!(combine(nan, 1.0, op).to_bits(), nan.to_bits());
+            assert_eq!(combine(1.0, nan, op).to_bits(), nan.to_bits());
+        }
+    }
+    fn packet(operation: i32, order: i32) -> Vec<u8> {
+        let mut data = vec![0u8; 256];
+        for (offset, value) in [
+            (0, 0x50475457),
+            (4, 2),
+            (8, 256),
+            (12, 4),
+            (16, 4),
+            (28, 1),
+            (32, 1),
+            (40, 1),
+            (44, 1),
+            (52, 1),
+            (56, order),
+            (60, operation),
+        ] {
+            data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        for (i, value) in [0.0f64, 0.0, 7.0, 3.0].into_iter().enumerate() {
+            let p = 128 + i * 32 + 8;
+            data[p..p + 8].copy_from_slice(&value.to_le_bytes());
+        }
+        data
+    }
+    #[test]
+    fn complete_packets_apply_the_operator_and_validate_version_boundaries() {
+        for (operation, expected) in [(0, 7.0), (1, 3.0), (2, 10.0), (3, 4.0), (4, 21.0)] {
+            let mut output = [-99.0];
+            fill_source(&packet(operation, 1), 0, &mut output).unwrap();
+            assert_eq!(output, [expected]);
+        }
+        let mut output = [-99.0];
+        fill_source(&packet(3, 0), 0, &mut output).unwrap();
+        assert_eq!(output, [-4.0]);
+        for (version, operation, mode) in [(1_i32, 2, 4_i32), (2, 5, 4), (2, 2, 0)] {
+            let mut data = packet(operation, 1);
+            data[4..8].copy_from_slice(&version.to_le_bytes());
+            data[16..20].copy_from_slice(&mode.to_le_bytes());
+            let mut output = [-99.0];
+            assert!(fill_source(&data, 0, &mut output).is_err());
+            assert_eq!(output, [-99.0]);
+        }
+    }
+    #[test]
+    fn arithmetic_keeps_left_and_right_distinct() {
+        assert_eq!(combine(7.0, 3.0, 2), 10.0);
+        assert_eq!(combine(7.0, 3.0, 3), 4.0);
+        assert_eq!(combine(3.0, 7.0, 3), -4.0);
+        assert_eq!(combine(7.0, 3.0, 4), 21.0);
+    }
 }
