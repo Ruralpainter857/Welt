@@ -5,7 +5,7 @@ import org.pepsoft.util.PerlinNoise;
 import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import static org.pepsoft.worldpainter.Constants.*;
 
-/** WHED v3 : modelage sans thème, un tampon compact et un appel JNI par tuile. */
+/** Compact mountain edits, optionally sharing one ordered height and theme transaction. */
 public final class MountainAccess {
     private MountainAccess() { }
     private static final ThreadLocal<Scratch> BUFFERS = ThreadLocal.withInitial(Scratch::new);
@@ -26,6 +26,12 @@ public final class MountainAccess {
             x += rw;
         }
         return true;
+    }
+    /** Complete themed mountain strokes share packed planes and one JNI call. */
+    public static boolean tryApplyThemed(Dimension dimension,int ox,int oy,int side,float[] forces,
+                                        float peak,float factor,boolean inverse) {
+        if ((long)side*side < 16384) return false;
+        return ThemedHeightBrushAccess.applyMountain(dimension,ox,oy,side,forces,peak,factor,inverse);
     }
     static Scratch edit(int tx, int ty, int minZ, int range, int x, int y, int width, int height,
                         float[] forces, int offset, int stride, float peak, float factor, boolean inverse,

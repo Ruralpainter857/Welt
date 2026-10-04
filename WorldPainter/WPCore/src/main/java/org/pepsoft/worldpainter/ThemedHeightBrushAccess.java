@@ -46,10 +46,21 @@ final class ThemedHeightBrushAccess {
     }
     static boolean apply(Dimension dimension,int ox,int oy,int width,int height,float[] forces,int mode,float value,
                          float low,float high,EditorFilterPlan filter,float dynamic) {
-        if(width<=0||height<=0||width>256||height>256||forces==null||(long)width*height!=forces.length||mode<0||mode>5
+        if(mode>5)return false;
+        return apply(dimension,ox,oy,width,height,forces,mode,value,low,high,filter,dynamic,1f);
+    }
+    static boolean applyMountain(Dimension dimension,int ox,int oy,int side,float[] forces,
+                                 float peak,float factor,boolean inverse) {
+        return apply(dimension,ox,oy,side,side,forces,inverse?7:6,peak,dimension.getMinHeight(),
+                dimension.getMaxHeight()-1,null,1f,factor);
+    }
+    private static boolean apply(Dimension dimension,int ox,int oy,int width,int height,float[] forces,int mode,float value,
+                                 float low,float high,EditorFilterPlan filter,float dynamic,float mountainFactor) {
+        if(width<=0||height<=0||width>256||height>256||forces==null||(long)width*height!=forces.length||mode<0||mode>7
                 ||(long)ox+width-1>Integer.MAX_VALUE||(long)oy+height-1>Integer.MAX_VALUE
                 ||!TileRegionAccess.canBatch(dimension,ox,oy,width,height)
                 ||dimension.getTileFactory().getClass()!=HeightMapTileFactory.class)return false;
+        if(mode>=6 && (filter!=null||!Float.isFinite(mountainFactor)||mountainFactor<0||!Float.isFinite(value)))return false;
         if(mode==5&&(width>246||height>246||(long)ox-5<Integer.MIN_VALUE||(long)oy-5<Integer.MIN_VALUE
                 ||(long)ox+width+4>Integer.MAX_VALUE||(long)oy+height+4>Integer.MAX_VALUE
                 ||!TileRegionAccess.canBatch(dimension,ox-5,oy-5,width+10,height+10)))return false;
@@ -99,10 +110,11 @@ final class ThemedHeightBrushAccess {
         long sizeLong=(long)start+(long)step*count;if(sizeLong>MAX_BYTES)return false;int size=(int)sizeLong;
         ByteBuffer d=scratch.data;if(d==null||d.capacity()<size){d=ByteBuffer.allocateDirect(size).order(ByteOrder.LITTLE_ENDIAN);scratch.data=d;}
         d.clear().limit(size);for(int i=0;i<header;i+=8)d.putLong(i,0);
-        d.putInt(0,0x42544857).putInt(4,filter!=null?5:Boolean.getBoolean("welt.native.interleavedTheme")?4:mode==5?3:mode<2?1:2).putInt(8,size).putInt(12,n).putInt(16,count)
+        d.putInt(0,0x42544857).putInt(4,mode>=6?6:filter!=null?5:Boolean.getBoolean("welt.native.interleavedTheme")?4:mode==5?3:mode<2?1:2).putInt(8,size).putInt(12,n).putInt(16,count)
                 .putInt(20,dimension.getMinHeight()).putInt(24,dimension.getMaxHeight()).putInt(28,mode).putFloat(32,value)
                 .putFloat(36,low).putFloat(40,high).putInt(44,ox).putInt(48,oy).putInt(52,width).putInt(56,height)
                 .putInt(60,forceBase).putInt(64,themeBase).putInt(68,start).putInt(72,step).putInt(76,Terrain.BEACHES.ordinal());
+        if(mode>=6)d.putFloat(88,mountainFactor).putFloat(92,Constants.MEDIUM_BLOBS);
         if(mode==5){
             d.putInt(88,haloBase).putInt(92,haloCount);
             d.position(haloBase);FloatBuffer halo=d.slice().order(d.order()).asFloatBuffer();

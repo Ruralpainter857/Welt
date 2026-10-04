@@ -79,7 +79,16 @@ public class RaiseMountain extends AbstractBrushOperation {
     private boolean applyNativeMountain(Dimension dimension, int centreX, int centreY,
                                         int radius, boolean inverse, int minZ, int maxRange,
                                         float peakHeight, boolean applyTheme) {
-        // Les thèmes peuvent observer les voisins après chaque édition ; leur parcours reste inchangé.
+        // Unsupported themes retain the original ordered Java application.
+        if (applyTheme && Boolean.getBoolean("welt.native.themedMountain") && radius >= 64 && radius <= 127
+                && Native.isGenEnabled() && NativeLoader.areSlicesAvailable()) {
+            int side = radius * 2 + 1, area = side * side;
+            if (nativeStrengths == null || nativeStrengths.length != area) nativeStrengths = new float[area];
+            for (int x = 0; x < side; x++) for (int y = 0; y < side; y++)
+                nativeStrengths[x * side + y] = getBrush().getFullStrength(x - radius, y - radius);
+            if (MountainAccess.tryApplyThemed(dimension, centreX - radius, centreY - radius, side,
+                    nativeStrengths, peakHeight, peakFactor, inverse)) return true;
+        }
         if (!applyTheme && radius >= 0 && radius <= 255 && dimension.getClass() == Dimension.class
                 && (getBrush() instanceof org.pepsoft.worldpainter.brushes.SymmetricBrush
                     || getBrush() instanceof org.pepsoft.worldpainter.brushes.RotatedBrush)

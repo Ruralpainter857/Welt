@@ -1,5 +1,6 @@
-//! WHTB v1/v2/v3/v4 groups all intersecting tiles to preserve the global X/Y theme RNG order.
+//! WHTB v1 through v6 group all intersecting tiles to preserve the global X/Y theme RNG order.
 //! V4 interleaves height and theme writes; earlier versions retain the bulk terrain path.
+//! V5 adds live filters. V6 adds mountain modes 6/7 with factor/scale at bytes 88/92.
 //! The shared packed planes retain Java global X/Y mutation and random-draw order.
 //! V3 adds mode 5 (smooth), border offset/count at bytes 88/92, and reserves bytes 96..128.
 //! Border floats precede the theme: left/right are 5 x (height + 10), top/bottom width x 5,
@@ -8,7 +9,11 @@
 #[path = "height_theme_filter.rs"]
 mod filter;
 use crate::height_map_import::{Plane, Theme, TileState};
-use welt_core::{error::WeltError, rng::JavaRandom};
+use welt_core::{
+    error::WeltError,
+    noise::{perlin::PerlinAxis2D, PerlinNoise},
+    rng::JavaRandom,
+};
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
 const AREA: usize = 16384;
 fn word(d: &[u8], p: usize) -> u32 {
@@ -61,6 +66,9 @@ pub struct BrushScratch {
     theme: Theme,
     tiles: Vec<TileWork>,
     input: Vec<f32>,
+    mountain: Option<PerlinNoise>,
+    mountain_x: Vec<PerlinAxis2D>,
+    mountain_y: Vec<PerlinAxis2D>,
 }
 /// Reject the complete frame before changing packed planes or advancing the RNG.
 pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
@@ -68,7 +76,7 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     if d.len() < 128
         || d.len() > MAX_BYTES
         || word(d, 0) != 0x42544857
-        || !matches!(word(d, 4), 1..=5)
+        || !matches!(word(d, 4), 1..=6)
         || word(d, 8) as usize != d.len()
         || word(d, 4) < 5
             && d[if word(d, 4) >= 3 && word(d, 28) == 5 {
@@ -105,6 +113,9 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     let beach = word(d, 76) as i32;
     let cell_ordered = word(d, 4) >= 4;
     let smooth = word(d, 4) >= 3 && mode == 5;
+    let mountain = word(d, 4) == 6;
+    let factor = f32::from_bits(word(d, 88));
+    let scale = f32::from_bits(word(d, 92));
     let halo_count = if smooth && w <= 246 && h <= 246 {
         10 * (w + h + 10)
     } else {
@@ -113,8 +124,18 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     if !(3..=64).contains(&n)
         || nt > 9
         || word(d, 4) == 3 && mode != 5
+        || mountain
+            && (mode < 6
+                || !value.is_finite()
+                || !factor.is_finite()
+                || factor < 0.0
+                || !scale.is_finite()
+                || scale <= 0.0
+                || d[96..128].iter().any(|&v| v != 0))
         || mode
-            > if word(d, 4) == 1 {
+            > if mountain {
+                7
+            } else if word(d, 4) == 1 {
                 1
             } else if word(d, 4) >= 3 {
                 5
@@ -299,6 +320,20 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     if cell_ordered {
         s.theme.prepare_cell_terrains();
     }
+    if mountain && s.mountain.is_none() {
+        s.mountain = Some(PerlinNoise::new(67));
+    }
+    if mountain {
+        // Coordinate divisions and fades are shared across every cell on an axis.
+        s.mountain_x.clear();
+        s.mountain_y.clear();
+        s.mountain_x.extend(
+            (0..w).map(|x| PerlinNoise::prepare_axis_2d(f64::from((ox + x as i32) as f32 / scale))),
+        );
+        s.mountain_y.extend(
+            (0..h).map(|y| PerlinNoise::prepare_axis_2d(f64::from((oy + y as i32) as f32 / scale))),
+        );
+    }
     // Height decisions use exactly the scalar float expression before quantization.
     for x in 0..w {
         for y in 0..h {
@@ -316,7 +351,7 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
                 f.strength(d, &s.tiles[..nt], tile, i, wx, wy, raw_force)
             });
             let t = &mut s.tiles[tile];
-            if !(force > 0.0) {
+            if !mountain && !(force > 0.0) {
                 continue;
             }
             let current = t.planes[0].get(d, i) as i32 as f32 / 256.0 + min as f32;
@@ -339,10 +374,31 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
                 }
                 _ => value,
             };
-            let edited = force * target + (1.0 - force) * current;
+            let edited = if mountain {
+                let variation = (0.5f32 - (force - 0.5f32).abs()) / 5.0f32;
+                let noise = s
+                    .mountain
+                    .as_ref()
+                    .unwrap()
+                    .get_perlin_noise_2d_prepared(s.mountain_x[x], s.mountain_y[y]);
+                let mut strength = force + noise * variation * force;
+                if strength < 0.0 {
+                    strength = 0.0;
+                } else if strength > 1.0 {
+                    strength = 1.0;
+                }
+                let range = (max - 1 - min) as f32;
+                if mode == 7 {
+                    java_max(range - (range - value) * factor * strength, 0.0) + min as f32
+                } else {
+                    java_min(value * factor * strength, range) + min as f32
+                }
+            } else {
+                force * target + (1.0 - force) * current
+            };
             let write = match mode {
                 2 | 5 => true,
-                0 | 3 => edited > current,
+                0 | 3 | 6 => edited > current,
                 _ => edited < current,
             };
             if write {
@@ -670,6 +726,77 @@ mod tests {
         let mut short = filtered_frame();
         short.truncate(200);
         assert!(apply(&mut short, &mut BrushScratch::default()).is_err());
+    }
+
+    fn mountain_frame(inverse: bool) -> Vec<u8> {
+        let mut data = frame();
+        put(&mut data, 4, 6);
+        put(&mut data, 28, if inverse { 7 } else { 6 });
+        put(
+            &mut data,
+            32,
+            if inverse {
+                64f32.to_bits()
+            } else {
+                220f32.to_bits()
+            },
+        );
+        put(&mut data, 88, 1.25f32.to_bits());
+        put(&mut data, 92, 32.771f32.to_bits());
+        let forces = word(&data, 60) as usize;
+        for i in 0..4 {
+            put(&mut data, forces + i * 4, 0.73f32.to_bits());
+        }
+        data
+    }
+    #[test]
+    fn mountain_theme_frames_keep_noise_quantisation_and_global_random_order() {
+        let noise = PerlinNoise::new(67);
+        let mut scratch = BrushScratch::default();
+        for inverse in [false, true] {
+            let mut data = mountain_frame(inverse);
+            apply(&mut data, &mut scratch).unwrap();
+            let start = word(&data, 68) as usize;
+            let step = word(&data, 72) as usize;
+            for x in 0..2 {
+                for y in 0..2 {
+                    let force = 0.73f32;
+                    let variation = (0.5f32 - (force - 0.5f32).abs()) / 5f32;
+                    let sample = noise.get_perlin_noise_2d(
+                        f64::from((x + 127) as f32 / 32.771f32),
+                        f64::from((y + 127) as f32 / 32.771f32),
+                    );
+                    let strength = force + sample * variation * force;
+                    let target = if inverse {
+                        383f32 - (383f32 - 64f32) * 1.25f32 * strength
+                    } else {
+                        220f32 * 1.25f32 * strength
+                    };
+                    let tile = x * 2 + y;
+                    let cell = if x == 0 { 127 } else { 0 } + if y == 0 { 127 * 128 } else { 0 };
+                    assert_eq!(
+                        word(&data, start + tile * step + 288 + cell * 4),
+                        (target * 256f32) as u32
+                    );
+                }
+            }
+            let mut rng = JavaRandom::new(9);
+            for _ in 0..4 {
+                rng.next_int_bound(15);
+            }
+            assert_eq!(long(&data, 80), rng.lcg_state());
+            assert!(scratch.tiles.iter().all(|t| t.heights.capacity() == 0));
+        }
+    }
+    #[test]
+    fn invalid_mountain_metadata_is_atomic() {
+        for (offset, value) in [(28, 0), (88, f32::NAN.to_bits()), (92, 0), (96, 1)] {
+            let mut data = mountain_frame(false);
+            put(&mut data, offset, value);
+            let before = data.clone();
+            assert!(apply(&mut data, &mut BrushScratch::default()).is_err());
+            assert_eq!(data, before);
+        }
     }
 
     fn smooth_frame() -> Vec<u8> {
