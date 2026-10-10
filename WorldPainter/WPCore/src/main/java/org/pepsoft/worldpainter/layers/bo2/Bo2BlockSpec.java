@@ -23,6 +23,16 @@ public class Bo2BlockSpec implements Serializable {
         this.material = material;
     }
 
+    /** Initializes coordinates for subclasses which resolve their material dynamically. */
+    protected Bo2BlockSpec(Point3i coords) {
+        if (coords == null) {
+            throw new NullPointerException();
+        }
+        this.coords = coords;
+        branch = null;
+        material = null;
+    }
+
     public Point3i getCoords() {
         return coords;
     }
