@@ -4829,3 +4829,4 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 mod structure;
 
 mod bo2;
+mod bo3;

@@ -25,6 +25,19 @@ public final class NativeSlices {
     }
     private static native int nativeConvertHeightmapImage(ByteBuffer buffer, int length);
 
+    private static volatile boolean bo3SymbolUnavailable;
+    public static boolean isBo3LoadingAvailable() {
+        return !bo3SymbolUnavailable && Boolean.getBoolean("welt.native.bo3")
+                && Native.isGenEnabled() && NativeLoader.areSlicesAvailable();
+    }
+    /** WBO3 v1 source-order events and a distinct material table; null requests Java fallback. */
+    public static byte[] parseBo3(byte[] source) {
+        if (!isBo3LoadingAvailable() || source == null || source.length < 1 || source.length > 16 * 1024 * 1024) return null;
+        try { return nativeParseBo3(source); }
+        catch (UnsatisfiedLinkError e) { bo3SymbolUnavailable = true; return null; }
+    }
+    private static native byte[] nativeParseBo3(byte[] source);
+
     private static volatile boolean bo2SymbolUnavailable;
     public static boolean isBo2LoadingAvailable() {
         return !bo2SymbolUnavailable && Boolean.getBoolean("welt.native.bo2")

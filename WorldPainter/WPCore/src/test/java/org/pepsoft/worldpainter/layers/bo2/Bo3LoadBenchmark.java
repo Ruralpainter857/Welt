@@ -16,7 +16,7 @@ public final class Bo3LoadBenchmark {
     private static volatile Bo3Object[] heldLibrary;
     private static final Material[] MATERIALS = {Material.STONE, Material.get(17, 0), Material.get(20, 0), Material.get(35, 4)};
 
-    private static String fixture(int side, String scenario) {
+    static String fixture(int side, String scenario) {
         StringBuilder text = new StringBuilder("# Synthetic complete-load fixture\nRotateRandomly: false\ncustom: preserved\n");
         String[] specs = {"1", "LOG:0", "20", "35:4"};
         for (int z = 0; z < side; z++) for (int y = 0; y < side; y++) for (int x = 0; x < side; x++) {
@@ -59,6 +59,7 @@ public final class Bo3LoadBenchmark {
     public static void main(String[] args) throws Exception {
         int side = Integer.getInteger("welt.benchmark.bo3Side", 16), objects = Integer.getInteger("welt.benchmark.bo3Objects", 4);
         int warmups = Integer.getInteger("welt.benchmark.bo3Warmups", 20);
+        boolean compare = args.length > 0 && args[0].equals("compare"), rust = args.length > 0 && args[0].equals("rust");
         String scenario = System.getProperty("welt.benchmark.bo3Scenario", "flat");
         if (side < 2 || side > 64 || objects < 1 || objects > 16 || warmups < 5 || warmups > 100 || !Set.of("flat", "mixed", "nbt").contains(scenario)) throw new IllegalArgumentException("Invalid BO3 fixture parameters");
         Path directory = Files.createTempDirectory(Path.of("target"), "welt-bo3-benchmark-");
@@ -74,19 +75,39 @@ public final class Bo3LoadBenchmark {
             var bean = (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
             if (!bean.isThreadAllocatedMemoryEnabled()) bean.setThreadAllocatedMemoryEnabled(true);
             long thread = Thread.currentThread().getId();
-            double[] times = new double[9]; long[] allocations = new long[9];
+            double[] times = new double[9], javaTimes = new double[9], rustTimes = new double[9], ratios = new double[9];
+            long[] allocations = new long[9], javaAlloc = new long[9], rustAlloc = new long[9];
+            long callsAtStart = Bo3NativeParser.completedObjects();
             for (int trial = -warmups; trial < 9; trial++) {
-                Bo3Object[] loaded = new Bo3Object[objects];
-                long before = bean.getThreadAllocatedBytes(thread), start = System.nanoTime();
-                for (int i = 0; i < objects; i++) loaded[i] = Bo3Object.load("Benchmark", source.toFile());
-                long elapsed = System.nanoTime() - start, allocated = bean.getThreadAllocatedBytes(thread) - before;
-                for (Bo3Object object : loaded) validate(object, source.toFile(), side, scenario);
-                heldLibrary = loaded;
-                if (trial >= 0) { times[trial] = elapsed / 1e6; allocations[trial] = allocated; }
+                for (int pass = 0; pass < (compare ? 2 : 1); pass++) {
+                    boolean nativeMode = compare ? ((trial + pass) & 1) != 0 : rust;
+                    System.setProperty("wp.native.gen", Boolean.toString(nativeMode));
+                    System.setProperty("welt.native.bo3", Boolean.toString(nativeMode));
+                    long callsBefore = Bo3NativeParser.completedObjects();
+                    Bo3Object[] loaded = new Bo3Object[objects];
+                    long before = bean.getThreadAllocatedBytes(thread), start = System.nanoTime();
+                    for (int i = 0; i < objects; i++) loaded[i] = Bo3Object.load("Benchmark", source.toFile());
+                    long elapsed = System.nanoTime() - start, allocated = bean.getThreadAllocatedBytes(thread) - before;
+                    if (Bo3NativeParser.completedObjects() - callsBefore != (nativeMode ? objects : 0)) throw new AssertionError("Unexpected native coverage");
+                    for (Bo3Object object : loaded) validate(object, source.toFile(), side, scenario);
+                    heldLibrary = loaded;
+                    if (trial >= 0) {
+                        times[trial] = elapsed / 1e6; allocations[trial] = allocated;
+                        if (nativeMode) { rustTimes[trial] = elapsed / 1e6; rustAlloc[trial] = allocated; }
+                        else { javaTimes[trial] = elapsed / 1e6; javaAlloc[trial] = allocated; }
+                    }
+                }
+                if (compare && trial >= 0) ratios[trial] = javaTimes[trial] / rustTimes[trial];
             }
             System.gc(); Thread.sleep(150); Arrays.sort(times); Arrays.sort(allocations);
-            System.out.printf(Locale.ROOT, "bo3Library scenario=%s side=%d objects=%d medianMs=%.3f callerAllocatedBytes=%d postGcHeapBytes=%d sourceBytes=%d heldObjects=%d%n",
-                    scenario, side, objects, times[4], allocations[4], ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed(), Files.size(source), heldLibrary.length);
+            if (compare) {
+                Arrays.sort(javaTimes); Arrays.sort(rustTimes); Arrays.sort(ratios); Arrays.sort(javaAlloc); Arrays.sort(rustAlloc);
+                System.out.printf(Locale.ROOT, "bo3Paired scenario=%s side=%d objects=%d javaMs=%.3f rustMs=%.3f ratio=%.3f range=%.3f..%.3f javaAllocated=%d rustAllocated=%d nativeCalls=%d postGcHeapBytes=%d%n",
+                        scenario, side, objects, javaTimes[4], rustTimes[4], ratios[4], ratios[0], ratios[8], javaAlloc[4], rustAlloc[4], Bo3NativeParser.completedObjects() - callsAtStart, ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed());
+            } else {
+                System.out.printf(Locale.ROOT, "bo3Library scenario=%s side=%d objects=%d medianMs=%.3f callerAllocatedBytes=%d postGcHeapBytes=%d sourceBytes=%d heldObjects=%d%n",
+                        scenario, side, objects, times[4], allocations[4], ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed(), Files.size(source), heldLibrary.length);
+            }
         } finally {
             // Delete only the three paths created by this benchmark, never a recursive directory tree.
             Files.deleteIfExists(source); Files.deleteIfExists(nbt); Files.deleteIfExists(directory);
