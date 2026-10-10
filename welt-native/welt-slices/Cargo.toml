@@ -15,3 +15,5 @@ welt-gen = { path = "../welt-gen" }
 welt-export = { path = "../welt-export" }
 welt-nbt = { path = "../welt-nbt" }
 welt-render = { path = "../welt-render" }
+
+welt-objects = { path = "../welt-objects" }

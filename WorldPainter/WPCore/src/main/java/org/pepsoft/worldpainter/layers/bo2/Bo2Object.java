@@ -232,6 +232,22 @@ public final class Bo2Object extends AbstractObject implements Bo2ObjectProvider
      * @throws IOException If an I/O error occurred while reading the stream.
      */
     public static Bo2Object load(String objectName, InputStream stream) throws IOException {
+        if (! org.pepsoft.worldpainter.nativeapi.NativeSlices.isBo2LoadingAvailable()) return loadJava(objectName, stream);
+        try (InputStream owned = stream) {
+            byte[] prefix = owned.readNBytes(16 * 1024 * 1024 + 1);
+            Bo2NativeParser.Decoded decoded = prefix.length <= 16 * 1024 * 1024 ? Bo2NativeParser.decode(prefix) : null;
+            if (decoded != null) {
+                Bo2Object object = new Bo2Object(objectName, decoded.properties(), decoded.blocks(), decoded.origin(), decoded.dimensions(), null);
+                Bo2NativeParser.completed();
+                return object;
+            }
+            InputStream original = new SequenceInputStream(new ByteArrayInputStream(prefix), new FilterInputStream(owned) { @Override public void close() { } });
+            // The outer resource owns the original stream, including fallback and exception paths.
+            return loadJava(objectName, new FilterInputStream(original) { @Override public void close() { } });
+        }
+    }
+
+    private static Bo2Object loadJava(String objectName, InputStream stream) throws IOException {
         try (BufferedReader in = new BufferedReader(new InputStreamReader(stream, US_ASCII))) {
             final Map<String, String> properties = new HashMap<>();
             final Map<Point3i, Bo2BlockSpec> blocks = new HashMap<>();

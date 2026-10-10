@@ -630,6 +630,10 @@ name = "welt-nbt"
 version = "0.1.0"
 
 [[package]]
+name = "welt-objects"
+version = "0.1.0"
+
+[[package]]
 name = "welt-render"
 version = "0.1.0"
 
@@ -641,6 +645,7 @@ dependencies = [
  "welt-export",
  "welt-gen",
  "welt-nbt",
+ "welt-objects",
  "welt-render",
 ]
 

@@ -1,6 +1,6 @@
-﻿[workspace]
+[workspace]
 resolver = "2"
-members = ["welt-core", "welt-gen", "welt-render", "welt-export", "welt-nbt", "welt-slices"]
+members = ["welt-core", "welt-gen", "welt-render", "welt-export", "welt-nbt", "welt-objects", "welt-slices"]
 
 [workspace.package]
 version = "0.1.0"
