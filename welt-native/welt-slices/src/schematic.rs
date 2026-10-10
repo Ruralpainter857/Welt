@@ -1,9 +1,9 @@
 //! Array borrowing for one complete schematic, with no per-block JNI.
 use super::*;
-struct Lease {
+pub(super) struct Lease {
     env: *mut JNIEnv,
     array: jobject,
-    pointer: *mut c_void,
+    pub(super) pointer: *mut c_void,
     integers: bool,
     commit: bool,
 }
@@ -28,7 +28,7 @@ impl Drop for Lease {
         }
     }
 }
-unsafe fn borrow(env: *mut JNIEnv, array: jobject, integers: bool) -> Option<Lease> {
+pub(super) unsafe fn borrow(env: *mut JNIEnv, array: jobject, integers: bool) -> Option<Lease> {
     unsafe {
         type Get = unsafe extern "system" fn(*mut JNIEnv, jobject, *mut u8) -> *mut c_void;
         let get: Get = std::mem::transmute(function(

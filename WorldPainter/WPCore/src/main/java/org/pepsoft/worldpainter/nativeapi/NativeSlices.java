@@ -25,6 +25,19 @@ public final class NativeSlices {
     }
     private static native int nativeConvertHeightmapImage(ByteBuffer buffer, int length);
 
+    private static volatile boolean structureSymbolUnavailable;
+    public static boolean isStructureLoadingAvailable() {
+        return !structureSymbolUnavailable && Boolean.getBoolean("welt.native.structure")
+                && Native.isGenEnabled() && NativeLoader.areSlicesAvailable();
+    }
+    /** One complete vanilla structure; null requests the original Java reader. */
+    public static byte[] extractStructure(byte[] source) {
+        if (!isStructureLoadingAvailable() || source == null || source.length < 1 || source.length > 16 * 1024 * 1024) return null;
+        try { return nativeExtractStructure(source); }
+        catch (UnsatisfiedLinkError e) { structureSymbolUnavailable = true; return null; }
+    }
+    private static native byte[] nativeExtractStructure(byte[] source);
+
     private static volatile boolean schematicSymbolUnavailable;
     public static boolean isSchematicLoadingAvailable() {
         return !schematicSymbolUnavailable && Boolean.getBoolean("welt.native.schem")

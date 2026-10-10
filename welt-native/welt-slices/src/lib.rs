@@ -4825,3 +4825,5 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
         match welt_render::heightmap_image::convert(data) { Ok(()) => WeltError::Ok as jint, Err(_) => WeltError::IllegalArgument as jint }
     }) }
 }
+
+mod structure;

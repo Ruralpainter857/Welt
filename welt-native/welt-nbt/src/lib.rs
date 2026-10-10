@@ -7,3 +7,6 @@ pub mod region_header;
 pub mod nbt_index;
 
 pub mod schematic;
+
+
+pub mod structure;
