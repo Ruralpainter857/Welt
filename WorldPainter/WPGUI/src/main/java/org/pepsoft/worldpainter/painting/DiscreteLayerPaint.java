@@ -31,6 +31,7 @@ import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 
 import java.awt.*;
+import java.util.function.DoubleSupplier;
 
 import static org.pepsoft.worldpainter.Constants.TILE_SIZE_BITS;
 import static org.pepsoft.worldpainter.Constants.TILE_SIZE_MASK;
@@ -42,12 +43,18 @@ import static org.pepsoft.worldpainter.Constants.TILE_SIZE_MASK;
  */
 public final class DiscreteLayerPaint extends LayerPaint {
     public DiscreteLayerPaint(Layer layer, int value) {
+        this(layer, value, Math::random);
+    }
+    /** Package-owned deterministic seam; production keeps the shared Math.random stream. */
+    DiscreteLayerPaint(Layer layer, int value, DoubleSupplier random) {
         super(layer);
         if ((layer.getDataSize() != Layer.DataSize.NIBBLE) && (layer.getDataSize() != Layer.DataSize.BYTE)) {
             throw new IllegalArgumentException("Layer " + layer + " not a continuous layer");
         }
+        this.random = java.util.Objects.requireNonNull(random);
         this.value = value;
         defaultValue = layer.getDefaultValue();
+        stableDefault = stableDefault(layer);
     }
 
     public int getValue() {
@@ -74,7 +81,8 @@ public final class DiscreteLayerPaint extends LayerPaint {
         final int x1 = centreX + boundingBox.x, y1 = centreY + boundingBox.y, x2 = x1 + boundingBox.width - 1, y2 = y1 + boundingBox.height - 1;
         final int tileX1 = x1 >> TILE_SIZE_BITS, tileY1 = y1 >> TILE_SIZE_BITS, tileX2 = x2 >> TILE_SIZE_BITS, tileY2 = y2 >> TILE_SIZE_BITS;
         final boolean oneTile = (tileX1 == tileX2) && (tileY1 == tileY2);
-        if (applyNativeDiscreteLayerBrush(dimension, centreX, centreY, dynamicLevel,
+        if (applyNativeDitheredBrush(dimension, centreX, centreY, dynamicLevel, x1, y1, x2, y2, oneTile, value, false)
+                || applyNativeDiscreteLayerBrush(dimension, centreX, centreY, dynamicLevel,
                 x1, y1, x2, y2, oneTile, value)) {
             return;
         }
@@ -90,7 +98,7 @@ public final class DiscreteLayerPaint extends LayerPaint {
                 for (int y = y1InTile; y <= y2InTile; y++) {
                     for (int x = x1InTile; x <= x2InTile; x++) {
                         final float strength = dynamicLevel * getStrength(centreX, centreY, tileXInWorld + x, tileYInWorld + y);
-                        if ((strength > 0.95f) || (Math.random() < strength)) {
+                        if ((strength > 0.95f) || (random.getAsDouble() < strength)) {
                             tile.setLayerValue(layer, x, y, value);
                         }
                     }
@@ -111,7 +119,7 @@ public final class DiscreteLayerPaint extends LayerPaint {
                 for (int y = y1; y <= y2; y++) {
                     for (int x = x1; x <= x2; x++) {
                         final float strength = dynamicLevel * getStrength(centreX, centreY, x, y);
-                        if ((strength > 0.95f) || (Math.random() < strength)) {
+                        if ((strength > 0.95f) || (random.getAsDouble() < strength)) {
                             dimension.setLayerValueAt(layer, x, y, value);
                         }
                     }
@@ -141,7 +149,8 @@ public final class DiscreteLayerPaint extends LayerPaint {
         final int x1 = centreX + boundingBox.x, y1 = centreY + boundingBox.y, x2 = x1 + boundingBox.width - 1, y2 = y1 + boundingBox.height - 1;
         final int tileX1 = x1 >> TILE_SIZE_BITS, tileY1 = y1 >> TILE_SIZE_BITS, tileX2 = x2 >> TILE_SIZE_BITS, tileY2 = y2 >> TILE_SIZE_BITS;
         final boolean oneTile = (tileX1 == tileX2) && (tileY1 == tileY2);
-        if (applyNativeDiscreteLayerBrush(dimension, centreX, centreY, dynamicLevel,
+        if (applyNativeDitheredBrush(dimension, centreX, centreY, dynamicLevel, x1, y1, x2, y2, oneTile, defaultValue, true)
+                || applyNativeDiscreteLayerBrush(dimension, centreX, centreY, dynamicLevel,
                 x1, y1, x2, y2, oneTile, defaultValue)) {
             return;
         }
@@ -157,7 +166,7 @@ public final class DiscreteLayerPaint extends LayerPaint {
                 for (int y = y1InTile; y <= y2InTile; y++) {
                     for (int x = x1InTile; x <= x2InTile; x++) {
                         final float strength = dynamicLevel * getFullStrength(centreX, centreY, tileXInWorld + x, tileYInWorld + y);
-                        if ((strength > 0.95f) || (Math.random() < strength)) {
+                        if ((strength > 0.95f) || (random.getAsDouble() < strength)) {
                             tile.setLayerValue(layer, x, y, defaultValue);
                         }
                     }
@@ -178,7 +187,7 @@ public final class DiscreteLayerPaint extends LayerPaint {
                 for (int y = y1; y <= y2; y++) {
                     for (int x = x1; x <= x2; x++) {
                         final float strength = dynamicLevel * getFullStrength(centreX, centreY, x, y);
-                        if ((strength > 0.95f) || (Math.random() < strength)) {
+                        if ((strength > 0.95f) || (random.getAsDouble() < strength)) {
                             dimension.setLayerValueAt(layer, x, y, defaultValue);
                         }
                     }
@@ -206,6 +215,47 @@ public final class DiscreteLayerPaint extends LayerPaint {
         dimension.setLayerValueAt(layer, x, y, defaultValue);
     }
 
+    private static boolean stableDefault(Layer layer) {
+        if (layer == org.pepsoft.worldpainter.layers.Biome.INSTANCE) return true;
+        try { return layer.getClass().getMethod("getDefaultValue").getDeclaringClass() == Layer.class; }
+        catch (ReflectiveOperationException | SecurityException e) { return false; }
+    }
+
+    private boolean applyNativeDitheredBrush(Dimension dimension, int centreX, int centreY, float dynamicLevel,
+                                             int x1, int y1, int x2, int y2, boolean oneTile, int target, boolean removing) {
+        long width = (long) x2 - x1 + 1, height = (long) y2 - y1 + 1;
+        if (!dither || filterEnabled || !stableDefault
+                || !Boolean.parseBoolean(System.getProperty("welt.native.ditheredDiscrete", "true"))
+                || !(brush instanceof SymmetricBrush || brush instanceof BitmapBrush || brush instanceof RotatedBrush)
+                || width < 1 || height < 1 || width > 1024 || height > 1024 || width * height > 1_048_576
+                || !MaskedPlaneAccess.canBatchLayer(dimension, layer, target, x1, y1, (int) width, (int) height)) return false;
+        // The original single-tile path obtains an editable tile even when no pixel is selected.
+        if (oneTile && dimension.getTileForEditing(x1 >> TILE_SIZE_BITS, y1 >> TILE_SIZE_BITS) == null) return true;
+        int capacity = (int) width * Math.min(128, (int) height);
+        if (nativeModified == null || nativeModified.length < capacity) nativeModified = new byte[capacity];
+        for (int row = 0; row < height;) {
+            int originY = y1 + row, rows = Math.min((int) height - row, 128 - (originY & TILE_SIZE_MASK));
+            int index = 0;
+            try {
+                for (int dy = 0; dy < rows; dy++) for (int dx = 0; dx < width; dx++) {
+                    int x = x1 + dx, y = originY + dy;
+                    // Removal deliberately ignores brush level, as in the original Java painter.
+                    float strength = dynamicLevel * (removing ? getFullStrength(centreX, centreY, x, y) : getStrength(centreX, centreY, x, y));
+                    byte selected = (byte) (strength > 0.95f || random.getAsDouble() < strength ? 1 : 0);
+                    nativeModified[index++] = selected;
+                }
+            } catch (RuntimeException failure) {
+                // Keep the completed prefix when source-mask preparation fails partway through a band.
+                java.util.Arrays.fill(nativeModified, index, rows * (int) width, (byte) 0);
+                if (index > 0) MaskedPlaneAccess.applyLayer(dimension, layer, target, x1, originY,
+                        (int) width, rows, nativeModified, 0, (int) width);
+                throw failure;
+            }
+            MaskedPlaneAccess.applyLayer(dimension, layer, target, x1, originY, (int) width, rows, nativeModified, 0, (int) width);
+            row += rows;
+        }
+        return true;
+    }
     private boolean applyNativeDiscreteLayerBrush(Dimension dimension, int centreX, int centreY,
                                                   float dynamicLevel, int x1, int y1, int x2, int y2,
                                                   boolean oneTile, int targetValue) {
@@ -250,6 +300,8 @@ public final class DiscreteLayerPaint extends LayerPaint {
     }
 
     private final int value, defaultValue;
+    private final DoubleSupplier random;
+    private final boolean stableDefault;
     private byte[] nativeModified;
     private float[] nativeStrengths;
 }

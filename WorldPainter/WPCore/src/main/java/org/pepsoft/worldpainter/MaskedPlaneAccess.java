@@ -13,6 +13,25 @@ public final class MaskedPlaneAccess {
     private static final ThreadLocal<ByteBuffer> BUFFER = ThreadLocal.withInitial(
             () -> ByteBuffer.allocateDirect(32816).order(ByteOrder.LITTLE_ENDIAN));
 
+    /** Preflight before consuming random draws or preparing a batched operation. */
+    public static boolean canBatchLayer(Dimension dimension, Layer layer, int value, int ox, int oy, int width, int height) {
+        return dimension != null && layer != null && width > 0 && height > 0
+                && (long) ox + width - 1 <= Integer.MAX_VALUE && (long) oy + height - 1 <= Integer.MAX_VALUE
+                && value >= 0 && value <= layer.dataSize.maxValue
+                && (layer.dataSize == Layer.DataSize.NIBBLE || layer.dataSize == Layer.DataSize.BYTE)
+                && TileRegionAccess.canBatch(dimension, ox, oy, width, height);
+    }
+
+    /** Apply a caller-owned padded mask region, allowing a reusable band buffer. */
+    public static void applyLayer(Dimension dimension, Layer layer, int value, int ox, int oy,
+                                  int width, int height, byte[] mask, int offset, int stride) {
+        Objects.requireNonNull(layer);
+        if (layer.dataSize != Layer.DataSize.BIT && layer.dataSize != Layer.DataSize.BIT_PER_CHUNK
+                && layer.dataSize != Layer.DataSize.NIBBLE && layer.dataSize != Layer.DataSize.BYTE)
+            throw new IllegalArgumentException("Unsupported masked layer");
+        apply(dimension, layer, null, value, ox, oy, width, height, mask, offset, stride);
+    }
+
     public static void applyLayer(Dimension dimension, Layer layer, int value, int ox, int oy,
                                   int width, int height, byte[] mask) {
         Objects.requireNonNull(layer);
@@ -29,11 +48,18 @@ public final class MaskedPlaneAccess {
                                int width, int height, byte[] mask) {
         if (width <= 0 || height <= 0 || (long) width * height != mask.length)
             throw new IllegalArgumentException("Expected one mask value per region cell");
+        apply(dimension, layer, terrain, value, ox, oy, width, height, mask, 0, width);
+    }
+    private static void apply(Dimension dimension, Layer layer, Terrain terrain, int value, int ox, int oy,
+                               int width, int height, byte[] mask, int offset, int stride) {
+        if (mask == null || width <= 0 || height <= 0 || offset < 0 || stride < width
+                || (long) offset + (long) (height - 1) * stride + width > mask.length)
+            throw new IllegalArgumentException("Mask region exceeds caller storage");
         boolean bit = layer != null && (layer.dataSize == Layer.DataSize.BIT || layer.dataSize == Layer.DataSize.BIT_PER_CHUNK);
         boolean batch = TileRegionAccess.canBatch(dimension, ox, oy, width, height)
                 && (layer == null || value >= 0 && value <= layer.dataSize.maxValue);
         if (!batch) {
-            for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) if (mask[y * width + x] != 0) {
+            for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) if (mask[offset + y * stride + x] != 0) {
                 if (layer == null) dimension.setTerrainAt(ox + x, oy + y, terrain);
                 else if (bit) dimension.setBitLayerValueAt(layer, ox + x, oy + y, value != 0);
                 else dimension.setLayerValueAt(layer, ox + x, oy + y, value);
@@ -46,10 +72,10 @@ public final class MaskedPlaneAccess {
                 int wx = ox + x, lx = wx & TILE_SIZE_MASK, rw = Math.min(width - x, TILE_SIZE - lx);
                 boolean selected = false;
                 for (int dy = 0; dy < rh && !selected; dy++) for (int dx = 0; dx < rw; dx++)
-                    if (mask[(y + dy) * width + x + dx] != 0) { selected = true; break; }
+                    if (mask[offset + (y + dy) * stride + x + dx] != 0) { selected = true; break; }
                 if (selected) {
                     Tile tile = dimension.getTileForEditing(wx >> TILE_SIZE_BITS, wy >> TILE_SIZE_BITS);
-                    if (tile != null) tile.editMaskedRegion(layer, terrain, value, lx, ly, rw, rh, mask, y * width + x, width);
+                    if (tile != null) tile.editMaskedRegion(layer, terrain, value, lx, ly, rw, rh, mask, offset + y * stride + x, stride);
                 }
                 x += rw;
             }
