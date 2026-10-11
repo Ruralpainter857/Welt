@@ -47,3 +47,71 @@ mod tests {
         assert_eq!(output, [42.0; 2]);
     }
 }
+
+/// Match Java `(byte) (fullStrength * 255)` including saturating float-to-int
+/// conversion followed by low-byte truncation. Validate before any output write.
+pub fn expand_raster(
+    source: &[f32],
+    stride: usize,
+    radius: usize,
+    output: &mut [u8],
+) -> Result<(), &'static str> {
+    if radius > 1023
+        || stride < radius + 1
+        || stride > 2048
+        || source.len() != stride * stride
+        || output.len() != (2 * radius + 1).pow(2)
+    {
+        return Err("Invalid symmetric raster dimensions");
+    }
+    let side = 2 * radius + 1;
+    for y in 0..=radius {
+        let positive = (radius + y) * side;
+        let negative = (radius - y) * side;
+        for x in 0..=radius {
+            let value = ((source[x * stride + y] * 255.0) as i32) as u8;
+            output[positive + radius + x] = value;
+            output[positive + radius - x] = value;
+            output[negative + radius + x] = value;
+            output[negative + radius - x] = value;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod raster_tests {
+    use super::*;
+    #[test]
+    fn expands_asymmetric_quadrants_and_retained_stride() {
+        let source: Vec<f32> = (0..49).map(|i| (i as f32 - 12.0) / 17.0).collect();
+        let mut output = vec![42; 25];
+        expand_raster(&source, 7, 2, &mut output).unwrap();
+        for y in 0..5usize {
+            for x in 0..5usize {
+                let expected = ((source[x.abs_diff(2) * 7 + y.abs_diff(2)] * 255.0) as i32) as u8;
+                assert_eq!(output[y * 5 + x], expected);
+            }
+        }
+    }
+    #[test]
+    fn invalid_raster_does_not_mutate_output() {
+        let mut output = [42; 9];
+        assert!(expand_raster(&[0.0; 4], 1, 1, &mut output).is_err());
+        assert_eq!(output, [42; 9]);
+    }
+    #[test]
+    fn follows_java_non_finite_quantization() {
+        for (value, expected) in [
+            (f32::NAN, 0),
+            (f32::INFINITY, 255),
+            (f32::NEG_INFINITY, 0),
+            (-0.0, 0),
+            (-1.0, 1),
+        ] {
+            let mut output = [42];
+            expand_raster(&[value], 1, 0, &mut output).unwrap();
+            assert_eq!(output[0], expected);
+        }
+    }
+}

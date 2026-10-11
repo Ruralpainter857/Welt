@@ -13,6 +13,21 @@ import java.nio.ByteBuffer;
 
 /** Bulk JNI entry points. A null result asks the caller to use its Java path. */
 public final class NativeSlices {
+    private static volatile boolean brushRasterSymbolUnavailable;
+    public static boolean isBrushRasterAvailable() {
+        return !brushRasterSymbolUnavailable && Boolean.getBoolean("welt.native.brushRaster")
+                && Native.isGenEnabled() && NativeLoader.areSlicesAvailable();
+    }
+    /** Expand and quantize one symmetric quadrant into the caller-owned Java2D source raster. */
+    public static boolean expandBrushRaster(float[] source, int stride, int radius, byte[] output) {
+        long side = 2L * radius + 1;
+        if (source == null || output == null || radius < 0 || radius > 1023 || stride < radius + 1
+                || stride > 2048 || source.length != (long) stride * stride || output.length != side * side
+                || !isBrushRasterAvailable()) return false;
+        try { return nativeExpandBrushRaster(source, stride, radius, output) == 0; }
+        catch (UnsatisfiedLinkError e) { brushRasterSymbolUnavailable = true; return false; }
+    }
+    private static native int nativeExpandBrushRaster(float[] source, int stride, int radius, byte[] output);
     private static volatile boolean brushCacheSymbolUnavailable;
     public static boolean isBrushCacheAvailable() {
         return !brushCacheSymbolUnavailable && Boolean.getBoolean("welt.native.brushCache")

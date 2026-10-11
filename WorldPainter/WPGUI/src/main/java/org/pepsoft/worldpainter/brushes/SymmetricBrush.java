@@ -91,6 +91,10 @@ public abstract class SymmetricBrush extends AbstractBrush {
 
     protected abstract float calcStrength(int dx, int dy);
 
+    /** Package-owned raster output; no mutable cache storage is exposed. */
+    final boolean fillFullStrengthRaster(byte[] output) {
+        return NativeSlices.expandBrushRaster(fullStrengthCache, cacheSide, radius, output);
+    }
     private int index(int dx, int dy) {
         int x = Math.abs(dx), y = Math.abs(dy);
         if (x < 0 || y < 0 || x >= cacheSide || y >= cacheSide) {
