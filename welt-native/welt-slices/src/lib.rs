@@ -4835,3 +4835,6 @@ mod legacy_schematic;
 mod material_volume;
 
 mod brush_cache;
+
+mod critical_array;
+mod image_range;

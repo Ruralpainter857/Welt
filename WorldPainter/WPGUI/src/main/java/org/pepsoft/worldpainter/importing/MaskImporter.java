@@ -8,6 +8,7 @@ package org.pepsoft.worldpainter.importing;
 import com.google.common.collect.ImmutableSet;
 import org.pepsoft.util.ProgressReceiver;
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.ImageRangeAccess;
 import org.pepsoft.worldpainter.HeightMap;
 import org.pepsoft.worldpainter.MaskImportAccess;
 import org.pepsoft.worldpainter.Terrain;
@@ -103,6 +104,8 @@ public class MaskImporter {
             case SIXTEEN_BIT_GREY_SCALE:
             case THIRTY_TWO_BIT_GREY_SCALE:
                 final long lImageMaxValue = (inputType == EIGHT_BIT_GREY_SCALE) ? 255L : ((inputType == SIXTEEN_BIT_GREY_SCALE) ? 65535L : 4294967295L);
+                double[] integralRange = ImageRangeAccess.range(image, 0, true, Integer.MAX_VALUE, Integer.MIN_VALUE, 0, lImageMaxValue, true);
+                if (integralRange != null) { imageLowValue=integralRange[0]; imageHighValue=integralRange[1]; break; }
                 long lImageLowValue = Integer.MAX_VALUE, lImageHighValue = Integer.MIN_VALUE;
 outer:          for (int x = 0; x < width; x++) {
                     for (int y = 0; y < height; y++) {
@@ -125,6 +128,8 @@ outer:          for (int x = 0; x < width; x++) {
             case FLOAT_GREY_SCALE:
             case DOUBLE_GREY_SCALE:
                 final double dImageMaxValue = Double.MAX_VALUE;
+                double[] floatingRange = ImageRangeAccess.range(image, 0, false, Double.MAX_VALUE, -Double.MAX_VALUE, 0.0, dImageMaxValue);
+                if (floatingRange != null) { imageLowValue=floatingRange[0]; imageHighValue=floatingRange[1]; break; }
                 double dImageLowValue = Double.MAX_VALUE, dImageHighValue = -Double.MAX_VALUE;
 outer:          for (int x = 0; x < width; x++) {
                     for (int y = 0; y < height; y++) {

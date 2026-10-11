@@ -49,3 +49,5 @@ pub mod line_set_stroke;
 pub mod map_surface;
 
 pub mod brush_cache;
+
+pub mod image_range;

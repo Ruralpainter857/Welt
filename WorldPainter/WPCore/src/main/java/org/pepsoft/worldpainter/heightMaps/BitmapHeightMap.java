@@ -7,6 +7,7 @@
 package org.pepsoft.worldpainter.heightMaps;
 
 import org.pepsoft.util.IconUtils;
+import org.pepsoft.worldpainter.ImageRangeAccess;
 import org.pepsoft.util.MathUtils;
 
 import javax.swing.*;
@@ -264,6 +265,8 @@ public final class BitmapHeightMap extends AbstractHeightMap {
     @Override
     public double[] getRange() {
         if (range == null) {
+            range = ImageRangeAccess.range(image, channel, !signed && !floatingPoint, Double.MAX_VALUE, -Double.MAX_VALUE, minHeight, maxHeight);
+            if (range != null) return range;
             double imageLowValue = Double.MAX_VALUE, imageHighValue = -Double.MAX_VALUE;
             outer:
             for (int x = 0; x < width; x++) {

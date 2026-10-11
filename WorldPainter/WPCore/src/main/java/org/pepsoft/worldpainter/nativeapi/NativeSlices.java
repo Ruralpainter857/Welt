@@ -13,6 +13,23 @@ import java.nio.ByteBuffer;
 
 /** Bulk JNI entry points. A null result asks the caller to use its Java path. */
 public final class NativeSlices {
+    private static volatile boolean imageRangesSymbolUnavailable;
+    public static boolean isImageRangesAvailable() {
+        return !imageRangesSymbolUnavailable && Boolean.parseBoolean(System.getProperty("welt.native.imageRanges", "true"))
+                && Native.isGenEnabled() && NativeLoader.areSlicesAvailable();
+    }
+    /** Layout v1: type, unsigned, offset, pixel/row stride, x/y start, width/height, row-major, exact-stop. */
+    public static int scanImageRange(Object source, int[] layout, double stopLow, double stopHigh, double[] result) {
+        if (!isImageRangesAvailable() || source == null || layout == null || layout.length != 11
+                || result == null || result.length != 2 || source == result) return -1;
+        int kind=layout[0];
+        if (!(kind==0 && source instanceof byte[] || (kind==1 || kind==2) && source instanceof short[]
+                || kind==3 && source instanceof int[] || kind==4 && source instanceof float[] || kind==5 && source instanceof double[])) return -1;
+        try { return nativeScanImageRange(source, layout, stopLow, stopHigh, result); }
+        catch (UnsatisfiedLinkError e) { imageRangesSymbolUnavailable=true; return -1; }
+    }
+    private static native int nativeScanImageRange(Object source, int[] layout, double stopLow, double stopHigh, double[] result);
+
     private static volatile boolean brushRasterSymbolUnavailable;
     public static boolean isBrushRasterAvailable() {
         return !brushRasterSymbolUnavailable && Boolean.getBoolean("welt.native.brushRaster")
