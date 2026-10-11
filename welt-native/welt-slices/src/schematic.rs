@@ -5,7 +5,7 @@ pub(super) struct Lease {
     array: jobject,
     pub(super) pointer: *mut c_void,
     integers: bool,
-    commit: bool,
+    pub(super) commit: bool,
 }
 impl Drop for Lease {
     fn drop(&mut self) {

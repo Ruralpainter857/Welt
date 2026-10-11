@@ -4831,3 +4831,5 @@ mod structure;
 mod bo2;
 mod bo3;
 mod legacy_schematic;
+
+mod material_volume;

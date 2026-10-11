@@ -257,3 +257,24 @@ Release Rust, JDK 17, eight synthetic 64-by-48-by-32 objects, 20 warm-up pairs a
 The gain combines Rust inference and Java extended-material lookup reuse; it is not attributable to the Rust kernel alone. Saves and project reloads are validated outside the save timer. Ordinary-ID loading measured 2.481/2.679 ms with paired ratio 0.934 and no native analyses; ordinary access measured 3.175/3.169 ms with ratio 1.002. No ordinary-ID speedup is established. Each enabled extended load/access series verifies 232 successful native analyses including warm-up; save/reload verification produces 464.
 
 Separate extended-loading processes measured post-GC whole-process heap of 10,835,648/11,167,600 bytes and peak RSS of 178.24/172.41 MiB, sampled every 150 ms. Retained heap did not decrease, and process-peak savings are small despite approximately 97% fewer caller allocations on the periodic load case. RSS includes startup, warm-up and validation. These figures describe object-library loading/access, not Minecraft export or the whole editor. `LegacySchematicBenchmark java|rust|compare` also supports raw/noisy/ordinary-ID fixtures and load/access/save operations through its `welt.benchmark.legacy*` options.
+
+## Compact editor object snapshots
+
+`-Dwp.native.gen=true -Dwelt.native.objectSnapshots=true` enables compact `GenericObject` snapshots. A distinct-material identity palette reserves index zero for absent blocks; present `Material.AIR` remains distinct. Rust packs byte or little-endian short indices with one JNI transaction per newly captured object. Immutable generic snapshots share their private storage when copied; there is no JNI during block access or immutable copies. Entity collections and attributes retain their existing copy semantics.
+
+Sponge `.schem` snapshots borrow the existing integer or packed index plane and remap its palette directly in Rust. They avoid a temporary material-reference plane and per-block Java material lookup. This source capability is explicit through `CompactObjectSource`; unsupported sources keep the original X/Y/Z traversal, including random material selection order, before optional compaction. Material identity, custom properties, masks and coordinate indexing remain Java-compatible. Empty volumes, palettes above 65,536, volumes above 16,777,216, invalid indices and missing native libraries/symbols retain the Java representation. Source capture may allocate temporary arrays and JNI array borrowing may copy on some JVMs.
+
+The historical `Material[] data` serialization field and UID remain intact. Compact objects expand only for serialization, and enabled readers compact the restored array. Bidirectional project checks run separate JVMs against the historical `GenericObject` class, including a class-version assertion. Existing readers do not require the compact class. This compatibility choice increases save-time allocation and can slow saving; the path is opt-in.
+
+Release Rust, JDK 17, fixed single caller, 20 warm-up pairs and nine alternating measured pairs gave the following complete snapshot operations on synthetic libraries:
+
+| Operation | Java ms | Compact ms | Median paired ratio | Caller allocation Java/compact bytes |
+|---|---:|---:|---:|---:|
+| Copy eight 64-cubed Sponge selections | 65.049 | 27.650 | 2.493 (1.835–2.963) | 8,391,744 / 2,104,320 |
+| Copy eight existing immutable 96×64×48 generic objects | 50.277 | 0.010 | 5996 (4129–16389) | 9,440,320 / 3,008 |
+| Read every block of the generic library | 48.923 | 45.120 | 0.844 (0.631–1.449) | 14,155,968 / 14,155,968 |
+| Save the generic library, five warm-up pairs | 240.214 | 301.429 | 0.815 (0.645–1.432) | 273,480 / 9,710,792 |
+
+The very large immutable-copy ratio comes from sharing already captured storage, not Rust arithmetic. Initial conversion is outside that copy timer; the Sponge row includes complete snapshot conversion. Access does not demonstrate a gain, and save throughput regresses. Ratios are medians of paired runs, so they need not equal the ratio of the two independent medians. These results are not whole-editor or Minecraft-export speedups.
+
+Separate Java/compact processes retaining the generic source and eight copies measured post-GC whole-process heap of 27,719,248 / 9,472,768 bytes and peak RSS of 329.60 / 91.12 MiB, sampled every 150 ms. Peak RSS includes startup, warm-up, validation and temporary arrays. Heap reduction in this fixture is about 66%; shared identical snapshots particularly favor the compact representation. Distinct snapshots and different palettes require separate measurements. `GenericObjectBenchmark compare` alternates modes and validates all blocks outside timing; `welt.benchmark.genericSource=schem`, `genericOperation=copy|access|save`, `genericObjects` and `genericWarmups` select the scenario. Standalone mode measures retained heap. `javaReferenceSlotBytes` is the equivalent Java reference-plane size, not compact storage.

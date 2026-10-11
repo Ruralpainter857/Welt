@@ -13,6 +13,30 @@ import java.nio.ByteBuffer;
 
 /** Bulk JNI entry points. A null result asks the caller to use its Java path. */
 public final class NativeSlices {
+    private static volatile boolean materialVolumeSymbolUnavailable;
+    public static boolean isMaterialVolumeAvailable() {
+        return !materialVolumeSymbolUnavailable && Boolean.getBoolean("welt.native.objectSnapshots")
+                && Native.isGenEnabled() && NativeLoader.areSlicesAvailable();
+    }
+    /** One complete snapshot. False requests the original reference-array representation. */
+    public static boolean packMaterialVolume(int[] indices, int paletteSize, byte[] output) {
+        if (!isMaterialVolumeAvailable() || indices == null || output == null || indices.length < 1
+                || indices.length > 16 * 1024 * 1024 || paletteSize < 1 || paletteSize > 65536
+                || output.length != indices.length * (paletteSize <= 256 ? 1 : 2)) return false;
+        try { return nativePackMaterialVolume(indices, paletteSize, output) == 0; }
+        catch (UnsatisfiedLinkError e) { materialVolumeSymbolUnavailable = true; return false; }
+    }
+    private static native int nativePackMaterialVolume(int[] indices, int paletteSize, byte[] output);
+    public static boolean remapMaterialVolume(byte[] packed, int[] integers, int sourceStride, int[] mapping, int paletteSize, byte[] output) {
+        if (!isMaterialVolumeAvailable() || (packed==null)==(integers==null) || mapping==null || output==null
+                || mapping.length<1 || mapping.length>65536 || paletteSize<1 || paletteSize>65536
+                || output.length<1 || output.length>32*1024*1024 || packed==output
+                || packed!=null && (sourceStride<1 || sourceStride>2 || packed.length>32*1024*1024)
+                || integers!=null && integers.length>16*1024*1024) return false;
+        try { return nativeRemapMaterialVolume(packed,integers,sourceStride,mapping,paletteSize,output)==0; }
+        catch (UnsatisfiedLinkError e) { materialVolumeSymbolUnavailable=true;return false; }
+    }
+    private static native int nativeRemapMaterialVolume(byte[] packed,int[] integers,int sourceStride,int[] mapping,int paletteSize,byte[] output);
     private static volatile boolean heightmapImageSymbolUnavailable;
 
     /** Convert one raw-height plane; an old native library retains the Java image path. */

@@ -5,7 +5,7 @@ import org.pepsoft.minecraft.Material;
 import org.pepsoft.minecraft.TileEntity;
 
 import javax.vecmath.Point3i;
-import java.io.Serializable;
+import java.io.*;
 import java.util.*;
 
 import static org.pepsoft.util.CollectionUtils.copyOf;
@@ -26,7 +26,8 @@ public final class GenericObject extends NamedObjectWithAttributes {
         this.dimX = dimX;
         this.dimY = dimY;
         this.dimZ = dimZ;
-        this.data = Arrays.copyOf(data, data.length);
+        compact = CompactMaterialVolume.capture(data);
+        this.data = compact == null ? Arrays.copyOf(data, data.length) : null;
         this.entities = ((entities != null) && (! entities.isEmpty())) ? new ArrayList<>(entities) : null;
         this.tileEntities = ((tileEntities != null) && (! tileEntities.isEmpty())) ? new ArrayList<>(tileEntities) : null;
         if ((dimX * dimY * dimZ) != data.length) {
@@ -40,15 +41,21 @@ public final class GenericObject extends NamedObjectWithAttributes {
         this.dimX = dims.x;
         this.dimY = dims.y;
         this.dimZ = dims.z;
-        data = new Material[dimX * dimY * dimZ];
-        for (int x = 0; x < dimX; x++) {
-            for (int y = 0; y < dimY; y++) {
-                for (int z = 0; z < dimZ; z++) {
-                    if (object.getMask(x, y, z)) {
-                        data[x + y * dimX + z * dimX * dimY] = object.getMaterial(x, y, z);
-                    }
-                }
+        // Immutable snapshots can share storage without reading source blocks again.
+        if (object instanceof GenericObject && ((GenericObject) object).compact != null) {
+            compact = ((GenericObject) object).compact;
+            data = null;
+        } else if (object instanceof CompactObjectSource &&
+                (compact = ((CompactObjectSource) object).copyCompactVolume()) != null) {
+            data = null;
+        } else {
+            Material[] captured = new Material[dimX * dimY * dimZ];
+            // Preserve the original traversal, including random material selection order.
+            for (int x = 0; x < dimX; x++) for (int y = 0; y < dimY; y++) for (int z = 0; z < dimZ; z++) {
+                if (object.getMask(x, y, z)) captured[x + y * dimX + z * dimX * dimY] = object.getMaterial(x, y, z);
             }
+            compact = CompactMaterialVolume.capture(captured);
+            data = compact == null ? captured : null;
         }
         this.entities = copyOf(object.getEntities());
         this.tileEntities = copyOf(object.getTileEntities());
@@ -61,12 +68,13 @@ public final class GenericObject extends NamedObjectWithAttributes {
 
     @Override
     public Material getMaterial(int x, int y, int z) {
-        return data[x + y * dimX + z * dimX * dimY];
+        int index = x + y * dimX + z * dimX * dimY;
+        return compact == null ? data[index] : compact.get(index);
     }
 
     @Override
     public boolean getMask(int x, int y, int z) {
-        return data[x + y * dimX + z * dimX * dimY] != null;
+        return getMaterial(x, y, z) != null;
     }
 
     @Override
@@ -80,7 +88,24 @@ public final class GenericObject extends NamedObjectWithAttributes {
     }
 
     private final int dimX, dimY, dimZ;
-    private final Material[] data;
+    // Keep the historical field type and serial UID for existing project readers.
+    private Material[] data;
+    private transient CompactMaterialVolume compact;
+
+    private void writeObject(ObjectOutputStream out) throws IOException {
+        ObjectOutputStream.PutField fields = out.putFields();
+        fields.put("dimX", dimX); fields.put("dimY", dimY); fields.put("dimZ", dimZ);
+        fields.put("data", compact == null ? data : compact.expand());
+        fields.put("entities", entities); fields.put("tileEntities", tileEntities);
+        out.writeFields();
+    }
+    private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+        in.defaultReadObject();
+        if (data != null) {
+            compact = CompactMaterialVolume.capture(data);
+            if (compact != null) data = null;
+        }
+    }
     private final List<Entity> entities;
     private final List<TileEntity> tileEntities;
 

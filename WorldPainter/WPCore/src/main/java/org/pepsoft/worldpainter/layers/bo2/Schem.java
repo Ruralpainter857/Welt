@@ -28,7 +28,7 @@ import static org.pepsoft.minecraft.Material.MINECRAFT;
  * A Sponge schematic according to the specifications at
  * <a href="https://github.com/SpongePowered/Schematic-Specification/blob/master/versions/">https://github.com/SpongePowered/Schematic-Specification/blob/master/versions/</a>.
  */
-public final class Schem extends AbstractNBTItem implements WPObject {
+public final class Schem extends AbstractNBTItem implements WPObject, org.pepsoft.worldpainter.objects.CompactObjectSource {
     @SuppressWarnings("unchecked") // Guaranteed by Minecraft
     public Schem(CompoundTag tag, String fallBackName) {
         super(getSchematic(tag));
@@ -356,6 +356,13 @@ public final class Schem extends AbstractNBTItem implements WPObject {
         } else {
             return tag;
         }
+    }
+
+    @Override
+    public org.pepsoft.worldpainter.objects.CompactMaterialVolume copyCompactVolume() {
+        long count=(long)width*length*height;
+        if(width<1 || length<1 || height<1 || count>16*1024*1024)return null;
+        return org.pepsoft.worldpainter.objects.CompactMaterialVolume.captureSchematic(palette,compactBlocks,blocks,compactStride,(int)count);
     }
 
     private int paletteIndex(int index) {

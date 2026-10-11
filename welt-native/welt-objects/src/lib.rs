@@ -2,3 +2,5 @@
 pub mod bo2;
 pub mod bo3;
 pub mod legacy_schematic;
+
+pub mod material_volume;
