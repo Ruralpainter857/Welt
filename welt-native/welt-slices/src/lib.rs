@@ -4833,3 +4833,5 @@ mod bo3;
 mod legacy_schematic;
 
 mod material_volume;
+
+mod brush_cache;

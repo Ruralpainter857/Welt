@@ -13,6 +13,21 @@ import java.nio.ByteBuffer;
 
 /** Bulk JNI entry points. A null result asks the caller to use its Java path. */
 public final class NativeSlices {
+    private static volatile boolean brushCacheSymbolUnavailable;
+    public static boolean isBrushCacheAvailable() {
+        return !brushCacheSymbolUnavailable && Boolean.getBoolean("welt.native.brushCache")
+                && Native.isGenEnabled() && NativeLoader.areSlicesAvailable();
+    }
+
+    /** One bulk call over distinct caller-owned planes; no per-pixel JNI calls. */
+    public static boolean scaleBrushCache(float[] source, float level, float[] output) {
+        if (source == null || output == null || source == output || source.length != output.length
+                || source.length < 4096 || source.length > 4_194_304 || !isBrushCacheAvailable()) return false;
+        try { return nativeScaleBrushCache(source, level, output) == 0; }
+        catch (UnsatisfiedLinkError e) { brushCacheSymbolUnavailable = true; return false; }
+    }
+    private static native int nativeScaleBrushCache(float[] source, float level, float[] output);
+
     private static volatile boolean objectTransformSymbolUnavailable;
     public static boolean isObjectTransformsAvailable() {
         return !objectTransformSymbolUnavailable && Boolean.getBoolean("welt.native.objectTransforms") && isMaterialVolumeAvailable();
