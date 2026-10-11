@@ -25,6 +25,20 @@ public final class NativeSlices {
     }
     private static native int nativeConvertHeightmapImage(ByteBuffer buffer, int length);
 
+    private static volatile boolean legacySchematicSymbolUnavailable;
+    public static boolean isLegacySchematicAvailable() {
+        return !legacySchematicSymbolUnavailable && Boolean.getBoolean("welt.native.legacySchematic")
+                && Native.isGenEnabled() && NativeLoader.areSlicesAvailable();
+    }
+    /** Analyze one compact legacy object; false requests the original Java inference. */
+    public static boolean analyzeLegacySchematic(byte[] blocks, byte[] data, byte[] add, ByteBuffer buffer) {
+        if (!isLegacySchematicAvailable() || blocks == null || data == null || buffer == null
+                || !buffer.isDirect() || buffer.isReadOnly() || buffer.position() != 0 || buffer.limit() != 524352) return false;
+        try { return nativeAnalyzeLegacySchematic(blocks, data, add, buffer) == 0; }
+        catch (UnsatisfiedLinkError e) { legacySchematicSymbolUnavailable = true; return false; }
+    }
+    private static native int nativeAnalyzeLegacySchematic(byte[] blocks, byte[] data, byte[] add, ByteBuffer buffer);
+
     private static volatile boolean bo3SymbolUnavailable;
     public static boolean isBo3LoadingAvailable() {
         return !bo3SymbolUnavailable && Boolean.getBoolean("welt.native.bo3")

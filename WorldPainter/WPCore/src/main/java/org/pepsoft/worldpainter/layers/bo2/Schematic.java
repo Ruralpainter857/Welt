@@ -59,6 +59,7 @@ public final class Schematic extends AbstractNBTItem implements WPObject, Bo2Obj
         width = getShort("Width");
         length = getShort("Length");
         height = getShort("Height");
+        nativeAccess = LegacySchematicAccess.create(blocks, data, addBlocks, width, length, height);
         Point3i offset = null;
         if (containsTag("WEOffsetX")) {
             weOffsetX = getInt("WEOffsetX");
@@ -75,7 +76,7 @@ public final class Schematic extends AbstractNBTItem implements WPObject, Bo2Obj
         }
         dimensions = new Point3i(width, length, height);
         if (offset == null) {
-            offset = guestimateOffset();
+            offset = nativeAccess != null ? nativeAccess.offset : guestimateOffset();
         }
         if ((offset != null) && ((offset.x != 0) || (offset.y != 0) || (offset.z != 0))) {
             if (attributes == null) {
@@ -91,7 +92,8 @@ public final class Schematic extends AbstractNBTItem implements WPObject, Bo2Obj
             weOriginX = weOriginY = weOriginZ = 0;
         }
         this.attributes = attributes;
-        guessConnectBlocks();
+        if (nativeAccess == null) guessConnectBlocks();
+        else if (nativeAccess.connect) setAttribute(ATTRIBUTE_CONNECT_BLOCKS, true);
     }
 
     // WPObject
@@ -114,7 +116,7 @@ public final class Schematic extends AbstractNBTItem implements WPObject, Bo2Obj
                 blockId |= (addBlocks[offset >> 1] & 0xf0) << 4;
             }
         }
-        return Material.get(blockId, data[offset] & 0xF);
+        return nativeAccess != null ? nativeAccess.material((blockId << 4) | (data[offset] & 0xF)) : Material.get(blockId, data[offset] & 0xF);
     }
 
     @Override
@@ -310,8 +312,10 @@ public final class Schematic extends AbstractNBTItem implements WPObject, Bo2Obj
             guessConnectBlocks();
         }
         version = 3;
+        nativeAccess = LegacySchematicAccess.create(blocks, data, addBlocks, width, length, height);
     }
     
+    private transient LegacySchematicAccess nativeAccess;
     private String name;
     private final String materials;
     private final byte[] data, blocks, addBlocks;

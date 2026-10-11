@@ -236,3 +236,24 @@ With release Rust and JDK 17, eight synthetic 24-cubed objects, 30 warm-up pairs
 | Mixed plus an external NBT reference per 128 blocks | 157.387 | 62.376 | 2.523 | 1.995–2.962 | 85,717,824 / 26,268,032 |
 
 The ordinary case does not demonstrate a substantial speed gain; map construction and Java access remain costly. The NBT gain includes template reuse in Java, not just Rust parsing. Caller allocation drops about 69–71%, while retained block storage remains the same. Separate processes with the smaller four-object 16-cubed library measured post-GC whole-process heap of 10,905,512/11,149,704 bytes (ordinary) and 11,158,704/11,447,896 bytes (NBT), with peak RSS of 157.76/143.79 MiB and 185.31/167.22 MiB respectively, sampled every 150 ms. Retained heap did not improve. Startup, warm-up, validation and GC affect RSS. These are synthetic complete-load measurements, not whole-editor or Minecraft-export speedups. The path remains opt-in. `Bo3LoadBenchmark java|rust|compare` validates native coverage outside timing; its existing scenario/dimension/warm-up options also apply to paired runs.
+## Legacy schematic analysis and extended-material access
+
+`-Dwp.native.gen=true -Dwelt.native.legacySchematic=true` enables a grouped path for Alpha `.schematic` objects containing extended numerical IDs in `AddBlocks`. The existing `Blocks`, `Data` and nibble-packed `AddBlocks` arrays remain authoritative; no duplicate voxel-index storage is introduced. One JNI transaction per object borrows those arrays and a reusable worker-owned WLSC v1 direct buffer. Rust computes the first occupied plane, inferred offset and horizontal connection setting together. Java retains NBT parsing, entities, metadata, explicit WorldEdit offsets/origins and material instances. Array leases may copy on some JVMs.
+
+The worker prepares the 4,096 built-in state rules once, then reads only nonzero `AddBlocks` nibbles to resolve distinct extended states for each object. Name groups preserve Java name-reference equality. The 512 KiB semantics buffer, bit set and name groups belong to the worker. Each object retains only a small sorted extended-state/material table and scalar results. Block access uses this Java table without JNI; new states introduced by live array edits use the original material lookup. The cache is transient and reconstructed on enabled project reloads, keeping the historical serialized fields unchanged. The original low-byte mask, including IDs whose low byte is zero, is preserved.
+
+Malformed arrays, nonpositive dimensions, volumes above 16,777,216, unavailable libraries/symbols and objects without extended IDs keep Java inference. The ordinary-ID path was measured and did not justify native preparation; its dispatcher performs no JNI analysis. This is a selective path, not a default acceleration claim for every legacy object.
+
+Release Rust, JDK 17, eight synthetic 64-by-48-by-32 objects, 20 warm-up pairs and nine alternating measured pairs produced the following complete-operation results:
+
+| Operation / data | Java ms | Native ms | Median paired ratio | Ratio range | Caller allocation Java/native bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| GZIP load, periodic extended IDs | 45.780 | 6.980 | 6.806 | 6.146–13.325 | 63,725,440 / 2,069,760 |
+| Raw NBT load, periodic extended IDs | 27.411 | 2.997 | 7.577 | 4.957–12.004 | 63,713,792 / 2,058,112 |
+| GZIP load, coordinate-hashed extended IDs | 50.319 | 15.923 | 3.160 | 2.054–5.378 | 59,352,704 / 2,069,568 |
+| Complete block-access sweep | 46.793 | 9.115 | 5.012 | 3.294–9.199 | 65,434,944 / 7,550,016 |
+| Compatible compressed project save | 13.644 | 13.662 | 1.015 | 0.562–1.724 | 46,744 / 46,744 |
+
+The gain combines Rust inference and Java extended-material lookup reuse; it is not attributable to the Rust kernel alone. Saves and project reloads are validated outside the save timer. Ordinary-ID loading measured 2.481/2.679 ms with paired ratio 0.934 and no native analyses; ordinary access measured 3.175/3.169 ms with ratio 1.002. No ordinary-ID speedup is established. Each enabled extended load/access series verifies 232 successful native analyses including warm-up; save/reload verification produces 464.
+
+Separate extended-loading processes measured post-GC whole-process heap of 10,835,648/11,167,600 bytes and peak RSS of 178.24/172.41 MiB, sampled every 150 ms. Retained heap did not decrease, and process-peak savings are small despite approximately 97% fewer caller allocations on the periodic load case. RSS includes startup, warm-up and validation. These figures describe object-library loading/access, not Minecraft export or the whole editor. `LegacySchematicBenchmark java|rust|compare` also supports raw/noisy/ordinary-ID fixtures and load/access/save operations through its `welt.benchmark.legacy*` options.
