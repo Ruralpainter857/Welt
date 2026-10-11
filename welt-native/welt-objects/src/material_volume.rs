@@ -132,3 +132,102 @@ mod remap_tests {
         assert!(!remap(Some((&[0], 2)), None, &[0], 1, &mut out));
     }
 }
+
+/// Compose horizontal transforms before scanning the immutable index plane once.
+/// Operations are source-to-output: 0..3 clockwise quarter turns, 4 X mirror, 5 Y mirror.
+pub fn transform(
+    source: &[u8],
+    width: usize,
+    length: usize,
+    height: usize,
+    stride: usize,
+    operations: &[i32],
+    output: &mut [u8],
+) -> bool {
+    if width == 0
+        || length == 0
+        || height == 0
+        || !(1..=2).contains(&stride)
+        || operations.len() > 64
+    {
+        return false;
+    }
+    let Some(count) = width
+        .checked_mul(length)
+        .and_then(|n| n.checked_mul(height))
+    else {
+        return false;
+    };
+    if count > 16 * 1024 * 1024 || source.len() != count * stride || output.len() != source.len() {
+        return false;
+    }
+    let (mut w, mut h) = (width as i64, length as i64);
+    let (mut a, mut b, mut c, mut d, mut tx, mut ty) = (1i64, 0i64, 0i64, 1i64, 0i64, 0i64);
+    for &op in operations {
+        let next = match op {
+            0 => (a, b, c, d, tx, ty),
+            1 => (-b, a, -d, c, tx + b * (h - 1), ty + d * (h - 1)),
+            2 => (
+                -a,
+                -b,
+                -c,
+                -d,
+                tx + a * (w - 1) + b * (h - 1),
+                ty + c * (w - 1) + d * (h - 1),
+            ),
+            3 => (b, -a, d, -c, tx + a * (w - 1), ty + c * (w - 1)),
+            4 => (-a, b, -c, d, tx + a * (w - 1), ty + c * (w - 1)),
+            5 => (a, -b, c, -d, tx + b * (h - 1), ty + d * (h - 1)),
+            _ => return false,
+        };
+        (a, b, c, d, tx, ty) = next;
+        if op == 1 || op == 3 {
+            std::mem::swap(&mut w, &mut h);
+        }
+    }
+    let (out_w, out_h) = (w as usize, h as usize);
+    for z in 0..height {
+        for y in 0..out_h {
+            for x in 0..out_w {
+                let sx = (a * x as i64 + b * y as i64 + tx) as usize;
+                let sy = (c * x as i64 + d * y as i64 + ty) as usize;
+                let input = (sx + sy * width + z * width * length) * stride;
+                let target = (x + y * out_w + z * out_w * out_h) * stride;
+                output[target..target + stride].copy_from_slice(&source[input..input + stride]);
+            }
+        }
+    }
+    true
+}
+#[cfg(test)]
+mod transform_tests {
+    use super::*;
+    #[test]
+    fn rectangular_rotation_and_mirrors() {
+        let source = [0, 1, 2, 3, 4, 5];
+        let mut out = [9; 6];
+        assert!(transform(&source, 3, 2, 1, 1, &[1], &mut out));
+        assert_eq!(out, [3, 0, 4, 1, 5, 2]);
+        assert!(transform(&source, 3, 2, 1, 1, &[4], &mut out));
+        assert_eq!(out, [2, 1, 0, 5, 4, 3]);
+        assert!(transform(&source, 3, 2, 1, 1, &[5], &mut out));
+        assert_eq!(out, [3, 4, 5, 0, 1, 2]);
+    }
+    #[test]
+    fn composition_and_wide_indices() {
+        let source = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        let mut out = [0; 12];
+        assert!(transform(&source, 3, 2, 1, 2, &[1, 1, 1, 1], &mut out));
+        assert_eq!(out, source);
+        assert!(transform(&source, 3, 2, 1, 2, &[3, 5, 1], &mut out));
+        assert_eq!(out, [5, 6, 3, 4, 1, 2, 11, 12, 9, 10, 7, 8]);
+    }
+    #[test]
+    fn invalid_transaction_preserves_output() {
+        let mut out = [7; 6];
+        assert!(!transform(&[0; 6], 3, 2, 1, 1, &[6], &mut out));
+        assert_eq!(out, [7; 6]);
+        assert!(!transform(&[0; 6], 3, 2, 1, 3, &[], &mut out));
+        assert!(!transform(&[0; 6], usize::MAX, 2, 1, 1, &[], &mut out));
+    }
+}

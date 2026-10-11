@@ -87,6 +87,8 @@ public final class GenericObject extends NamedObjectWithAttributes {
         return tileEntities;
     }
 
+    CompactMaterialVolume compactVolume() { return compact; }
+
     private final int dimX, dimY, dimZ;
     // Keep the historical field type and serial UID for existing project readers.
     private Material[] data;

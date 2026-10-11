@@ -129,3 +129,65 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
         })
     }
 }
+
+/// # Safety
+/// Input arrays stay alive; output is exclusively owned and does not alias the input.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeTransformMaterialVolume(
+    env: *mut JNIEnv,
+    _class: jclass,
+    source: jobject,
+    parameters: jobject,
+    output: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            let error = WeltError::IllegalArgument as jint;
+            if source.is_null() || parameters.is_null() || output.is_null() {
+                return error;
+            }
+            type Length = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            type Same = unsafe extern "system" fn(*mut JNIEnv, jobject, jobject) -> u8;
+            let len: Length = std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            let same: Same = std::mem::transmute(function(env, 24));
+            let bytes = len(env, source);
+            let n = len(env, parameters);
+            if bytes < 1
+                || bytes > 32 * 1024 * 1024
+                || len(env, output) != bytes
+                || !(4..=68).contains(&n)
+                || same(env, source, output) != 0
+            {
+                return error;
+            }
+            let Some(input) = schematic::borrow(env, source, false) else {
+                return error;
+            };
+            let Some(p) = schematic::borrow(env, parameters, true) else {
+                return error;
+            };
+            let Some(mut out) = schematic::borrow(env, output, false) else {
+                return error;
+            };
+            let params = slice::from_raw_parts(p.pointer.cast::<i32>(), n as usize);
+            if params[..4].iter().any(|&v| v <= 0) {
+                return error;
+            }
+            let ok = welt_objects::material_volume::transform(
+                slice::from_raw_parts(input.pointer.cast::<u8>(), bytes as usize),
+                params[0] as usize,
+                params[1] as usize,
+                params[2] as usize,
+                params[3] as usize,
+                &params[4..],
+                slice::from_raw_parts_mut(out.pointer.cast::<u8>(), bytes as usize),
+            );
+            out.commit = ok;
+            if ok {
+                WeltError::Ok as jint
+            } else {
+                error
+            }
+        })
+    }
+}

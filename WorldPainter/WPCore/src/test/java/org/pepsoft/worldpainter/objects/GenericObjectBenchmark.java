@@ -22,7 +22,15 @@ public final class GenericObjectBenchmark {
         Material[] values = new Material[width*length*height];
         Material[] palette = {null,Material.AIR,Material.STONE,Material.get("welt:custom","facing","north")};
         for (int z=0;z<height;z++) for (int y=0;y<length;y++) for (int x=0;x<width;x++) values[x+y*width+z*width*length]=palette[(x*17+y*7+z*3)&3];
-        return new GenericObject("Source",width,length,height,values,null,null,Map.of(WPObject.ATTRIBUTE_OFFSET.key,new Point3i(-1,-2,-3)));
+        WPObject object=new GenericObject("Source",width,length,height,values,null,null,Map.of(WPObject.ATTRIBUTE_OFFSET.key,new Point3i(-1,-2,-3)));
+        var platform=org.pepsoft.worldpainter.DefaultPlugin.JAVA_ANVIL_1_15;
+        return switch(System.getProperty("welt.benchmark.genericTransform","none")) {
+            case "none" -> object;
+            case "rotate1" -> new RotatedObject(object,1,platform);
+            case "mirrorX" -> new MirroredObject(object,false,platform);
+            case "combined" -> new RotatedObject(new MirroredObject(new RotatedObject(object,3,platform),true,platform),1,platform);
+            default -> throw new IllegalArgumentException("Unknown transform");
+        };
     }
     private static void validate(WPObject source, GenericObject copy) {
         if (!source.getName().equals(copy.getName()) || !source.getDimensions().equals(copy.getDimensions()) || !Objects.equals(source.getAttributes(),copy.getAttributes())) throw new AssertionError("Metadata differs");
@@ -41,6 +49,7 @@ public final class GenericObjectBenchmark {
     private static void mode(boolean nativeMode) {
         System.setProperty("wp.native.gen",Boolean.toString(nativeMode));
         System.setProperty("welt.native.objectSnapshots",Boolean.toString(nativeMode));
+        System.setProperty("welt.native.objectTransforms",Boolean.toString(nativeMode));
     }
     private static void compare() throws Exception {
         String kind=System.getProperty("welt.benchmark.genericSource","generic");

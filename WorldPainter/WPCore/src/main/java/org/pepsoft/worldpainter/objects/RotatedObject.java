@@ -21,7 +21,7 @@ import java.util.Map;
  *
  * @author pepijn
  */
-public class RotatedObject extends AbstractObject {
+public class RotatedObject extends AbstractObject implements CompactObjectSource {
     /**
      * A rotated version of another object.
      * 
@@ -203,6 +203,13 @@ public class RotatedObject extends AbstractObject {
     public <T extends Serializable> void setAttribute(AttributeKey<T> key, T value) {
         throw new UnsupportedOperationException("Not supported");
     }
+
+    @Override
+    public CompactMaterialVolume copyCompactVolume() { return CompactObjectTransforms.capture(this); }
+    WPObject compactSource() { return object; }
+    Platform compactPlatform() { return platform; }
+    Point3i compactDimensions() { return dimensions; }
+    int compactOperation() { return steps; }
 
     private final WPObject object;
     private final int steps;

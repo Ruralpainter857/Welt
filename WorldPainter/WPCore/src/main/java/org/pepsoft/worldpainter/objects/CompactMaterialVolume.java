@@ -61,6 +61,19 @@ public final class CompactMaterialVolume {
         if (stride == 2) id |= (indices[p + 1] & 255) << 8;
         return palette[id];
     }
+    CompactMaterialVolume transform(int[] parameters, org.pepsoft.worldpainter.Platform[] platforms) {
+        Material[] transformed=palette.clone();
+        try {
+            for(int i=1;i<transformed.length;i++)for(int j=0;j<platforms.length;j++) {
+                int operation=parameters[j+4];
+                if(operation<4){if(operation!=0)transformed[i]=transformed[i].rotate(operation,platforms[j]);}
+                else transformed[i]=transformed[i].mirror(operation==5?org.pepsoft.minecraft.Direction.EAST:org.pepsoft.minecraft.Direction.SOUTH,platforms[j]);
+            }
+        }catch(RuntimeException unsupported){return null;}
+        parameters[3]=stride;byte[] output=new byte[indices.length];
+        if(!NativeSlices.transformMaterialVolume(indices,parameters,output))return null;
+        return new CompactMaterialVolume(transformed,output,count);
+    }
     Material[] expand() {
         Material[] result = new Material[count];
         for (int i = 0; i < count; i++) result[i] = get(i);

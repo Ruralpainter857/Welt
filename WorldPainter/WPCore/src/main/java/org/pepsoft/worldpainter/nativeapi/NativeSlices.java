@@ -13,6 +13,23 @@ import java.nio.ByteBuffer;
 
 /** Bulk JNI entry points. A null result asks the caller to use its Java path. */
 public final class NativeSlices {
+    private static volatile boolean objectTransformSymbolUnavailable;
+    public static boolean isObjectTransformsAvailable() {
+        return !objectTransformSymbolUnavailable && Boolean.getBoolean("welt.native.objectTransforms") && isMaterialVolumeAvailable();
+    }
+    /**
+     * Stable v1 layout: width, length, height, byte stride, then source-to-output operations.
+     * Operations 0..3 rotate clockwise; 4 mirrors X and 5 mirrors Y. Output is x/y/z row-major.
+     * One composed transformation chain over an immutable palette-index plane.
+     */
+    public static boolean transformMaterialVolume(byte[] source,int[] parameters,byte[] output) {
+        if(!isObjectTransformsAvailable() || source==null || parameters==null || output==null
+                || source==output || source.length<1 || source.length>32*1024*1024 || output.length!=source.length
+                || parameters.length<4 || parameters.length>68)return false;
+        try{return nativeTransformMaterialVolume(source,parameters,output)==0;}
+        catch(UnsatisfiedLinkError e){objectTransformSymbolUnavailable=true;return false;}
+    }
+    private static native int nativeTransformMaterialVolume(byte[] source,int[] parameters,byte[] output);
     private static volatile boolean materialVolumeSymbolUnavailable;
     public static boolean isMaterialVolumeAvailable() {
         return !materialVolumeSymbolUnavailable && Boolean.getBoolean("welt.native.objectSnapshots")

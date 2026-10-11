@@ -22,7 +22,7 @@ import java.util.Map;
  *
  * @author pepijn
  */
-public class MirroredObject extends AbstractObject {
+public class MirroredObject extends AbstractObject implements CompactObjectSource {
     public MirroredObject(WPObject object, boolean mirrorYAxis, Platform platform) {
         this.object = object;
         this.mirrorYAxis = mirrorYAxis;
@@ -131,6 +131,13 @@ public class MirroredObject extends AbstractObject {
         throw new UnsupportedOperationException("Not supported");
     }
     
+    @Override
+    public CompactMaterialVolume copyCompactVolume() { return CompactObjectTransforms.capture(this); }
+    WPObject compactSource() { return object; }
+    Platform compactPlatform() { return platform; }
+    Point3i compactDimensions() { return dimensions; }
+    int compactOperation() { return mirrorYAxis ? 5 : 4; }
+
     private final WPObject object;
     private final boolean mirrorYAxis;
     private final Platform platform;
