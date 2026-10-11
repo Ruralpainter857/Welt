@@ -223,38 +223,11 @@ public final class DiscreteLayerPaint extends LayerPaint {
 
     private boolean applyNativeDitheredBrush(Dimension dimension, int centreX, int centreY, float dynamicLevel,
                                              int x1, int y1, int x2, int y2, boolean oneTile, int target, boolean removing) {
-        long width = (long) x2 - x1 + 1, height = (long) y2 - y1 + 1;
         if (!dither || filterEnabled || !stableDefault
-                || !Boolean.parseBoolean(System.getProperty("welt.native.ditheredDiscrete", "true"))
-                || !(brush instanceof SymmetricBrush || brush instanceof BitmapBrush || brush instanceof RotatedBrush)
-                || width < 1 || height < 1 || width > 1024 || height > 1024 || width * height > 1_048_576
-                || !MaskedPlaneAccess.canBatchLayer(dimension, layer, target, x1, y1, (int) width, (int) height)) return false;
-        // The original single-tile path obtains an editable tile even when no pixel is selected.
-        if (oneTile && dimension.getTileForEditing(x1 >> TILE_SIZE_BITS, y1 >> TILE_SIZE_BITS) == null) return true;
-        int capacity = (int) width * Math.min(128, (int) height);
-        if (nativeModified == null || nativeModified.length < capacity) nativeModified = new byte[capacity];
-        for (int row = 0; row < height;) {
-            int originY = y1 + row, rows = Math.min((int) height - row, 128 - (originY & TILE_SIZE_MASK));
-            int index = 0;
-            try {
-                for (int dy = 0; dy < rows; dy++) for (int dx = 0; dx < width; dx++) {
-                    int x = x1 + dx, y = originY + dy;
-                    // Removal deliberately ignores brush level, as in the original Java painter.
-                    float strength = dynamicLevel * (removing ? getFullStrength(centreX, centreY, x, y) : getStrength(centreX, centreY, x, y));
-                    byte selected = (byte) (strength > 0.95f || random.getAsDouble() < strength ? 1 : 0);
-                    nativeModified[index++] = selected;
-                }
-            } catch (RuntimeException failure) {
-                // Keep the completed prefix when source-mask preparation fails partway through a band.
-                java.util.Arrays.fill(nativeModified, index, rows * (int) width, (byte) 0);
-                if (index > 0) MaskedPlaneAccess.applyLayer(dimension, layer, target, x1, originY,
-                        (int) width, rows, nativeModified, 0, (int) width);
-                throw failure;
-            }
-            MaskedPlaneAccess.applyLayer(dimension, layer, target, x1, originY, (int) width, rows, nativeModified, 0, (int) width);
-            row += rows;
-        }
-        return true;
+                || !Boolean.parseBoolean(System.getProperty("welt.native.ditheredDiscrete", "true"))) return false;
+        if (ditheredBatch == null) ditheredBatch = new DitheredBrushBatch();
+        return ditheredBatch.apply(dimension, brush, random, layer, null, target, centreX, centreY, dynamicLevel,
+                x1, y1, x2, y2, oneTile, removing);
     }
     private boolean applyNativeDiscreteLayerBrush(Dimension dimension, int centreX, int centreY,
                                                   float dynamicLevel, int x1, int y1, int x2, int y2,
@@ -301,6 +274,7 @@ public final class DiscreteLayerPaint extends LayerPaint {
 
     private final int value, defaultValue;
     private final DoubleSupplier random;
+    private DitheredBrushBatch ditheredBatch;
     private final boolean stableDefault;
     private byte[] nativeModified;
     private float[] nativeStrengths;

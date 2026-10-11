@@ -18,10 +18,21 @@ public final class MaskedPlaneAccess {
         return dimension != null && layer != null && width > 0 && height > 0
                 && (long) ox + width - 1 <= Integer.MAX_VALUE && (long) oy + height - 1 <= Integer.MAX_VALUE
                 && value >= 0 && value <= layer.dataSize.maxValue
-                && (layer.dataSize == Layer.DataSize.NIBBLE || layer.dataSize == Layer.DataSize.BYTE)
+                && (layer.dataSize == Layer.DataSize.NIBBLE || layer.dataSize == Layer.DataSize.BYTE
+                    || layer.dataSize == Layer.DataSize.BIT || layer.dataSize == Layer.DataSize.BIT_PER_CHUNK)
                 && TileRegionAccess.canBatch(dimension, ox, oy, width, height);
     }
 
+    public static boolean canBatchTerrain(Dimension dimension, Terrain terrain, int ox, int oy, int width, int height) {
+        return dimension != null && terrain != null && terrain.ordinal() < 256 && width > 0 && height > 0
+                && (long) ox + width - 1 <= Integer.MAX_VALUE && (long) oy + height - 1 <= Integer.MAX_VALUE
+                && TileRegionAccess.canBatch(dimension, ox, oy, width, height);
+    }
+    /** Reusable terrain mask region with caller-owned padding/capacity. */
+    public static void applyTerrain(Dimension dimension, Terrain terrain, int ox, int oy,
+                                    int width, int height, byte[] mask, int offset, int stride) {
+        apply(dimension, null, Objects.requireNonNull(terrain), 0, ox, oy, width, height, mask, offset, stride);
+    }
     /** Apply a caller-owned padded mask region, allowing a reusable band buffer. */
     public static void applyLayer(Dimension dimension, Layer layer, int value, int ox, int oy,
                                   int width, int height, byte[] mask, int offset, int stride) {

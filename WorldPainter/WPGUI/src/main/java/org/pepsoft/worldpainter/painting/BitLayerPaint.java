@@ -31,6 +31,7 @@ import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 
 import java.awt.*;
+import java.util.function.DoubleSupplier;
 
 import static org.pepsoft.worldpainter.Constants.TILE_SIZE_BITS;
 import static org.pepsoft.worldpainter.Constants.TILE_SIZE_MASK;
@@ -44,7 +45,12 @@ import static org.pepsoft.worldpainter.Constants.TILE_SIZE_MASK;
  */
 public final class BitLayerPaint extends LayerPaint {
     public BitLayerPaint(Layer layer) {
+        this(layer, Math::random);
+    }
+    /** Production retains Math.random; tests may provide an explicit draw stream. */
+    BitLayerPaint(Layer layer, DoubleSupplier random) {
         super(layer);
+        this.random = java.util.Objects.requireNonNull(random);
         if ((layer.getDataSize() != Layer.DataSize.BIT) && (layer.getDataSize() != Layer.DataSize.BIT_PER_CHUNK)) {
             throw new IllegalArgumentException("Layer " + layer + " not bit-sized");
         }
@@ -62,7 +68,8 @@ public final class BitLayerPaint extends LayerPaint {
         final int x1 = centreX + boundingBox.x, y1 = centreY + boundingBox.y, x2 = x1 + boundingBox.width - 1, y2 = y1 + boundingBox.height - 1;
         final int tileX1 = x1 >> TILE_SIZE_BITS, tileY1 = y1 >> TILE_SIZE_BITS, tileX2 = x2 >> TILE_SIZE_BITS, tileY2 = y2 >> TILE_SIZE_BITS;
         final boolean oneTile = (tileX1 == tileX2) && (tileY1 == tileY2);
-        if (applyNativeBitLayerBrush(dimension, centreX, centreY, dynamicLevel,
+        if (applyDitheredBatch(dimension, centreX, centreY, dynamicLevel, x1, y1, x2, y2, oneTile, true)
+                || applyNativeBitLayerBrush(dimension, centreX, centreY, dynamicLevel,
                 x1, y1, x2, y2, oneTile, true)) {
             return;
         }
@@ -78,7 +85,7 @@ public final class BitLayerPaint extends LayerPaint {
                 for (int y = y1InTile; y <= y2InTile; y++) {
                     for (int x = x1InTile; x <= x2InTile; x++) {
                         final float strength = dynamicLevel * getStrength(centreX, centreY, tileXInWorld + x, tileYInWorld + y);
-                        if ((strength > 0.95f) || (Math.random() < strength)) {
+                        if ((strength > 0.95f) || (random.getAsDouble() < strength)) {
                             tile.setBitLayerValue(layer, x, y, true);
                         }
                     }
@@ -104,7 +111,7 @@ public final class BitLayerPaint extends LayerPaint {
                         Tile tile = null;
                         for (int x = x1; x <= x2; x++) {
                             final float strength = dynamicLevel * getStrength(centreX, centreY, x, y);
-                            if ((strength > 0.95f) || (Math.random() < strength)) {
+                            if ((strength > 0.95f) || (random.getAsDouble() < strength)) {
                                 final int tileX = x >> TILE_SIZE_BITS;
                                 if (tileX != cachedTileX) {
                                     cachedTileX = tileX;
@@ -140,7 +147,7 @@ public final class BitLayerPaint extends LayerPaint {
                 for (int y = y1; y <= y2; y++) {
                     for (int x = x1; x <= x2; x++) {
                         final float strength = dynamicLevel * getStrength(centreX, centreY, x, y);
-                        if ((strength > 0.95f) || (Math.random() < strength)) {
+                        if ((strength > 0.95f) || (random.getAsDouble() < strength)) {
                             dimension.setBitLayerValueAt(layer, x, y, true);
                         }
                     }
@@ -170,7 +177,8 @@ public final class BitLayerPaint extends LayerPaint {
         final int x1 = centreX + boundingBox.x, y1 = centreY + boundingBox.y, x2 = x1 + boundingBox.width - 1, y2 = y1 + boundingBox.height - 1;
         final int tileX1 = x1 >> TILE_SIZE_BITS, tileY1 = y1 >> TILE_SIZE_BITS, tileX2 = x2 >> TILE_SIZE_BITS, tileY2 = y2 >> TILE_SIZE_BITS;
         final boolean oneTile = (tileX1 == tileX2) && (tileY1 == tileY2);
-        if (applyNativeBitLayerBrush(dimension, centreX, centreY, dynamicLevel,
+        if (applyDitheredBatch(dimension, centreX, centreY, dynamicLevel, x1, y1, x2, y2, oneTile, false)
+                || applyNativeBitLayerBrush(dimension, centreX, centreY, dynamicLevel,
                 x1, y1, x2, y2, oneTile, false)) {
             return;
         }
@@ -186,7 +194,7 @@ public final class BitLayerPaint extends LayerPaint {
                 for (int y = y1InTile; y <= y2InTile; y++) {
                     for (int x = x1InTile; x <= x2InTile; x++) {
                         final float strength = dynamicLevel * getFullStrength(centreX, centreY, tileXInWorld + x, tileYInWorld + y);
-                        if ((strength > 0.95f) || (Math.random() < strength)) {
+                        if ((strength > 0.95f) || (random.getAsDouble() < strength)) {
                             tile.setBitLayerValue(layer, x, y, false);
                         }
                     }
@@ -210,7 +218,7 @@ public final class BitLayerPaint extends LayerPaint {
                         Tile tile = null;
                         for (int x = x1; x <= x2; x++) {
                             final float strength = dynamicLevel * getFullStrength(centreX, centreY, x, y);
-                            if ((strength > 0.95f) || (Math.random() < strength)) {
+                            if ((strength > 0.95f) || (random.getAsDouble() < strength)) {
                                 final int tileX = x >> TILE_SIZE_BITS;
                                 if (tileX != cachedTileX) {
                                     cachedTileX = tileX;
@@ -246,7 +254,7 @@ public final class BitLayerPaint extends LayerPaint {
                 for (int y = y1; y <= y2; y++) {
                     for (int x = x1; x <= x2; x++) {
                         final float strength = dynamicLevel * getFullStrength(centreX, centreY, x, y);
-                        if ((strength > 0.95f) || (Math.random() < strength)) {
+                        if ((strength > 0.95f) || (random.getAsDouble() < strength)) {
                             dimension.setBitLayerValueAt(layer, x, y, false);
                         }
                     }
@@ -319,4 +327,11 @@ public final class BitLayerPaint extends LayerPaint {
 
     private byte[] nativeModified;
     private float[] nativeStrengths;
+    private final DoubleSupplier random;
+    private boolean applyDitheredBatch(Dimension dimension,int cx,int cy,float level,int x1,int y1,int x2,int y2,boolean oneTile,boolean value) {
+        if(!dither||filterEnabled||!Boolean.parseBoolean(System.getProperty("welt.native.ditheredPaint","false")))return false;
+        if(ditheredBatch==null)ditheredBatch=new DitheredBrushBatch();
+        return ditheredBatch.apply(dimension,brush,random,layer,null,value?1:0,cx,cy,level,x1,y1,x2,y2,oneTile,!value);
+    }
+    private DitheredBrushBatch ditheredBatch;
 }
