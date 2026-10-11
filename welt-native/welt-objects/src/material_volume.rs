@@ -161,6 +161,30 @@ pub fn transform(
     if count > 16 * 1024 * 1024 || source.len() != count * stride || output.len() != source.len() {
         return false;
     }
+    visit_transformed(width, length, height, operations, |target, input| {
+        let target = target * stride;
+        let input = input * stride;
+        output[target..target + stride].copy_from_slice(&source[input..input + stride]);
+    })
+}
+
+fn visit_transformed(
+    width: usize,
+    length: usize,
+    height: usize,
+    operations: &[i32],
+    mut visit: impl FnMut(usize, usize),
+) -> bool {
+    if width == 0 || length == 0 || height == 0 || operations.len() > 64 {
+        return false;
+    }
+    if width
+        .checked_mul(length)
+        .and_then(|n| n.checked_mul(height))
+        .is_none_or(|n| n > 16 * 1024 * 1024)
+    {
+        return false;
+    }
     let (mut w, mut h) = (width as i64, length as i64);
     let (mut a, mut b, mut c, mut d, mut tx, mut ty) = (1i64, 0i64, 0i64, 1i64, 0i64, 0i64);
     for &op in operations {
@@ -191,9 +215,9 @@ pub fn transform(
             for x in 0..out_w {
                 let sx = (a * x as i64 + b * y as i64 + tx) as usize;
                 let sy = (c * x as i64 + d * y as i64 + ty) as usize;
-                let input = (sx + sy * width + z * width * length) * stride;
-                let target = (x + y * out_w + z * out_w * out_h) * stride;
-                output[target..target + stride].copy_from_slice(&source[input..input + stride]);
+                let input = sx + sy * width + z * width * length;
+                let target = x + y * out_w + z * out_w * out_h;
+                visit(target, input);
             }
         }
     }
@@ -229,5 +253,152 @@ mod transform_tests {
         assert_eq!(out, [7; 6]);
         assert!(!transform(&[0; 6], 3, 2, 1, 3, &[], &mut out));
         assert!(!transform(&[0; 6], usize::MAX, 2, 1, 1, &[], &mut out));
+    }
+}
+
+/// Fuse source palette remapping and composed coordinates without a temporary voxel plane.
+pub fn remap_transform(
+    packed: Option<(&[u8], usize)>,
+    integers: Option<&[i32]>,
+    mapping: &[i32],
+    palette: usize,
+    dimensions: [usize; 3],
+    operations: &[i32],
+    output: &mut [u8],
+) -> bool {
+    let [width, length, height] = dimensions;
+    let Some(count) = width
+        .checked_mul(length)
+        .and_then(|n| n.checked_mul(height))
+    else {
+        return false;
+    };
+    if count == 0
+        || count > 16 * 1024 * 1024
+        || !(1..=65536).contains(&palette)
+        || mapping.is_empty()
+        || mapping.len() > 65536
+        || packed.is_some() == integers.is_some()
+    {
+        return false;
+    }
+    let stride = if palette <= 256 { 1 } else { 2 };
+    if output.len() != count * stride {
+        return false;
+    }
+    if let Some((bytes, input_stride)) = packed {
+        if !(1..=2).contains(&input_stride) || bytes.len() != count * input_stride {
+            return false;
+        }
+    }
+    if let Some(values) = integers {
+        if values.len() != count {
+            return false;
+        }
+    }
+    let source_index = |i: usize| -> i32 {
+        if let Some((bytes, width)) = packed {
+            let p = i * width;
+            i32::from(bytes[p])
+                | if width == 2 {
+                    i32::from(bytes[p + 1]) << 8
+                } else {
+                    0
+                }
+        } else {
+            integers.unwrap()[i]
+        }
+    };
+    for i in 0..count {
+        let id = source_index(i);
+        if id < 0
+            || id as usize >= mapping.len()
+            || mapping[id as usize] < 0
+            || mapping[id as usize] as usize >= palette
+        {
+            return false;
+        }
+    }
+    visit_transformed(width, length, height, operations, |target, input| {
+        let id = mapping[source_index(input) as usize];
+        let p = target * stride;
+        output[p] = id as u8;
+        if stride == 2 {
+            output[p + 1] = (id >> 8) as u8;
+        }
+    })
+}
+#[cfg(test)]
+mod fused_transform_tests {
+    use super::*;
+    #[test]
+    fn fused_matches_separate_operations() {
+        let indices = [0, 1, 2, 3, 2, 1, 3, 2, 1, 0, 3, 2];
+        let packed: Vec<u8> = indices
+            .iter()
+            .flat_map(|&v| (v as u16).to_le_bytes())
+            .collect();
+        for a in 0..6 {
+            for b in 0..6 {
+                for c in 0..6 {
+                    let operations = [a, b, c];
+                    let mut plane = [0; 24];
+                    let mut expected = [0; 24];
+                    let mut actual = [0; 24];
+                    assert!(remap(
+                        None,
+                        Some(&indices),
+                        &[0, 300, 1, 65535],
+                        65536,
+                        &mut plane
+                    ));
+                    assert!(transform(&plane, 3, 2, 2, 2, &operations, &mut expected));
+                    assert!(remap_transform(
+                        None,
+                        Some(&indices),
+                        &[0, 300, 1, 65535],
+                        65536,
+                        [3, 2, 2],
+                        &operations,
+                        &mut actual
+                    ));
+                    assert_eq!(actual, expected);
+                    assert!(remap_transform(
+                        Some((&packed, 2)),
+                        None,
+                        &[0, 300, 1, 65535],
+                        65536,
+                        [3, 2, 2],
+                        &operations,
+                        &mut actual
+                    ));
+                    assert_eq!(actual, expected);
+                }
+            }
+        }
+    }
+    #[test]
+    fn invalid_input_does_not_write() {
+        let mut output = [9; 2];
+        assert!(!remap_transform(
+            None,
+            Some(&[0, -1]),
+            &[0],
+            1,
+            [2, 1, 1],
+            &[1],
+            &mut output
+        ));
+        assert_eq!(output, [9; 2]);
+        assert!(!remap_transform(
+            None,
+            Some(&[0, 0]),
+            &[0],
+            1,
+            [2, 1, 1],
+            &[6],
+            &mut output
+        ));
+        assert_eq!(output, [9; 2]);
     }
 }

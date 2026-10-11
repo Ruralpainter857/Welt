@@ -15,14 +15,16 @@ public final class GenericObjectBenchmark {
     private static volatile WPObject heldSource;
     private static volatile long checksum;
     private static WPObject fixture(String kind, int width, int length, int height) throws Exception {
+        WPObject object;
         if (kind.equals("schem")) {
             int side = Integer.getInteger("welt.benchmark.genericSchemSide",64);
-            return Schem.load(new ByteArrayInputStream(SchemLoadBenchmark.fixture(side,3)),"Source");
+            object=Schem.load(new ByteArrayInputStream(SchemLoadBenchmark.fixture(side,3)),"Source");
+        } else {
+            Material[] values = new Material[width*length*height];
+            Material[] palette = {null,Material.AIR,Material.STONE,Material.get("welt:custom","facing","north")};
+            for (int z=0;z<height;z++) for (int y=0;y<length;y++) for (int x=0;x<width;x++) values[x+y*width+z*width*length]=palette[(x*17+y*7+z*3)&3];
+            object=new GenericObject("Source",width,length,height,values,null,null,Map.of(WPObject.ATTRIBUTE_OFFSET.key,new Point3i(-1,-2,-3)));
         }
-        Material[] values = new Material[width*length*height];
-        Material[] palette = {null,Material.AIR,Material.STONE,Material.get("welt:custom","facing","north")};
-        for (int z=0;z<height;z++) for (int y=0;y<length;y++) for (int x=0;x<width;x++) values[x+y*width+z*width*length]=palette[(x*17+y*7+z*3)&3];
-        WPObject object=new GenericObject("Source",width,length,height,values,null,null,Map.of(WPObject.ATTRIBUTE_OFFSET.key,new Point3i(-1,-2,-3)));
         var platform=org.pepsoft.worldpainter.DefaultPlugin.JAVA_ANVIL_1_15;
         return switch(System.getProperty("welt.benchmark.genericTransform","none")) {
             case "none" -> object;

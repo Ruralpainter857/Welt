@@ -27,12 +27,10 @@ final class CompactObjectTransforms {
             }
         }
         // Random or mutable sources and overridden wrapper implementations retain Java traversal.
-        if (!(current instanceof GenericObject)) return null;
-        GenericObject source = (GenericObject) current;
-        CompactMaterialVolume volume = source.compactVolume();
-        if (volume == null) return null;
+        CompactMaterialVolume volume = current instanceof GenericObject ? ((GenericObject) current).compactVolume() : null;
+        if (volume == null && !(current instanceof CompactTransformedObjectSource)) return null;
         Collections.reverse(steps);
-        Point3i size = source.getDimensions();
+        Point3i size = current.getDimensions();
         int width = size.x, length = size.y;
         for (Step step : steps) {
             if (step.operation == 1 || step.operation == 3) {
@@ -48,6 +46,7 @@ final class CompactObjectTransforms {
             parameters[i + 4] = steps.get(i).operation;
             platforms[i] = steps.get(i).platform;
         }
-        return volume.transform(parameters, platforms);
+        return volume != null ? volume.transform(parameters, platforms)
+                : ((CompactTransformedObjectSource) current).copyTransformedCompactVolume(parameters, platforms);
     }
 }

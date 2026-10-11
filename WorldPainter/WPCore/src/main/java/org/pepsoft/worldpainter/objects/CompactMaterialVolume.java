@@ -54,6 +54,21 @@ public final class CompactMaterialVolume {
         if(!NativeSlices.remapMaterialVolume(packed,integers,sourceStride,mapping,palette.size(),output))return null;
         return new CompactMaterialVolume(palette.toArray(new Material[0]),output,count);
     }
+    /** One complete indexed-source transformation; source palette and voxel plane stay unchanged. */
+    public static CompactMaterialVolume captureTransformedSchematic(Material[] sourcePalette,byte[] packed,int[] integers,int sourceStride,int count,int[] parameters,org.pepsoft.worldpainter.Platform[] platforms) {
+        if(!NativeSlices.isIndexedObjectTransformsAvailable() || count<1 || count>16*1024*1024 || sourcePalette.length<1 || sourcePalette.length>65536)return null;
+        IdentityHashMap<Material,Integer> ids=new IdentityHashMap<>();ArrayList<Material> palette=new ArrayList<>();palette.add(null);ids.put(null,0);
+        int[] mapping=new int[sourcePalette.length];
+        for(int i=0;i<sourcePalette.length;i++){
+            Material material=sourcePalette[i];if(material==null || material==Material.AIR)continue;
+            Integer id=ids.get(material);if(id==null){if(palette.size()==65536)return null;id=palette.size();ids.put(material,id);palette.add(material);}mapping[i]=id;
+        }
+        Material[] transformed=transformPalette(palette.toArray(new Material[0]),parameters,platforms);if(transformed==null)return null;
+        parameters[3]=palette.size()<=256?1:2;
+        byte[] output=new byte[count*parameters[3]];
+        if(!NativeSlices.remapTransformedMaterialVolume(packed,integers,sourceStride,mapping,palette.size(),parameters,output))return null;
+        return new CompactMaterialVolume(transformed,output,count);
+    }
     Material get(int index) {
         if (index < 0 || index >= count) throw new ArrayIndexOutOfBoundsException(index);
         int p = index * stride;
@@ -62,6 +77,14 @@ public final class CompactMaterialVolume {
         return palette[id];
     }
     CompactMaterialVolume transform(int[] parameters, org.pepsoft.worldpainter.Platform[] platforms) {
+        Material[] transformed=transformPalette(palette,parameters,platforms);if(transformed==null)return null;
+        parameters[3]=stride;byte[] output=new byte[indices.length];
+        if(!NativeSlices.transformMaterialVolume(indices,parameters,output))return null;
+        return new CompactMaterialVolume(transformed,output,count);
+    }
+    private static Material[] transformPalette(Material[] palette,int[] parameters,org.pepsoft.worldpainter.Platform[] platforms) {
+        if(parameters==null || platforms==null || parameters.length!=4+platforms.length)return null;
+        for(int i=4;i<parameters.length;i++)if(parameters[i]<0 || parameters[i]>5)return null;
         Material[] transformed=palette.clone();
         try {
             for(int i=1;i<transformed.length;i++)for(int j=0;j<platforms.length;j++) {
@@ -70,9 +93,7 @@ public final class CompactMaterialVolume {
                 else transformed[i]=transformed[i].mirror(operation==5?org.pepsoft.minecraft.Direction.EAST:org.pepsoft.minecraft.Direction.SOUTH,platforms[j]);
             }
         }catch(RuntimeException unsupported){return null;}
-        parameters[3]=stride;byte[] output=new byte[indices.length];
-        if(!NativeSlices.transformMaterialVolume(indices,parameters,output))return null;
-        return new CompactMaterialVolume(transformed,output,count);
+        return transformed;
     }
     Material[] expand() {
         Material[] result = new Material[count];

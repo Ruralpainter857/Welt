@@ -30,6 +30,21 @@ public final class NativeSlices {
         catch(UnsatisfiedLinkError e){objectTransformSymbolUnavailable=true;return false;}
     }
     private static native int nativeTransformMaterialVolume(byte[] source,int[] parameters,byte[] output);
+    private static volatile boolean indexedTransformSymbolUnavailable;
+    public static boolean isIndexedObjectTransformsAvailable() {
+        return !indexedTransformSymbolUnavailable && isObjectTransformsAvailable();
+    }
+    /** Fuse indexed-source remapping and the v1 transform chain in a single transaction. */
+    public static boolean remapTransformedMaterialVolume(byte[] packed,int[] integers,int sourceStride,int[] mapping,int paletteSize,int[] parameters,byte[] output) {
+        if(!isIndexedObjectTransformsAvailable() || (packed==null)==(integers==null) || mapping==null || parameters==null || output==null
+                || mapping.length<1 || mapping.length>65536 || paletteSize<1 || paletteSize>65536
+                || parameters.length<4 || parameters.length>68 || output.length<1 || output.length>32*1024*1024 || packed==output
+                || packed!=null && (sourceStride<1 || sourceStride>2 || packed.length>32*1024*1024)
+                || integers!=null && integers.length>16*1024*1024)return false;
+        try{return nativeRemapTransformedMaterialVolume(packed,integers,sourceStride,mapping,paletteSize,parameters,output)==0;}
+        catch(UnsatisfiedLinkError e){indexedTransformSymbolUnavailable=true;return false;}
+    }
+    private static native int nativeRemapTransformedMaterialVolume(byte[] packed,int[] integers,int sourceStride,int[] mapping,int paletteSize,int[] parameters,byte[] output);
     private static volatile boolean materialVolumeSymbolUnavailable;
     public static boolean isMaterialVolumeAvailable() {
         return !materialVolumeSymbolUnavailable && Boolean.getBoolean("welt.native.objectSnapshots")

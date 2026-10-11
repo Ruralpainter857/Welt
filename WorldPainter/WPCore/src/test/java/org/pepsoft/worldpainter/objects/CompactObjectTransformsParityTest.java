@@ -20,6 +20,10 @@ public class CompactObjectTransformsParityTest {
             action.run();
         }finally{for(int i=0;i<3;i++){if(values[i]==null)System.clearProperty(keys[i]);else System.setProperty(keys[i],values[i]);}}
     }
+    private static void indexedReady() {
+        boolean ready=NativeSlices.remapTransformedMaterialVolume(null,new int[]{0},0,new int[]{0},1,new int[]{1,1,1,1,0},new byte[1]);
+        if(Boolean.getBoolean("welt.test.requireObjectTransforms"))assertTrue("Current fused JNI symbol required",ready);else org.junit.Assume.assumeTrue(ready);
+    }
     private GenericObject source(boolean wide) {
         Material[] data=new Material[7*5*3];
         Material[] palette={null,Material.AIR,Material.STONE,Material.get("minecraft:oak_stairs","facing","east","half","bottom","shape","straight","waterlogged","true"),Material.get("minecraft:oak_log","axis","x"),Material.get("welt:custom","facing","north")};
@@ -49,6 +53,32 @@ public class CompactObjectTransformsParityTest {
             }
             assertEquals(2,source.getTileEntities().get(0).getX());assertEquals(3,source.getTileEntities().get(0).getZ());
         }
+    });}
+    @Test public void spongeRootsTransformWithoutIntermediateObjects() throws Exception {enabled(()->{
+        indexedReady();
+        String old=System.getProperty("welt.native.schem");
+        try{for(boolean packed:new boolean[]{false,true})for(int version:new int[]{1,2,3}){
+            System.setProperty("welt.native.schem",Boolean.toString(packed));
+            WPObject source=org.pepsoft.worldpainter.layers.bo2.Schem.load(new ByteArrayInputStream(org.pepsoft.worldpainter.layers.bo2.SchemLoadBenchmark.fixture(8,version)),"Sponge");
+            for(int steps=0;steps<4;steps++)for(boolean mirror:new boolean[]{false,true}){
+                WPObject transformed=new RotatedObject(new MirroredObject(new RotatedObject(source,steps,JAVA_ANVIL_1_15),mirror,JAVA_ANVIL),3,JAVA_ANVIL_1_15);
+                assertNotNull(((CompactObjectSource)transformed).copyCompactVolume());GenericObject copy=new GenericObject(transformed);
+                assertEquals(transformed.getAttributes(),copy.getAttributes());assertEquals(transformed.getName(),copy.getName());assertEquals(transformed.getDimensions(),copy.getDimensions());
+                Point3i d=copy.getDimensions();for(int z=0;z<d.z;z++)for(int y=0;y<d.y;y++)for(int x=0;x<d.x;x++){
+                    assertEquals(transformed.getMask(x,y,z),copy.getMask(x,y,z));assertSame(transformed.getMask(x,y,z)?transformed.getMaterial(x,y,z):null,copy.getMaterial(x,y,z));
+                }
+            }
+        }}finally{if(old==null)System.clearProperty("welt.native.schem");else System.setProperty("welt.native.schem",old);}
+        assertFalse(NativeSlices.remapTransformedMaterialVolume(null,new int[]{-1},0,new int[]{0},1,new int[]{1,1,1,1,1},new byte[1]));
+    });}
+    @Test public void fusedWidePaletteAndInvalidIndices() throws Exception {enabled(()->{
+        indexedReady();
+        int[] mapping=new int[258];mapping[257]=300;byte[] output=new byte[4];
+        assertTrue(NativeSlices.remapTransformedMaterialVolume(new byte[]{0,0,1,1},null,2,mapping,301,new int[]{2,1,1,2,1},output));
+        assertArrayEquals(new byte[]{0,0,44,1},output);
+        assertTrue(NativeSlices.remapTransformedMaterialVolume(new byte[]{0,1},null,1,new int[]{300,0},301,new int[]{2,1,1,2,4},output));
+        assertArrayEquals(new byte[]{0,0,44,1},output);
+        Arrays.fill(output,(byte)9);assertFalse(NativeSlices.remapTransformedMaterialVolume(null,new int[]{0,-1},0,new int[]{0},301,new int[]{2,1,1,2,1},output));assertArrayEquals(new byte[]{9,9,9,9},output);
     });}
     @Test public void eachStepKeepsItsOwnPlatform() throws Exception {enabled(()->{
         GenericObject source=source(false);
