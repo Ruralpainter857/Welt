@@ -188,7 +188,18 @@ public final class NativeSlices {
     }
     /** One bounded project-object snapshot; null retains the historical Java map. */
     public static byte[] packStructureSnapshot(byte[] source) {
-        if (!isStructureSnapshotAvailable() || source == null || source.length < 32
+        return packCoordinateSnapshot(source, isStructureSnapshotAvailable());
+    }
+    public static boolean isBo2ProjectSnapshotAvailable() {
+        return !structureSnapshotSymbolUnavailable && Boolean.getBoolean("welt.native.bo2Projects")
+                && Native.isGenEnabled() && NativeLoader.areSlicesAvailable();
+    }
+    /** BO2 project snapshots share the bounded coordinate ABI and its native storage builder. */
+    public static byte[] packBo2ProjectSnapshot(byte[] source) {
+        return packCoordinateSnapshot(source, isBo2ProjectSnapshotAvailable());
+    }
+    private static byte[] packCoordinateSnapshot(byte[] source, boolean available) {
+        if (!available || source == null || source.length < 32
                 || source.length > 32 + 262144 * 16) return null;
         try { return nativePackStructureSnapshot(source); }
         catch (UnsatisfiedLinkError e) { structureSnapshotSymbolUnavailable = true; return null; }

@@ -72,11 +72,18 @@ public final class Bo2Object extends AbstractObject implements Bo2ObjectProvider
 
     @Override
     public Material getMaterial(int x, int y, int z) {
+        if (compactBlocks != null) {
+            Material material = compactBlocks.material(x, y, z, origin);
+            if (material != null) return material;
+            // Preserve the original VM-generated exception for an absent coordinate.
+            return Collections.<Point3i, Bo2BlockSpec>emptyMap().get(new Point3i(x - origin.x, y - origin.y, z - origin.z)).getMaterial();
+        }
         return blocks.get(new Point3i(x - origin.x, y - origin.y, z - origin.z)).getMaterial();
     }
 
     @Override
     public boolean getMask(int x, int y, int z) {
+        if (compactBlocks != null) return compactBlocks.mask(x, y, z, origin);
         return blocks.containsKey(new Point3i(x - origin.x, y - origin.y, z - origin.z));
     }
 
@@ -132,6 +139,7 @@ public final class Bo2Object extends AbstractObject implements Bo2ObjectProvider
 
     @Override
     public boolean visitBlocks(BlockVisitor visitor) {
+        if (compactBlocks != null) return compactBlocks.visit(this, visitor, origin);
         for (Map.Entry<Point3i, Bo2BlockSpec> entry: blocks.entrySet()) {
             Point3i coords = entry.getKey();
             if (! visitor.visitBlock(this, coords.x + origin.x, coords.y + origin.y, coords.z + origin.z, entry.getValue().getMaterial())) {
@@ -204,6 +212,12 @@ public final class Bo2Object extends AbstractObject implements Bo2ObjectProvider
             guessConnectBlocks();
         }
         version = 3;
+        if (org.pepsoft.worldpainter.nativeapi.NativeSlices.isBo2ProjectSnapshotAvailable()) {
+            Bo2CompactBlocks restored;
+            try { restored = Bo2CompactBlocks.capture(blocks, origin, dimensions); }
+            catch (RuntimeException unsupported) { return; }
+            if (restored != null) { compactBlocks = restored; blocks = null; }
+        }
     }
 
     /**
@@ -332,9 +346,22 @@ public final class Bo2Object extends AbstractObject implements Bo2ObjectProvider
         }
     }
  
+    /** Native index bytes, or -1 while the historical map is retained. */
+    public long getBlockIndexStorageBytes() { return compactBlocks == null ? -1 : compactBlocks.storageBytes(); }
+
+    private void writeObject(ObjectOutputStream out) throws IOException {
+        ObjectOutputStream.PutField fields = out.putFields();
+        fields.put("name", name); fields.put("properties", properties);
+        fields.put("blocks", compactBlocks == null ? blocks : compactBlocks.historicalMap());
+        fields.put("origin", origin); fields.put("dimensions", dimensions);
+        fields.put("attributes", attributes); fields.put("version", version);
+        out.writeFields();
+    }
+
     private String name;
     private final Map<String, String> properties;
-    private final Map<Point3i, Bo2BlockSpec> blocks;
+    private Map<Point3i, Bo2BlockSpec> blocks;
+    private transient Bo2CompactBlocks compactBlocks;
     private Point3i origin, dimensions;
     private Map<String, Serializable> attributes;
     private int version = 3;
