@@ -229,9 +229,26 @@ public class Structure extends AbstractObject implements Bo2ObjectProvider {
         out.writeFields();
     }
 
+    private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+        in.defaultReadObject();
+        if (getClass() != Structure.class || !org.pepsoft.worldpainter.nativeapi.NativeSlices.isStructureSnapshotAvailable()) return;
+        StructureCompactBlocks restored;
+        try {
+            restored = StructureCompactBlocks.captureProject(blocks, getDimensions());
+        } catch (RuntimeException unsupported) {
+            // Malformed/custom project metadata retains the original deferred Java behavior.
+            return;
+        }
+        if (restored != null) {
+            compactBlocks = restored;
+            blocks = null;
+            restored.completed();
+        }
+    }
+
     private transient StructureCompactBlocks compactBlocks;
     private final CompoundTag root;
-    private final Map<Point3i, Material> blocks;
+    private Map<Point3i, Material> blocks;
     private String name;
     private Map<String, Serializable> attributes;
     private final List<Entity> entities;

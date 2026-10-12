@@ -9,6 +9,25 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
     _class: jclass,
     input: jobject,
 ) -> jobject {
+    unsafe { structure_transaction(env, input, welt_nbt::structure::extract) }
+}
+
+/// # Safety
+/// The Java snapshot array remains alive throughout this synchronous call.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativePackStructureSnapshot(
+    env: *mut JNIEnv,
+    _class: jclass,
+    input: jobject,
+) -> jobject {
+    unsafe { structure_transaction(env, input, welt_nbt::structure::pack_records) }
+}
+
+unsafe fn structure_transaction(
+    env: *mut JNIEnv,
+    input: jobject,
+    pack: fn(&[u8]) -> Option<Vec<u8>>,
+) -> jobject {
     let mut result = std::ptr::null_mut();
     unsafe {
         jni_catch(env, || {
@@ -25,7 +44,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 return WeltError::IllegalArgument as jint;
             };
             let bytes = slice::from_raw_parts(lease.pointer.cast::<u8>(), length as usize);
-            let output = welt_nbt::structure::extract(bytes);
+            let output = pack(bytes);
             drop(lease);
             let Some(output) = output else {
                 return WeltError::IllegalArgument as jint;

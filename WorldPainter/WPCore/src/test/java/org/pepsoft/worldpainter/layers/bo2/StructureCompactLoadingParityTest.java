@@ -22,7 +22,7 @@ public class StructureCompactLoadingParityTest {
     private static CompoundTag root(byte[] bytes) throws IOException {
         try (NBTInputStream in = new NBTInputStream(new GZIPInputStream(new ByteArrayInputStream(bytes)))) { return (CompoundTag) in.readTag(); }
     }
-    private static byte[] encode(CompoundTag root) throws IOException {
+    static byte[] encode(CompoundTag root) throws IOException {
         var bytes = new ByteArrayOutputStream();
         try (NBTOutputStream out = new NBTOutputStream(new GZIPOutputStream(bytes))) { out.writeTag(root); }
         return bytes.toByteArray();
@@ -44,7 +44,7 @@ public class StructureCompactLoadingParityTest {
         else if (e instanceof Float value) assertEquals(Float.floatToRawIntBits(value), Float.floatToRawIntBits((Float) a));
         else assertEquals(e, a);
     }
-    private static void same(WPObject expected, WPObject actual) {
+    static void same(WPObject expected, WPObject actual) {
         try {
             var eRoot = expected.getClass().getDeclaredField("root"); var aRoot = actual.getClass().getDeclaredField("root");
             eRoot.setAccessible(true); aRoot.setAccessible(true); sameTag((Tag) eRoot.get(expected), (Tag) aRoot.get(actual));
@@ -86,7 +86,7 @@ public class StructureCompactLoadingParityTest {
         }
     }
     @SuppressWarnings("unchecked")
-    private static CompoundTag unusual() throws IOException {
+    static CompoundTag unusual() throws IOException {
         CompoundTag root = root(StructureLoadBenchmark.fixture(3, true));
         var palette = new ArrayList<>(((ListTag<CompoundTag>) root.getTag("palette")).getValue());
         palette.add(new CompoundTag("", new LinkedHashMap<>(Map.of("Name", new StringTag("Name", "minecraft:air"),
@@ -131,7 +131,7 @@ public class StructureCompactLoadingParityTest {
             catch (RuntimeException e) { if (!nativeMode) reference = e; else { assertEquals(reference.getClass(), e.getClass()); assertEquals(reference.getMessage(), e.getMessage()); } }
         }
     }
-    private static byte[] serialize(Object value) throws IOException {
+    static byte[] serialize(Object value) throws IOException {
         var bytes = new ByteArrayOutputStream(); try (var out = new ObjectOutputStream(bytes)) { out.writeObject(value); } return bytes.toByteArray();
     }
     @Test public void serializesThroughTheHistoricalStructureClassInBothDirections() throws Exception {

@@ -181,6 +181,20 @@ public final class NativeSlices {
     }
     private static native byte[] nativeExtractStructure(byte[] source);
 
+    private static volatile boolean structureSnapshotSymbolUnavailable;
+    public static boolean isStructureSnapshotAvailable() {
+        return !structureSnapshotSymbolUnavailable && Boolean.getBoolean("welt.native.structureProjects")
+                && isStructureLoadingAvailable();
+    }
+    /** One bounded project-object snapshot; null retains the historical Java map. */
+    public static byte[] packStructureSnapshot(byte[] source) {
+        if (!isStructureSnapshotAvailable() || source == null || source.length < 32
+                || source.length > 32 + 262144 * 16) return null;
+        try { return nativePackStructureSnapshot(source); }
+        catch (UnsatisfiedLinkError e) { structureSnapshotSymbolUnavailable = true; return null; }
+    }
+    private static native byte[] nativePackStructureSnapshot(byte[] source);
+
     private static volatile boolean schematicSymbolUnavailable;
     public static boolean isSchematicLoadingAvailable() {
         return !schematicSymbolUnavailable && Boolean.getBoolean("welt.native.schem")

@@ -98,10 +98,25 @@ public final class StructureLoadBenchmark {
         boolean sparse = Boolean.getBoolean("welt.benchmark.structureSparse");
         boolean access = "access".equals(System.getProperty("welt.benchmark.structureOperation", "load"));
         boolean saving = "save".equals(System.getProperty("welt.benchmark.structureOperation", "load"));
+        boolean reloading = "reload".equals(System.getProperty("welt.benchmark.structureOperation", "load"));
         boolean compare = args.length > 0 && args[0].equals("compare"), rust = args.length > 0 && args[0].equals("rust");
         if (SPARSE_MASK < 15 || SPARSE_MASK > 65535 || (SPARSE_MASK & (SPARSE_MASK + 1)) != 0 || side < 2 || side > 64 || objects < 1 || objects > 16 || warmups < 5 || warmups > 100)
             throw new IllegalArgumentException("Invalid fixture dimensions");
+        if (Boolean.getBoolean("welt.benchmark.structurePreload")) {
+            System.setProperty("wp.native.gen","true");System.setProperty("welt.native.structure","true");
+            if(!org.pepsoft.worldpainter.nativeapi.NativeSlices.isStructureLoadingAvailable())throw new AssertionError("Release library preload failed");
+        }
         byte[] bytes = fixture(side, sparse);
+        byte[] project = null;
+        if (reloading) {
+            System.setProperty("wp.native.gen", "false");
+            System.setProperty("welt.native.structureProjects", "false");
+            Structure[] source = new Structure[objects];
+            for (int i = 0; i < objects; i++) source[i] = Structure.load("Benchmark", new ByteArrayInputStream(bytes));
+            var sink = new ByteArrayOutputStream();
+            try (var out = new ObjectOutputStream(new GZIPOutputStream(sink))) { out.writeObject(source); }
+            project = sink.toByteArray();
+        }
         var bean = (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
         if (!bean.isThreadAllocatedMemoryEnabled()) bean.setThreadAllocatedMemoryEnabled(true);
         long thread = Thread.currentThread().getId();
@@ -115,18 +130,24 @@ public final class StructureLoadBenchmark {
                 boolean nativeMode = compare ? ((trial + pass) & 1) != 0 : rust;
                 System.setProperty("wp.native.gen", Boolean.toString(nativeMode));
                 System.setProperty("welt.native.structure", Boolean.toString(nativeMode));
+                System.setProperty("welt.native.structureProjects", Boolean.toString(reloading && nativeMode));
                 long callsBefore = StructureCompactBlocks.completedObjects();
                 Structure[] loaded = new Structure[objects];
                 if (access || saving) for (int i = 0; i < objects; i++) loaded[i] = Structure.load("Benchmark", new ByteArrayInputStream(bytes));
                 long before = bean.getThreadAllocatedBytes(thread), start = System.nanoTime();
                 long hash = 1; byte[] saved = null;
-                if (access) for (Structure object : loaded) hash = hash * 31 + visit(object, side);
+                if (reloading) {
+                    try (var in = new ObjectInputStream(new GZIPInputStream(new ByteArrayInputStream(project)))) {
+                        loaded = (Structure[]) in.readObject();
+                    }
+                } else if (access) for (Structure object : loaded) hash = hash * 31 + visit(object, side);
                 else if (saving) {
                     var sink = new ByteArrayOutputStream();
                     try (var out = new ObjectOutputStream(new GZIPOutputStream(sink))) { out.writeObject(loaded); }
                     saved = sink.toByteArray();
                 } else for (int i = 0; i < objects; i++) loaded[i] = Structure.load("Benchmark", new ByteArrayInputStream(bytes));
                 long elapsed = System.nanoTime() - start, allocated = bean.getThreadAllocatedBytes(thread) - before;
+                if (reloading) for (Structure object : loaded) hash = hash * 31 + visit(object, side);
                 long calls = StructureCompactBlocks.completedObjects() - callsBefore;
                 if (calls != (nativeMode ? objects : 0)) throw new AssertionError("Unexpected native coverage");
                 storage = nativeMode ? 0 : -1;
@@ -146,6 +167,11 @@ public final class StructureLoadBenchmark {
             }
             if (compare && trial >= 0) ratios[trial] = javaTimes[trial] / rustTimes[trial];
         }
+        if (Boolean.getBoolean("welt.native.structureProjectProfile")) {
+            long[] profile=StructureCompactBlocks.projectProfile();
+            System.out.printf(Locale.ROOT,"structureProjectProfile calls=%d preparationMs=%.3f nativeMs=%.3f storageMs=%.3f%n",
+                    profile[0],profile[1]/1e6,profile[2]/1e6,profile[3]/1e6);
+        }
         System.gc();
         Thread.sleep(150);
         Arrays.sort(times);
@@ -159,13 +185,13 @@ public final class StructureLoadBenchmark {
         }
         if (compare) {
             System.out.printf(Locale.ROOT, "structureHeldLibrary operation=%s sparse=%s side=%d objects=%d postGcHeapBytes=%d compactIndexBytes=%d%n",
-                    access ? "access" : saving ? "save" : "load", sparse, side, objects,
+                    access ? "access" : saving ? "save" : reloading ? "reload" : "load", sparse, side, objects,
                     ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed(), storage);
             return;
         }
         System.out.printf(Locale.ROOT,
                 "structureLibrary operation=%s sparse=%s side=%d objects=%d medianMs=%.3f callerAllocatedBytes=%d postGcHeapBytes=%d compressedSourceBytes=%d checksum=%d heldObjects=%d compactIndexBytes=%d%n",
-                access ? "access" : saving ? "save" : "load", sparse, side, objects, times[4], allocations[4],
+                access ? "access" : saving ? "save" : reloading ? "reload" : "load", sparse, side, objects, times[4], allocations[4],
                 ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed(), bytes.length, checksum, heldLibrary.length, storage);
     }
 }

@@ -227,6 +227,69 @@ pub fn extract(bytes: &[u8]) -> Option<Vec<u8>> {
             retained.push((start, b.at));
         }
     }
+    let mut output = pack_storage(blocks, dims, palette_count)?;
+    let nbt_offset = output.len();
+    output.extend_from_slice(&bytes[..root_prefix]);
+    for field in &fields {
+        if field.name != b"blocks" {
+            output.extend_from_slice(&bytes[field.start..field.end]);
+        }
+    }
+    // Java only constructs block tags needed for block entities, preserving their order.
+    output.extend_from_slice(&[9, 0, 6, b'b', b'l', b'o', b'c', b'k', b's', 10]);
+    output.extend_from_slice(&(retained.len() as i32).to_be_bytes());
+    for (start, end) in retained {
+        output.extend_from_slice(&bytes[start..end]);
+    }
+    output.push(0);
+    if output.len() > MAX_BYTES + HEADER {
+        return None;
+    }
+    let frame_len = output.len();
+    output[36..40].copy_from_slice(&(nbt_offset as u32).to_le_bytes());
+    output[40..44].copy_from_slice(&((frame_len - nbt_offset) as u32).to_le_bytes());
+    output[44..48].copy_from_slice(&(frame_len as u32).to_le_bytes());
+    Some(output)
+}
+
+/// WSPR v1 snapshot: 32-byte header followed by x/y/z/palette-index records.
+/// This reuses imported structures' storage selection, deduplication and coordinate hash.
+pub fn pack_records(bytes: &[u8]) -> Option<Vec<u8>> {
+    if bytes.len() < 32 || bytes.len() > 32 + MAX_BLOCKS * 16 {
+        return None;
+    }
+    let word = |at: usize| i32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+    let count = usize::try_from(word(8)).ok()?;
+    let palette_count = usize::try_from(word(24)).ok()?;
+    if word(0) != 0x52505357
+        || word(4) != 1
+        || word(28) != 0
+        || count == 0
+        || count > MAX_BLOCKS
+        || bytes.len() != 32 + count * 16
+        || palette_count == 0
+        || palette_count > 65_535
+    {
+        return None;
+    }
+    let dims = [word(12), word(16), word(20)];
+    let mut blocks = Vec::with_capacity(count);
+    for ordinal in 0..count {
+        let p = 32 + ordinal * 16;
+        let state = u32::try_from(word(p + 12)).ok()?;
+        if state as usize >= palette_count {
+            return None;
+        }
+        blocks.push(Block {
+            xyz: [word(p), word(p + 4), word(p + 8)],
+            state,
+            ordinal,
+        });
+    }
+    pack_storage(blocks, dims, palette_count)
+}
+
+fn pack_storage(mut blocks: Vec<Block>, dims: [i32; 3], palette_count: usize) -> Option<Vec<u8>> {
     // Ordering the ordinal after coordinates makes last-wins deduplication explicit.
     blocks.sort_unstable_by_key(|block| (block.xyz, block.ordinal));
     let mut unique: Vec<Block> = Vec::with_capacity(blocks.len());
@@ -298,23 +361,7 @@ pub fn extract(bytes: &[u8]) -> Option<Vec<u8>> {
             }
         }
     }
-    let nbt_offset = output.len();
-    output.extend_from_slice(&bytes[..root_prefix]);
-    for field in &fields {
-        if field.name != b"blocks" {
-            output.extend_from_slice(&bytes[field.start..field.end]);
-        }
-    }
-    // Java only constructs block tags needed for block entities, preserving their order.
-    output.extend_from_slice(&[9, 0, 6, b'b', b'l', b'o', b'c', b'k', b's', 10]);
-    output.extend_from_slice(&(retained.len() as i32).to_be_bytes());
-    for (start, end) in retained {
-        output.extend_from_slice(&bytes[start..end]);
-    }
-    output.push(0);
-    if output.len() > MAX_BYTES + HEADER {
-        return None;
-    }
+    let frame_len = output.len();
     let words = [
         MAGIC,
         1,
@@ -325,9 +372,9 @@ pub fn extract(bytes: &[u8]) -> Option<Vec<u8>> {
         dims[1] as u32,
         dims[2] as u32,
         palette_count as u32,
-        nbt_offset as u32,
-        (output.len() - nbt_offset) as u32,
-        output.len() as u32,
+        frame_len as u32,
+        0,
+        frame_len as u32,
         slots as u32,
         if dense { stride as u32 } else { 0 },
     ];
@@ -340,6 +387,80 @@ pub fn extract(bytes: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn snapshot(dims: [i32; 3], palette: i32, records: &[([i32; 3], i32)]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for word in [
+            0x52505357,
+            1,
+            records.len() as i32,
+            dims[0],
+            dims[1],
+            dims[2],
+            palette,
+            0,
+        ] {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        for &(position, state) in records {
+            for word in [position[0], position[1], position[2], state] {
+                bytes.extend_from_slice(&word.to_le_bytes());
+            }
+        }
+        bytes
+    }
+    #[test]
+    fn project_snapshots_reuse_dense_storage_and_palette_boundaries() {
+        for (palette, state, stride) in [(255, 254, 1), (256, 255, 2), (65535, 65534, 2)] {
+            let frame = pack_records(&snapshot([2, 2, 2], palette, &[([0, 0, 0], state)])).unwrap();
+            assert_eq!(word(&frame, 2), 1);
+            assert_eq!(word(&frame, 13), stride);
+            assert_eq!(frame[HEADER], ((state + 1) & 255) as u8);
+            if stride == 2 {
+                assert_eq!(frame[HEADER + 1], ((state + 1) >> 8) as u8);
+            }
+            assert!(frame[HEADER + stride as usize..].iter().all(|&v| v == 0));
+        }
+        let frame =
+            pack_records(&snapshot([1, 1, 1], 2, &[([0, 0, 0], 0), ([0, 0, 0], 1)])).unwrap();
+        assert_eq!(word(&frame, 4), 1);
+        assert_eq!(frame[HEADER], 2);
+    }
+    #[test]
+    fn project_snapshots_preserve_sparse_extreme_coordinates() {
+        let records = [([i32::MIN, i32::MAX, -1], 0), ([1, 2, 3], 1)];
+        let frame = pack_records(&snapshot([i32::MAX; 3], 2, &records)).unwrap();
+        assert_eq!(word(&frame, 2), 2);
+        assert_eq!(word(&frame, 4), 2);
+        assert_eq!(
+            i32::from_le_bytes(frame[HEADER..HEADER + 4].try_into().unwrap()),
+            i32::MIN
+        );
+        assert_eq!(word(&frame, 10), 0);
+        assert_eq!(word(&frame, 11) as usize, frame.len());
+    }
+    #[test]
+    fn project_snapshots_reject_truncated_invalid_or_oversized_records() {
+        let source = snapshot([2, 2, 2], 1, &[([0, 0, 0], 0)]);
+        for size in 0..source.len() {
+            assert!(pack_records(&source[..size]).is_none());
+        }
+        for (at, value) in [
+            (4, 2),
+            (8, MAX_BLOCKS as i32 + 1),
+            (24, 65536),
+            (28, 1),
+            (44, -1),
+            (44, 1),
+        ] {
+            let mut broken = source.clone();
+            broken[at..at + 4].copy_from_slice(&value.to_le_bytes());
+            assert!(pack_records(&broken).is_none());
+        }
+        let mut trailing = source.clone();
+        trailing.push(0);
+        assert!(pack_records(&trailing).is_none());
+        assert!(pack_records(&snapshot([1, 1, 1], 1, &[])).is_none());
+    }
     fn named(out: &mut Vec<u8>, kind: u8, name: &[u8]) {
         out.push(kind);
         out.extend_from_slice(&(name.len() as u16).to_be_bytes());

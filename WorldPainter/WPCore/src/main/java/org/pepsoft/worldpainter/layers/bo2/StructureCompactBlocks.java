@@ -17,6 +17,8 @@ import java.util.concurrent.atomic.AtomicLong;
 final class StructureCompactBlocks {
     private static final int HEADER = 64, MAX_BYTES = 16 * 1024 * 1024;
     private static final AtomicLong COMPLETED = new AtomicLong();
+    private static final AtomicLong[] PROJECT_PROFILE = {new AtomicLong(),new AtomicLong(),new AtomicLong(),new AtomicLong()};
+    static long[] projectProfile() { return Arrays.stream(PROJECT_PROFILE).mapToLong(AtomicLong::get).toArray(); }
     record Root(CompoundTag tag, byte[] frame) { }
     private final Material[] palette;
     private final byte[] data;
@@ -59,6 +61,46 @@ final class StructureCompactBlocks {
         try (NBTInputStream in = new NBTInputStream(new SequenceInputStream(new ByteArrayInputStream(source), decompressed))) {
             return new Root((CompoundTag) in.readTag(), null);
         }
+    }
+
+    /** Rebuild compact immutable indices after reading the unchanged historical project fields. */
+    static StructureCompactBlocks captureProject(Map<Point3i, Material> blocks, Point3i dimensions) {
+        if (!NativeSlices.isStructureSnapshotAvailable() || blocks == null || blocks.getClass() != HashMap.class
+                || blocks.isEmpty() || blocks.size() > 262144) return null;
+        boolean profile = Boolean.getBoolean("welt.native.structureProjectProfile");
+        long started = profile ? System.nanoTime() : 0;
+        byte[] source = new byte[32 + blocks.size() * 16];
+        ByteBuffer records = ByteBuffer.wrap(source).order(ByteOrder.LITTLE_ENDIAN);
+        records.putInt(0, 0x52505357).putInt(4, 1).putInt(8, blocks.size())
+                .putInt(12, dimensions.x).putInt(16, dimensions.y).putInt(20, dimensions.z);
+        IdentityHashMap<Material, Integer> ids = new IdentityHashMap<>();
+        ArrayList<Material> materials = new ArrayList<>();
+        int at = 32;
+        for (var entry : blocks.entrySet()) {
+            Point3i position = entry.getKey(); Material material = entry.getValue();
+            if (position == null || position.getClass() != Point3i.class || material == null) return null;
+            Integer id = ids.get(material);
+            if (id == null) {
+                if (materials.size() == 65535) return null;
+                id = materials.size(); ids.put(material, id); materials.add(material);
+            }
+            records.putInt(at, position.x).putInt(at + 4, position.y)
+                    .putInt(at + 8, position.z).putInt(at + 12, id);
+            at += 16;
+        }
+        records.putInt(24, materials.size());
+        long prepared = profile ? System.nanoTime() : 0;
+        byte[] frame = NativeSlices.packStructureSnapshot(source);
+        long nativeDone = profile ? System.nanoTime() : 0;
+        if (frame == null) return null;
+        StructureCompactBlocks result = new StructureCompactBlocks(frame, materials.toArray(new Material[0]));
+        if (profile) {
+            PROJECT_PROFILE[0].incrementAndGet();
+            PROJECT_PROFILE[1].addAndGet(prepared - started);
+            PROJECT_PROFILE[2].addAndGet(nativeDone - prepared);
+            PROJECT_PROFILE[3].addAndGet(System.nanoTime() - nativeDone);
+        }
+        return result;
     }
 
     StructureCompactBlocks(byte[] frame, Material[] palette) {
