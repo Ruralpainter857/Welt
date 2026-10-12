@@ -79,6 +79,13 @@ fn seed(data: &[u8], p: usize) -> i64 {
 }
 /// Evaluates all intermediate planes in reusable Rust worker storage, returning only final samples.
 pub(crate) fn fill_source(data: &[u8], base: usize, output: &mut [f64]) -> Result<(), WeltError> {
+    if base <= data.len()
+        && data.len() - base >= 128
+        && word(data, base) == 0x50475457
+        && word(data, base + 4) == 3
+    {
+        return crate::coordinate_graph::fill_source(data, base, output);
+    }
     let bad = WeltError::IllegalArgument;
     if base > data.len()
         || data.len() - base < 128

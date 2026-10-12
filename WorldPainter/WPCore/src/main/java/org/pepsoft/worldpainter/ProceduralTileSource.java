@@ -21,6 +21,8 @@ final class ProceduralTileSource {
                     .putDouble(p + 16, scales[i]).putLong(p + 24, seeds[i]);
         }
     }
+    /** Ownership of an immutable compiler snapshot is transferred to this source. */
+    ProceduralTileSource(byte[] packet) { this.packet = packet; }
     int bytes() { return packet.length; }
     void write(ByteBuffer target, int offset) { target.position(offset); target.put(packet); target.position(0); }
 }

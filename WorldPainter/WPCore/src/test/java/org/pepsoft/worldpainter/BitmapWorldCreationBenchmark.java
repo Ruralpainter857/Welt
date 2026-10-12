@@ -12,6 +12,7 @@ import org.pepsoft.worldpainter.themes.Filter;
 /** Whole creation operation: source sampling, tile storage, theme and dimension insertion. */
 public final class BitmapWorldCreationBenchmark {
     private static volatile long checksum;
+    private static volatile State retainedState;
     private record State(HeightMapTileFactory factory, Dimension dimension) { }
     private record Result(long nanos, long allocated, State state, long calls) { }
     private static final int SIDE = Integer.getInteger("welt.benchmark.creationSide", 4);
@@ -35,6 +36,10 @@ public final class BitmapWorldCreationBenchmark {
             case "product-displacement" -> new ProductHeightMap(proceduralMap("displacement"),new ConstantHeightMap(.7));
             case "minimum-displacement" -> new MinimisingHeightMap(new ConstantHeightMap(90),proceduralMap("displacement"));
             case "fnl" -> new SumHeightMap(new ConstantHeightMap(32), new FastNoiseLiteHeightMap(160, .7, 3, 17));
+            case "nested-affine" -> new SumHeightMap(new TransformingHeightMap("First", map, 1.7f, .65f, 31, -47, .37f),
+                    new TransformingHeightMap("Second", new NoiseHeightMap(45, .9, 3, 63), .7f, 1.3f, -19, 11, -.23f));
+            case "nested-translate" -> new ProductHeightMap(new SumHeightMap(new TransformingHeightMap("Translation", map, 1, 1, 173, -211, 0),
+                    new ConstantHeightMap(7)), new ConstantHeightMap(.8));
             case "affine" -> new TransformingHeightMap("Creation", map, 1.7f, .65f, 31, -47, .37f);
             case "slope" -> new SlopeHeightMap(map, 3.7f);
             case "affine-displacement" -> new TransformingHeightMap("Creation", proceduralMap("displacement"),
@@ -104,9 +109,14 @@ public final class BitmapWorldCreationBenchmark {
             System.out.printf(Locale.ROOT,"worldCreation source=%s paired tiles=%d javaMs=%.3f rustMs=%.3f ratio=%.3f range=%.3f..%.3f javaAllocated=%d rustAllocated=%d checksum=%d nativeCalls=%d%n",sourceName(),SIDE*SIDE,javaTimes[4],rustTimes[4],ratios[4],ratios[0],ratios[8],ja[4],ra[4],checksum,nativeCalls);
         } else {
             double[] times=new double[9];long[] allocated=new long[9]; long nativeCalls=0;
-            for(int trial=-warmups;trial<9;trial++){Result result=run(map,nativeMode);checksum=hash(result.state);nativeCalls+=result.calls;if(trial>=0){times[trial]=result.nanos/1e6;allocated[trial]=result.allocated;}}
+            for(int trial=-warmups;trial<9;trial++){Result result=run(map,nativeMode);checksum=hash(result.state);retainedState=result.state;nativeCalls+=result.calls;if(trial>=0){times[trial]=result.nanos/1e6;allocated[trial]=result.allocated;}}
             Arrays.sort(times);Arrays.sort(allocated);
             System.out.printf(Locale.ROOT,"worldCreation source=%s mode=%s tiles=%d medianMs=%.3f allocatedBytes=%d checksum=%d nativeCalls=%d%n",sourceName(),nativeMode?"rust":"java",SIDE*SIDE,times[4],allocated[4],checksum,nativeCalls);
+        }
+        if (Boolean.getBoolean("welt.benchmark.creationMemory")) {
+            for (int i=0;i<3;i++) { System.gc(); try { Thread.sleep(100); } catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IllegalStateException(e); } }
+            long direct=0; for (var pool:ManagementFactory.getPlatformMXBeans(java.lang.management.BufferPoolMXBean.class)) if(pool.getName().equals("direct")) direct+=pool.getMemoryUsed();
+            System.out.printf(Locale.ROOT,"creationMemory retainedTiles=%d heapBytes=%d directBytes=%d%n",retainedState.dimension.getTiles().size(),ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed(),direct);
         }
         if (Boolean.getBoolean("welt.native.generationProfile")) {
             long[] p=HeightMapTileFactory.nativeGenerationProfile();

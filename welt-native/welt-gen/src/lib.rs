@@ -17,3 +17,5 @@ pub mod theme_layers;
 pub mod theme_terrain;
 
 pub mod height_theme_brush;
+
+mod coordinate_graph;

@@ -139,7 +139,7 @@ public class ProceduralTileGenerationParityTest {
         layers.put((x,y,z,l)->z<90?0:z<150?9:15,CHUNK);
         return new SimpleTheme(197,62,ranges,layers,min,max,true,true);
     }
-    private static void compare(HeightMap map,int min,int max,int tx,int ty,boolean supported) throws Exception {
+    static void compare(HeightMap map,int min,int max,int tx,int ty,boolean supported) throws Exception {
         long seed=map.getSeed();
         HeightMapTileFactory java=new HeightMapTileFactory(seed,map,min,max,false,theme(min,max));
         HeightMapTileFactory rust=new HeightMapTileFactory(seed,map,min,max,false,theme(min,max));

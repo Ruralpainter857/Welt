@@ -31,6 +31,7 @@ final class NativeTileGenerationAccess {
         BitmapImportSource.Window window = source == null ? null : source.window((int) x, (int) y);
         ProceduralTileSource program = window == null && Boolean.getBoolean("welt.native.proceduralGeneration")
                 ? HeightMapTileFactory.prepareProceduralSource(factory.getHeightMap(), (int) x, (int) y) : null;
+        if (window == null && program == null) program = CoordinateHeightMapSource.prepare(factory.getHeightMap(), (int) x, (int) y, 128, 128);
         if (window == null && program == null) return false;
         SimpleTheme.ImportPlan plan = ((SimpleTheme) factory.getTheme()).prepareImport();
         if (plan == null || !plan.supportsFreshImport()) return false;
