@@ -176,6 +176,12 @@ fn fill_chain(
                 distance,
             )?;
         }
+        // Keep JVM-specific large-angle reduction on the Java fallback, before output writes.
+        if angle.iter().any(|value| {
+            !value.is_finite() || value.abs() > crate::coordinate_graph::MAX_DYNAMIC_ANGLE
+        }) {
+            return Err(HeightMapTreeError::InvalidProgram);
+        }
         for p in 0..area {
             // Preserve separate sine/cosine operations and Java's final float conversion.
             x[p] = (f64::from(x[p]) + angle[p].sin() * distance[p]) as f32;
@@ -217,6 +223,25 @@ fn fill_control(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn large_angles_reject_before_any_output_writes() {
+        let nodes = [
+            super::HeightMapNode::Constant(1.0e20),
+            super::HeightMapNode::Constant(13.0),
+            super::HeightMapNode::Noise {
+                d_height: 130.0,
+                scale: 0.7,
+                octaves: 3,
+                effective_seed: 17,
+            },
+        ];
+        let mut output = [173.0; 4];
+        assert!(
+            super::fill_displacement_height_map_tree(&nodes, 1, 1, 0, 0, 2, 2, 0, &mut output)
+                .is_err()
+        );
+        assert_eq!(output, [173.0; 4]);
+    }
     use super::*;
     #[test]
     fn affine_displacement_matches_explicit_points_and_validates_before_writing() {

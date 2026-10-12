@@ -36,6 +36,13 @@ public final class BitmapWorldCreationBenchmark {
             case "product-displacement" -> new ProductHeightMap(proceduralMap("displacement"),new ConstantHeightMap(.7));
             case "minimum-displacement" -> new MinimisingHeightMap(new ConstantHeightMap(90),proceduralMap("displacement"));
             case "fnl" -> new SumHeightMap(new ConstantHeightMap(32), new FastNoiseLiteHeightMap(160, .7, 3, 17));
+            case "nested-warp" -> new SumHeightMap(new DisplacementHeightMap("Outer deformation",
+                    new DisplacementHeightMap("Inner deformation", map,
+                            new ConstantHeightMap(.37), new ConstantHeightMap(13)),
+                    new TransformingHeightMap("Angle", new NoiseHeightMap(Math.PI*2, .9, 3, 177),
+                            1.3f, .8f, 19, -31, .23f),
+                    new SumHeightMap(new NoiseHeightMap(64, .5, 3, -321), new ConstantHeightMap(3))),
+                    new ConstantHeightMap(17));
             case "nested-affine" -> new SumHeightMap(new TransformingHeightMap("First", map, 1.7f, .65f, 31, -47, .37f),
                     new TransformingHeightMap("Second", new NoiseHeightMap(45, .9, 3, 63), .7f, 1.3f, -19, 11, -.23f));
             case "nested-translate" -> new ProductHeightMap(new SumHeightMap(new TransformingHeightMap("Translation", map, 1, 1, 173, -211, 0),

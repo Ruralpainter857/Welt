@@ -4,6 +4,7 @@ use welt_core::error::WeltError;
 const HEADER: usize = 128;
 const STRIDE: usize = 96;
 const MAX: usize = 64;
+pub(crate) const MAX_DYNAMIC_ANGLE: f64 = 1_048_576.0;
 fn word(d: &[u8], p: usize) -> i32 {
     i32::from_le_bytes(d[p..p + 4].try_into().unwrap())
 }
@@ -35,6 +36,8 @@ enum Node {
     Binary(i32, usize, usize),
     Translate(usize, i32, i32),
     Affine(usize, [f64; 6]),
+    Displacement(usize, usize, usize),
+    FixedDisplacement(usize, usize, f64, f64),
 }
 #[derive(Default)]
 struct Program {
@@ -88,6 +91,23 @@ impl Program {
                     }
                     Node::Affine(child(left)?, matrix)
                 }
+                9 => Node::Displacement(child(left)?, child(right)?, child(word(r, 40))?),
+                10 => {
+                    let base = child(left)?;
+                    let angle = child(right)?;
+                    let distance = child(word(r, 40))?;
+                    let sine = number(r, 48);
+                    let cosine = number(r, 56);
+                    if !matches!(nodes[angle], Node::Constant(_))
+                        || !sine.is_finite()
+                        || !cosine.is_finite()
+                        || sine.abs() > 1.0
+                        || cosine.abs() > 1.0
+                    {
+                        return Err(WeltError::IllegalArgument);
+                    }
+                    Node::FixedDisplacement(base, distance, sine, cosine)
+                }
                 _ => return Err(WeltError::IllegalArgument),
             };
             nodes.push(node);
@@ -127,6 +147,34 @@ impl Program {
                     Coordinates::Float(a, b) => Coordinates::Float(a - *x as f32, b - *y as f32),
                 };
                 self.sample(*child, coords)?
+            }
+            Node::FixedDisplacement(base, distance, sine, cosine) => {
+                let (x, y) = coords.floats();
+                let distance = self.sample(*distance, Coordinates::Float(x, y))?;
+                let actual_x = (x as f64 + sine * distance) as f32;
+                let actual_y = (y as f64 + cosine * distance) as f32;
+                if !actual_x.is_finite() || !actual_y.is_finite() {
+                    return Err(WeltError::IllegalArgument);
+                }
+                self.sample(*base, Coordinates::Float(actual_x, actual_y))?
+            }
+            Node::Displacement(base, angle, distance) => {
+                // Java's int overload delegates to float before sampling either control.
+                let (x, y) = coords.floats();
+                let input = Coordinates::Float(x, y);
+                let angle = self.sample(*angle, input)?;
+                // Large dynamic angles require JVM-specific argument reduction. Reject
+                // before WHIM writes any samples or planes, allowing complete Java fallback.
+                if !angle.is_finite() || angle.abs() > MAX_DYNAMIC_ANGLE {
+                    return Err(WeltError::IllegalArgument);
+                }
+                let distance = self.sample(*distance, input)?;
+                let actual_x = (x as f64 + angle.sin() * distance) as f32;
+                let actual_y = (y as f64 + angle.cos() * distance) as f32;
+                if !actual_x.is_finite() || !actual_y.is_finite() {
+                    return Err(WeltError::IllegalArgument);
+                }
+                self.sample(*base, Coordinates::Float(actual_x, actual_y))?
             }
             Node::Affine(child, m) => {
                 let (x, y) = coords.floats();
@@ -241,6 +289,48 @@ pub(crate) fn fill_source(data: &[u8], base: usize, output: &mut [f64]) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fixed_deformation_converts_integer_domain_before_controls() {
+        let p = Program {
+            bytes: vec![],
+            nodes: vec![
+                Node::Noise(NoiseHeightMapBulk::new(130.0, 0.7, 3, 17).unwrap()),
+                Node::Constant(13.0),
+                Node::FixedDisplacement(0, 1, 0.37_f64.sin(), 0.37_f64.cos()),
+            ],
+        };
+        let x = 16_777_217_i32;
+        let y = -16_777_217_i32;
+        let actual_x = (x as f32 as f64 + 0.37_f64.sin() * 13.0) as f32;
+        let actual_y = (y as f32 as f64 + 0.37_f64.cos() * 13.0) as f32;
+        let expected = NoiseHeightMapBulk::new(130.0, 0.7, 3, 17)
+            .unwrap()
+            .get_value(actual_x as f64, actual_y as f64);
+        assert_eq!(
+            p.sample(2, Coordinates::Integer(x, y)).unwrap().to_bits(),
+            expected.to_bits()
+        );
+    }
+    #[test]
+    fn invalid_third_child_preserves_previously_configured_program() {
+        let mut records = vec![0_u8; 4 * STRIDE];
+        records[16..24].copy_from_slice(&7.0_f64.to_le_bytes());
+        records[STRIDE + 16..STRIDE + 24].copy_from_slice(&0.37_f64.to_le_bytes());
+        records[2 * STRIDE + 16..2 * STRIDE + 24].copy_from_slice(&13.0_f64.to_le_bytes());
+        let root = 3 * STRIDE;
+        records[root..root + 4].copy_from_slice(&9_i32.to_le_bytes());
+        records[root + 8..root + 12].copy_from_slice(&1_i32.to_le_bytes());
+        records[root + 40..root + 44].copy_from_slice(&2_i32.to_le_bytes());
+        let mut p = Program::default();
+        p.configure(&records).unwrap();
+        let valid = records.clone();
+        records[root + 40..root + 44].copy_from_slice(&3_i32.to_le_bytes());
+        assert!(p.configure(&records).is_err());
+        assert_eq!(p.bytes, valid);
+        assert_eq!(p.sample(3, Coordinates::Integer(0, 0)).unwrap(), 7.0);
+        p.nodes[1] = Node::Constant(1.0e20);
+        assert!(p.sample(3, Coordinates::Integer(0, 0)).is_err());
+    }
     #[test]
     fn translate_keeps_integer_wrap_and_float_cast() {
         let p = Program {

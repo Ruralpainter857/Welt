@@ -52,7 +52,8 @@ final class CoordinateHeightMapSource {
                 int opcode = type == ConstantHeightMap.class ? 0 : type == NoiseHeightMap.class ? 1
                         : type == SumHeightMap.class ? 2 : type == DifferenceHeightMap.class ? 3
                         : type == ProductHeightMap.class ? 4 : type == MinimisingHeightMap.class ? 5
-                        : type == MaximisingHeightMap.class ? 6 : type == TransformingHeightMap.class ? 8 : -1;
+                        : type == MaximisingHeightMap.class ? 6 : type == TransformingHeightMap.class ? 8
+                        : type == DisplacementHeightMap.class ? 9 : -1;
                 if (opcode < 0) {
                     return -1;
                 }
@@ -63,7 +64,7 @@ final class CoordinateHeightMapSource {
                 if (opcode == 0) {
                     return constant(((ConstantHeightMap) map).getHeight());
                 }
-                int left = 0, right = 0;
+                int left = 0, right = 0, distance = 0;
                 if (opcode >= 2 && opcode <= 6) {
                     CombiningHeightMap combine = (CombiningHeightMap) map;
                     left = append(combine.getHeightMap1(), depth + 1);
@@ -73,6 +74,15 @@ final class CoordinateHeightMapSource {
                 } else if (opcode == 8) {
                     left = append(((TransformingHeightMap) map).getBaseHeightMap(), depth + 1);
                     if (left < 0) return -1;
+                }
+                if (opcode == 9) {
+                    DisplacementHeightMap displacement = (DisplacementHeightMap) map;
+                    left = append(displacement.getBaseHeightMap(), depth + 1);
+                    if (left < 0) return -1;
+                    right = append(displacement.getAngleMap(), depth + 1);
+                    if (right < 0) return -1;
+                    distance = append(displacement.getDistanceMap(), depth + 1);
+                    if (distance < 0) return -1;
                 }
                 if (count >= LIMIT) return -1;
                 int index = count++, p = HEADER + index * STRIDE;
@@ -94,6 +104,16 @@ final class CoordinateHeightMapSource {
                         }
                     } else {
                         data.putInt(p, 7).putInt(p + 40, transform.getOffsetX()).putInt(p + 44, transform.getOffsetY());
+                    }
+                }
+                if (opcode == 9) {
+                    if (depth > 0) nested = true;
+                    data.putInt(p + 40, distance);
+                    HeightMap angle = ((DisplacementHeightMap) map).getAngleMap();
+                    if (angle.isConstant()) {
+                        // Compute constant-angle trig once with the actual JVM implementation.
+                        double value = angle.getConstantValue();
+                        data.putInt(p, 10).putDouble(p + 48, Math.sin(value)).putDouble(p + 56, Math.cos(value));
                     }
                 }
                 return index;

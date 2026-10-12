@@ -63,6 +63,51 @@ public class CoordinateHeightMapGenerationParityTest {
         invalid.putInt(patch+128+(count-1)*96+4,count);byte[] before=new byte[length];invalid.duplicate().get(before);
         assertFalse(org.pepsoft.worldpainter.nativeapi.NativeSlices.importHeightMapTile(invalid));byte[] after=new byte[length];invalid.duplicate().get(after);assertArrayEquals(before,after);
     }
+    @Test public void nestedDeformationPreservesRawHeightsAndStorage() throws Exception {
+        ready();
+        HeightMap warped=BitmapWorldCreationBenchmark.proceduralMap("nested-warp");
+        for(int tx:new int[]{-1,0,1,131073}) rawAndStorage(warped,tx,-tx);
+        for(boolean warpedFirst:new boolean[]{false,true}) {
+            HeightMap other=transform(new NoiseHeightMap(35,1.3,2,19));
+            HeightMap left=warpedFirst?warped:other, right=warpedFirst?other:warped;
+            rawAndStorage(new DifferenceHeightMap(left,right),-1,1);
+            rawAndStorage(new ProductHeightMap(left,right),1,-1);
+            rawAndStorage(new MinimisingHeightMap(left,right),-1,1);
+            rawAndStorage(new MaximisingHeightMap(left,right),1,-1);
+        }
+        warped.setSeed(-173);rawAndStorage(warped,-1,1);
+    }
+    @Test public void deformationControlsPreserveFloatDomainAndLiveChanges() throws Exception {
+        ready();
+        var angle=new TransformingHeightMap("Translated angle",new NoiseHeightMap(Math.PI*2,1.3,2,31),1,1,16777217,-16777217,0);
+        var displacement=new DisplacementHeightMap(new NoiseHeightMap(130,.7,3,17),angle,new ConstantHeightMap(13));
+        var map=new SumHeightMap(displacement,new ConstantHeightMap(7));
+        rawAndStorage(map,131073,-131073);
+        displacement.setAngleMap(new ConstantHeightMap(-13.7));
+        displacement.setDistanceMap(new SumHeightMap(transform(new NoiseHeightMap(30,.7,2,19)),new ConstantHeightMap(-45)));
+        rawAndStorage(transform(map),-1,1);
+        displacement.setBaseHeightMap(transform(new NoiseHeightMap(90,1.9,4,-7)));
+        rawAndStorage(map,-1,1);
+        displacement.setAngleMap(new ConstantHeightMap(1.0e20));rawAndStorage(map,-1,1);
+    }
+    @Test public void hugeDynamicAnglesKeepTheJavaRouteAndRandomState() throws Exception {
+        ready();
+        HeightMap angle=new SumHeightMap(new ConstantHeightMap(1.0e20),new NoiseHeightMap(7,1.3,2,17));
+        HeightMap map=new SumHeightMap(new DisplacementHeightMap(new NoiseHeightMap(130,.7,3,17),angle,new ConstantHeightMap(13)),new ConstantHeightMap(7));
+        ProceduralTileGenerationParityTest.compare(map,-64,320,-1,1,false);
+    }
+    @Test public void invalidThirdChildPreservesNativeFrameAndPreviousCache() throws Exception {
+        ready();rawAndStorage(BitmapWorldCreationBenchmark.proceduralMap("nested-warp"),0,0);
+        ByteBuffer source=lastFrame();int length=source.getInt(8),patch=source.getInt(208),count=source.getInt(patch+12);
+        ByteBuffer invalid=ByteBuffer.allocateDirect(length).order(ByteOrder.LITTLE_ENDIAN);
+        source.position(0).limit(length);invalid.put(source).position(0);
+        int node=-1;for(int i=0;i<count;i++)if(invalid.getInt(patch+128+i*96)==9)node=i;
+        assertTrue(node>=0);invalid.putInt(patch+128+node*96+40,node);
+        byte[] before=new byte[length];invalid.duplicate().get(before);
+        assertFalse(org.pepsoft.worldpainter.nativeapi.NativeSlices.importHeightMapTile(invalid));
+        byte[] after=new byte[length];invalid.duplicate().get(after);assertArrayEquals(before,after);
+        rawAndStorage(BitmapWorldCreationBenchmark.proceduralMap("nested-warp"),1,-1);
+    }
     @Test public void coordinateProgramsAndBuffersRemainWorkerLocal() throws Exception {
         ready();
         var executor=java.util.concurrent.Executors.newFixedThreadPool(2);
@@ -104,7 +149,7 @@ public class CoordinateHeightMapGenerationParityTest {
         var terrain=new java.util.TreeMap<Integer,Terrain>(); terrain.put(-65,Terrain.GRASS);
         var theme=new SimpleTheme(197,62,terrain,null,-64,320,false,false);
         return new HeightMapTileFactory(197+index,BitmapWorldCreationBenchmark.proceduralMap(
-                (index&1)==0?"nested-affine":"nested-translate"),-64,320,false,theme);
+                index%3==0?"nested-warp":index%3==1?"nested-affine":"nested-translate"),-64,320,false,theme);
     }
     @Test public void samplingMatrixSnapshotCannotChangeTheMap(){var map=new TransformingHeightMap("Matrix",new NoiseHeightMap(100,1,3,0),1.7f,.65f,31,-47,.37f);
         double before=map.getHeight(13,17);double[] matrix=new double[6];assertTrue(map.copySamplingMatrix(matrix));java.util.Arrays.fill(matrix,999);

@@ -65,8 +65,8 @@ public class ProceduralTileGenerationParityTest {
             transform.setSeed(-98723);
             compare(transform,-64,320,1,-1,true);
             HeightMap nested=new DisplacementHeightMap("Nested",source,new ConstantHeightMap(.37),new ConstantHeightMap(10));
-            compare(new TransformingHeightMap("Unsupported",nested,1.7f,.65f,31,-47,.37f),-64,320,0,0,false);
-            compare(transform,-64,320,131073,0,false);
+            compare(new TransformingHeightMap("Nested",nested,1.7f,.65f,31,-47,.37f),-64,320,0,0,Boolean.getBoolean("welt.native.coordinateGraphGeneration"));
+            compare(transform,-64,320,131073,0,Boolean.getBoolean("welt.native.coordinateGraphGeneration"));
         } finally {restore(Native.GEN_KEY,gen);restore("welt.native.proceduralGeneration",flag);}
     }
 
