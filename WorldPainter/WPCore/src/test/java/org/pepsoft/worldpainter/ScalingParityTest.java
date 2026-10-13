@@ -88,6 +88,24 @@ public class ScalingParityTest {
     }
 
     @Test
+    public void missingSourceRunsPreserveEveryDestinationPlane() {
+        org.junit.Assume.assumeTrue(NativeLoader.areSlicesAvailable());
+        String previous=System.getProperty(Native.GEN_KEY);
+        try {
+            Map<Point,Tile> sources=ScalingBenchmark.fixture();sources.remove(new Point(-1,0));
+            TileFactory factory=TestData.createTileFactory(62);
+            for(float scale:new float[]{.5f,1.3f,2f}){
+                ScalingHelper java=new ScalingHelper(sources,factory,scale),rust=new ScalingHelper(sources,factory,scale);
+                for(Point point:java.getTileCoords()){
+                    System.setProperty(Native.GEN_KEY,"false");Tile expected=java.createScaledTile(point.x,point.y);
+                    System.setProperty(Native.GEN_KEY,"true");Tile actual=rust.createScaledTile(point.x,point.y);
+                    assertTile(expected,actual,"missing source run "+point);
+                }
+            }
+        } finally {if(previous==null)System.clearProperty(Native.GEN_KEY);else System.setProperty(Native.GEN_KEY,previous);}
+    }
+
+    @Test
     public void mixedHeightFormatsAndPerChunkLayersPreserveParityAndUndo() {
         org.junit.Assume.assumeTrue(NativeLoader.areSlicesAvailable());
         final String previous = System.getProperty(Native.GEN_KEY);

@@ -91,25 +91,41 @@ final class ScalingTileAccess {
         int neededX2 = Integer.MIN_VALUE, neededY2 = Integer.MIN_VALUE;
         Tile cached = null; int cachedX = Integer.MIN_VALUE, cachedY = Integer.MIN_VALUE;
         for (int x = 0; x < 128; x++) {
-            for (int y = 0; y < 128; y++) {
-                final int tx = scratch.nx[x] >> 7, ty = scratch.ny[y] >> 7, index = x + y * 128;
+            for (int y = 0; y < 128;) {
+                final int tx = scratch.nx[x] >> 7, ty = scratch.ny[y] >> 7;
+                int endY = y + 1;
+                while (endY < 128 && (scratch.ny[endY] >> 7) == ty) endY++;
+                // Keep map queries in their original order; only the plain-tile read lock is grouped.
                 if (tx != cachedX || ty != cachedY) { cached = sources.get(new Point(tx, ty)); cachedX = tx; cachedY = ty; }
-                scratch.active[index] = (byte) (cached == null ? 0 : 1);
-                if (cached == null) { scratch.missing[(x >> 4) * 8 + (y >> 4)]++; continue; }
-                final int fx = floor(scratch.x[x], integer), fy = floor(scratch.y[y], integer);
-                neededX1 = Math.min(neededX1, fx - (integer ? 0 : 1));
-                neededY1 = Math.min(neededY1, fy - (integer ? 0 : 1));
-                neededX2 = Math.max(neededX2, fx + (integer ? 0 : 2));
-                neededY2 = Math.max(neededY2, fy + (integer ? 0 : 2));
-                if (cached.getClass() != Tile.class) return false;
-                synchronized (cached) {
-                    final boolean tall = cached.getMaxHeight() - cached.getMinHeight() > 256;
-                    cached.ensureReadable(tall ? TALL_WATERLEVEL : WATERLEVEL);
-                    cached.ensureReadable(TERRAIN);
-                    final int src = (scratch.nx[x] & 127) + (scratch.ny[y] & 127) * 128;
-                    scratch.water[index] = (tall ? cached.tallWaterLevel[src] & 65535 : cached.waterLevel[src] & 255) + cached.getMinHeight();
-                    scratch.terrain[index] = cached.terrain[src];
+                if (cached == null) {
+                    for (int at = y; at < endY; at++) {
+                        scratch.active[x + at * 128] = 0;
+                        scratch.missing[(x >> 4) * 8 + (at >> 4)]++;
+                    }
+                } else {
+                    if (cached.getClass() != Tile.class) return false;
+                    synchronized (cached) {
+                        final boolean tall = cached.getMaxHeight() - cached.getMinHeight() > 256;
+                        cached.ensureReadable(tall ? TALL_WATERLEVEL : WATERLEVEL);
+                        cached.ensureReadable(TERRAIN);
+                        final int lx = scratch.nx[x] & 127;
+                        for (int at = y; at < endY; at++) {
+                            final int index = x + at * 128, src = lx + (scratch.ny[at] & 127) * 128;
+                            scratch.active[index] = 1;
+                            scratch.water[index] = (tall ? cached.tallWaterLevel[src] & 65535 : cached.waterLevel[src] & 255) + cached.getMinHeight();
+                            scratch.terrain[index] = cached.terrain[src];
+                        }
+                    }
+                    final int fx = floor(scratch.x[x], integer);
+                    for (int at = y; at < endY; at++) {
+                        final int fy = floor(scratch.y[at], integer);
+                        neededX1 = Math.min(neededX1, fx - (integer ? 0 : 1));
+                        neededY1 = Math.min(neededY1, fy - (integer ? 0 : 1));
+                        neededX2 = Math.max(neededX2, fx + (integer ? 0 : 2));
+                        neededY2 = Math.max(neededY2, fy + (integer ? 0 : 2));
+                    }
                 }
+                y = endY;
             }
         }
         if (neededX1 == Integer.MAX_VALUE) {

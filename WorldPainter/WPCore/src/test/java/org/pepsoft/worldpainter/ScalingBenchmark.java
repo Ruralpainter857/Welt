@@ -63,6 +63,11 @@ public final class ScalingBenchmark {
             System.out.printf(Locale.ROOT, "%s full_scale_ms=%.3f allocated_heap_bytes=%.0f output_tiles=%d%n",
                     mode == 0 ? "Java" : "Rust", times[mode][3], bytes[mode][3], output.size());
         }
+        if(Boolean.getBoolean("welt.benchmark.scalingMemory")) {
+            for(int i=0;i<3;i++){System.gc();try{Thread.sleep(100);}catch(InterruptedException e){Thread.currentThread().interrupt();throw new IllegalStateException(e);}}
+            long direct=0;for(var pool:ManagementFactory.getPlatformMXBeans(java.lang.management.BufferPoolMXBean.class))if(pool.getName().equals("direct"))direct+=pool.getMemoryUsed();
+            System.out.printf(Locale.ROOT,"scaling_retained_heap_bytes=%d direct_bytes=%d%n",ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed(),direct);
+        }
         System.out.printf(Locale.ROOT, "process_RSS_bytes=%d heap_used_after_benchmark_bytes=%d%n",
                 org.pepsoft.worldpainter.nativeapi.NativeSlices.currentProcessResidentBytes(),
                 ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed());
