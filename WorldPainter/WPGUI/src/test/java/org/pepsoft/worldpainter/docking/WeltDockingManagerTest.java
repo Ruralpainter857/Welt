@@ -174,7 +174,7 @@ public class WeltDockingManagerTest {
             assertFalse(tree.getCheckBoxTreeSelectionModel().isPathSelected(
                     new javax.swing.tree.TreePath(new Object[] {root, second})));
             var checkbox = new org.pepsoft.worldpainter.util.TristateCheckBox("Layer");
-            checkbox.setState(com.jidesoft.swing.TristateCheckBox.STATE_MIXED);
+            checkbox.setState(org.pepsoft.worldpainter.util.TristateCheckBox.STATE_MIXED);
             assertTrue(checkbox.isMixed());
             checkbox.setTristateMode(false);
             assertFalse(checkbox.isMixed());
