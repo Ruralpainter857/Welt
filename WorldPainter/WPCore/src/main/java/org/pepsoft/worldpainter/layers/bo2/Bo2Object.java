@@ -26,6 +26,11 @@ import static java.nio.charset.StandardCharsets.US_ASCII;
  */
 public final class Bo2Object extends AbstractObject implements Bo2ObjectProvider {
     private Bo2Object(String name, Map<String, String> properties, Map<Point3i, Bo2BlockSpec> blocks, Point3i origin, Point3i dimensions, Map<String, Serializable> attributes) {
+        this(name, properties, blocks, origin, dimensions, attributes, null);
+    }
+
+    private Bo2Object(String name, Map<String, String> properties, Map<Point3i, Bo2BlockSpec> blocks, Point3i origin, Point3i dimensions, Map<String, Serializable> attributes, Bo2CompactBlocks compact) {
+        this.compactBlocks = compact;
         this.name = name;
         this.properties = properties;
         this.blocks = blocks;
@@ -251,7 +256,7 @@ public final class Bo2Object extends AbstractObject implements Bo2ObjectProvider
             byte[] prefix = owned.readNBytes(16 * 1024 * 1024 + 1);
             Bo2NativeParser.Decoded decoded = prefix.length <= 16 * 1024 * 1024 ? Bo2NativeParser.decode(prefix) : null;
             if (decoded != null) {
-                Bo2Object object = new Bo2Object(objectName, decoded.properties(), decoded.blocks(), decoded.origin(), decoded.dimensions(), null);
+                Bo2Object object = new Bo2Object(objectName, decoded.properties(), decoded.blocks(), decoded.origin(), decoded.dimensions(), null, decoded.compact());
                 Bo2NativeParser.completed();
                 return object;
             }

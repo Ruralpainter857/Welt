@@ -156,6 +156,7 @@ public final class NativeSlices {
     private static native byte[] nativeParseBo3(byte[] source);
 
     private static volatile boolean bo2SymbolUnavailable;
+    private static volatile boolean bo2CompactSymbolUnavailable;
     public static boolean isBo2LoadingAvailable() {
         return !bo2SymbolUnavailable && Boolean.getBoolean("welt.native.bo2")
                 && Native.isGenEnabled() && NativeLoader.areSlicesAvailable();
@@ -163,10 +164,15 @@ public final class NativeSlices {
     /** BO2 frame v1 keeps source order and metadata spans; null requests Java fallback. */
     public static byte[] parseBo2(byte[] source) {
         if (!isBo2LoadingAvailable() || source == null || source.length < 1 || source.length > 16 * 1024 * 1024) return null;
+        if (Boolean.getBoolean("welt.native.bo2CompactLoad") && !bo2CompactSymbolUnavailable) {
+            try { return nativeParseCompactBo2(source); }
+            catch (UnsatisfiedLinkError e) { bo2CompactSymbolUnavailable = true; }
+        }
         try { return nativeParseBo2(source); }
         catch (UnsatisfiedLinkError e) { bo2SymbolUnavailable = true; return null; }
     }
     private static native byte[] nativeParseBo2(byte[] source);
+    private static native byte[] nativeParseCompactBo2(byte[] source);
 
     private static volatile boolean structureSymbolUnavailable;
     public static boolean isStructureLoadingAvailable() {

@@ -54,14 +54,19 @@ public final class Bo2LoadBenchmark {
         for(int trial=-warmups;trial<9;trial++) {
             for(int pass=0;pass<(compare?2:1);pass++) {
                 boolean nativeMode=compare?((trial+pass)&1)!=0:rust;
-                System.setProperty("wp.native.gen",Boolean.toString(nativeMode));System.setProperty("welt.native.bo2",Boolean.toString(nativeMode));
+                boolean parserMode=nativeMode||Boolean.getBoolean("welt.benchmark.bo2NativeBaseline");
+                boolean compactMode=nativeMode&&Boolean.getBoolean("welt.benchmark.bo2CompactLoad");
+                System.setProperty("wp.native.gen",Boolean.toString(parserMode));System.setProperty("welt.native.bo2",Boolean.toString(parserMode));
+                System.setProperty("welt.native.bo2CompactLoad",Boolean.toString(compactMode));
+                long compactBefore=Bo2CompactBlocks.completedObjects();
                 long callsBefore=Bo2NativeParser.completedObjects();Bo2Object[] loaded=new Bo2Object[objects];
                 if(access)for(int i=0;i<objects;i++)loaded[i]=Bo2Object.load("Benchmark",new ByteArrayInputStream(bytes));
                 long before=bean.getThreadAllocatedBytes(thread),start=System.nanoTime(),hash=1;
                 if(access)for(Bo2Object object:loaded)hash=hash*31+visit(object,side);
                 else for(int i=0;i<objects;i++)loaded[i]=Bo2Object.load("Benchmark",new ByteArrayInputStream(bytes));
                 long elapsed=System.nanoTime()-start,allocated=bean.getThreadAllocatedBytes(thread)-before;
-                if(Bo2NativeParser.completedObjects()-callsBefore!=(nativeMode?objects:0))throw new AssertionError("Unexpected native coverage");
+                if(Bo2NativeParser.completedObjects()-callsBefore!=(parserMode?objects:0))throw new AssertionError("Unexpected native coverage");
+                if(Bo2CompactBlocks.completedObjects()-compactBefore!=(compactMode?objects:0))throw new AssertionError("Every compact source must use the combined transaction");
                 for(Bo2Object object:loaded)validate(object,side,sparse);
                 heldLibrary=loaded;checksum=hash;
                 if(trial>=0){times[trial]=elapsed/1e6;allocations[trial]=allocated;if(nativeMode){rustTimes[trial]=elapsed/1e6;rustAlloc[trial]=allocated;}else{javaTimes[trial]=elapsed/1e6;javaAlloc[trial]=allocated;}}

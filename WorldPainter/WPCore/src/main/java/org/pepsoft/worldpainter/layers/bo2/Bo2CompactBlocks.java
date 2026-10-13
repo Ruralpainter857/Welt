@@ -43,6 +43,27 @@ final class Bo2CompactBlocks {
         var result=new Bo2CompactBlocks(new StructureCompactBlocks(frame,palette.toArray(new Material[0])),coordinates,branches,origin);
         COMPLETED.incrementAndGet();return result;
     }
+    /** Consume a combined source transaction without allocating per-block specifications. */
+    static Bo2CompactBlocks fromParsedFrame(byte[] frame,int count,int metadataEnd,Point3i origin) {
+        ByteBuffer source=ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN);
+        int paletteAt=source.getInt(64),paletteCount=source.getInt(68),indicesAt=source.getInt(72),indicesBytes=source.getInt(76);
+        if(paletteAt!=metadataEnd || paletteCount<1 || paletteCount>count || (long)paletteAt+paletteCount*8L!=indicesAt
+                || indicesBytes<64 || (long)indicesAt+indicesBytes!=frame.length)throw new IllegalArgumentException("Invalid combined BO2 palette/index ranges");
+        Material[] palette=new Material[paletteCount];
+        for(int i=0;i<paletteCount;i++){palette[i]=Material.get(source.getInt(paletteAt+i*8),source.getInt(paletteAt+i*8+4));if(palette[i]==null)throw new NullPointerException();}
+        Map<Point3i,Integer> order=new HashMap<>();
+        for(int i=0;i<count;i++){
+            int at=80+i*32,flag=source.getInt(at+20);if(flag!=0&&flag!=1)throw new IllegalArgumentException("Invalid native BO2 branch marker");
+            order.put(new Point3i(source.getInt(at),source.getInt(at+4),source.getInt(at+8)),i);
+        }
+        int[] coordinates=new int[order.size()*3];int[][] branches=new int[order.size()][];int index=0;
+        for(var entry:order.entrySet()){
+            Point3i point=entry.getKey();coordinates[index*3]=point.x;coordinates[index*3+1]=point.y;coordinates[index*3+2]=point.z;
+            int at=80+entry.getValue()*32;branches[index++]=source.getInt(at+20)==0?null:new int[]{source.getInt(at+24),source.getInt(at+28)};
+        }
+        StructureCompactBlocks materials=new StructureCompactBlocks(Arrays.copyOfRange(frame,indicesAt,frame.length),palette);
+        Bo2CompactBlocks result=new Bo2CompactBlocks(materials,coordinates,branches,origin);COMPLETED.incrementAndGet();return result;
+    }
     Material material(int x,int y,int z,Point3i origin){return materials.material(x-origin.x+sourceOrigin.x,y-origin.y+sourceOrigin.y,z-origin.z+sourceOrigin.z);}
     boolean mask(int x,int y,int z,Point3i origin){return materials.mask(x-origin.x+sourceOrigin.x,y-origin.y+sourceOrigin.y,z-origin.z+sourceOrigin.z,false);}
     long storageBytes(){return materials.storageBytes();}
