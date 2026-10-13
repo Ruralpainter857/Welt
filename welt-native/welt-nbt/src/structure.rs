@@ -252,7 +252,8 @@ pub fn extract(bytes: &[u8]) -> Option<Vec<u8>> {
     Some(output)
 }
 
-/// WSPR v1 snapshot: 32-byte header followed by x/y/z/palette-index records.
+/// WSPR snapshots: a 32-byte header followed by x/y/z/index records.
+/// Version 1 retains material palette limits; version 2 allows bounded opaque IDs.
 /// This reuses imported structures' storage selection, deduplication and coordinate hash.
 pub fn pack_records(bytes: &[u8]) -> Option<Vec<u8>> {
     if bytes.len() < 32 || bytes.len() > 32 + MAX_BLOCKS * 16 {
@@ -261,14 +262,16 @@ pub fn pack_records(bytes: &[u8]) -> Option<Vec<u8>> {
     let word = |at: usize| i32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
     let count = usize::try_from(word(8)).ok()?;
     let palette_count = usize::try_from(word(24)).ok()?;
+    let version = word(4);
+    let palette_limit = if version == 2 { MAX_BLOCKS } else { 65_535 };
     if word(0) != 0x52505357
-        || word(4) != 1
+        || !(1..=2).contains(&version)
         || word(28) != 0
         || count == 0
         || count > MAX_BLOCKS
         || bytes.len() != 32 + count * 16
         || palette_count == 0
-        || palette_count > 65_535
+        || palette_count > palette_limit
     {
         return None;
     }
@@ -309,7 +312,13 @@ fn pack_storage(mut blocks: Vec<Block>, dims: [i32; 3], palette_count: usize) ->
     let in_bounds = unique
         .iter()
         .all(|block| (0..3).all(|axis| block.xyz[axis] >= 0 && block.xyz[axis] < dims[axis]));
-    let stride = if palette_count <= 255 { 1 } else { 2 };
+    let stride = if palette_count <= 255 {
+        1
+    } else if palette_count <= 65_535 {
+        2
+    } else {
+        4
+    };
     let sparse_slots = if unique.is_empty() {
         0
     } else {
@@ -331,11 +340,8 @@ fn pack_storage(mut blocks: Vec<Block>, dims: [i32; 3], palette_count: usize) ->
                 + block.xyz[1] as usize * dims[0] as usize
                 + block.xyz[2] as usize * dims[0] as usize * dims[1] as usize)
                 * stride;
-            let value = (block.state + 1) as u16;
-            output[HEADER + index] = value as u8;
-            if stride == 2 {
-                output[HEADER + index + 1] = (value >> 8) as u8;
-            }
+            let value = (block.state + 1).to_le_bytes();
+            output[HEADER + index..HEADER + index + stride].copy_from_slice(&value[..stride]);
         }
     } else {
         for (i, block) in unique.iter().enumerate() {
@@ -426,6 +432,23 @@ mod tests {
         assert_eq!(frame[HEADER], 2);
     }
     #[test]
+    fn opaque_snapshot_version_covers_wide_ids_without_changing_material_limits() {
+        for count in [65_536, MAX_BLOCKS as i32] {
+            let mut bytes = snapshot([1, 1, 1], count, &[([0, 0, 0], count - 1)]);
+            assert!(pack_records(&bytes).is_none());
+            bytes[4..8].copy_from_slice(&2_i32.to_le_bytes());
+            let frame = pack_records(&bytes).unwrap();
+            assert_eq!(word(&frame, 13), 4);
+            assert_eq!(
+                u32::from_le_bytes(frame[HEADER..HEADER + 4].try_into().unwrap()),
+                count as u32
+            );
+        }
+        let mut excessive = snapshot([1, 1, 1], MAX_BLOCKS as i32 + 1, &[([0, 0, 0], 0)]);
+        excessive[4..8].copy_from_slice(&2_i32.to_le_bytes());
+        assert!(pack_records(&excessive).is_none());
+    }
+    #[test]
     fn project_snapshots_preserve_sparse_extreme_coordinates() {
         let records = [([i32::MIN, i32::MAX, -1], 0), ([1, 2, 3], 1)];
         let frame = pack_records(&snapshot([i32::MAX; 3], 2, &records)).unwrap();
@@ -445,7 +468,7 @@ mod tests {
             assert!(pack_records(&source[..size]).is_none());
         }
         for (at, value) in [
-            (4, 2),
+            (4, 3),
             (8, MAX_BLOCKS as i32 + 1),
             (24, 65536),
             (28, 1),

@@ -64,11 +64,17 @@ public final class Bo3Object extends AbstractObject implements Bo2ObjectProvider
 
     @Override
     public Material getMaterial(int x, int y, int z) {
+        if (compactBlocks != null) {
+            Bo3BlockSpec spec = compactBlocks.spec(x, y, z, origin);
+            if (spec != null) return spec.getMaterial();
+            return Collections.<Point3i, Bo3BlockSpec>emptyMap().get(new Point3i(x - origin.x, y - origin.y, z - origin.z)).getMaterial();
+        }
         return blocks.get(new Point3i(x - origin.x, y - origin.y, z - origin.z)).getMaterial();
     }
 
     @Override
     public boolean getMask(int x, int y, int z) {
+        if (compactBlocks != null) return compactBlocks.mask(x, y, z, origin);
         return blocks.containsKey(new Point3i(x - origin.x, y - origin.y, z - origin.z));
     }
 
@@ -85,7 +91,7 @@ public final class Bo3Object extends AbstractObject implements Bo2ObjectProvider
     @Override
     public List<TileEntity> getTileEntities() {
         if (tileEntities == null) {
-            tileEntities = blocks.values().stream()
+            tileEntities = (compactBlocks == null ? blocks.values().stream() : compactBlocks.stream())
                 .flatMap(block -> block.getTileEntities().stream())
                 .map(tileEntity -> {
                     TileEntity clone = (TileEntity) tileEntity.clone();
@@ -140,6 +146,7 @@ public final class Bo3Object extends AbstractObject implements Bo2ObjectProvider
 
     @Override
     public boolean visitBlocks(BlockVisitor visitor) {
+        if (compactBlocks != null) return compactBlocks.visit(this, visitor, origin);
         for (Map.Entry<Point3i, Bo3BlockSpec> entry: blocks.entrySet()) {
             Point3i coords = entry.getKey();
             if (! visitor.visitBlock(this, coords.x + origin.x, coords.y + origin.y, coords.z + origin.z, entry.getValue().getMaterial())) {
@@ -166,6 +173,12 @@ public final class Bo3Object extends AbstractObject implements Bo2ObjectProvider
             guessConnectBlocks();
         }
         version = 2;
+        if (org.pepsoft.worldpainter.nativeapi.NativeSlices.isBo3ProjectSnapshotAvailable()) {
+            Bo3CompactBlocks restored;
+            try { restored = Bo3CompactBlocks.capture(blocks, origin, dimensions); }
+            catch (RuntimeException unsupported) { return; }
+            if (restored != null) { compactBlocks = restored; blocks = null; }
+        }
     }
     
     /**
@@ -338,9 +351,19 @@ public final class Bo3Object extends AbstractObject implements Bo2ObjectProvider
         }
     }
  
+    public long getBlockIndexStorageBytes() { return compactBlocks == null ? -1 : compactBlocks.storageBytes(); }
+    private void writeObject(ObjectOutputStream out) throws IOException {
+        ObjectOutputStream.PutField fields = out.putFields();
+        fields.put("name", name); fields.put("properties", properties);
+        fields.put("blocks", compactBlocks == null ? blocks : compactBlocks.historicalMap());
+        fields.put("origin", origin); fields.put("dimensions", dimensions); fields.put("attributes", attributes); fields.put("version", version);
+        out.writeFields();
+    }
+
     private String name;
     private final Map<String, String> properties;
-    private final Map<Point3i, Bo3BlockSpec> blocks;
+    private Map<Point3i, Bo3BlockSpec> blocks;
+    private transient Bo3CompactBlocks compactBlocks;
     private Point3i origin, dimensions;
     private Map<String, Serializable> attributes;
     private int version = 2;

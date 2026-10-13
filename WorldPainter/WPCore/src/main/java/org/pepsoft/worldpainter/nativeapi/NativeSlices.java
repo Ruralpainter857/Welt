@@ -198,6 +198,14 @@ public final class NativeSlices {
     public static byte[] packBo2ProjectSnapshot(byte[] source) {
         return packCoordinateSnapshot(source, isBo2ProjectSnapshotAvailable());
     }
+    public static boolean isBo3ProjectSnapshotAvailable() {
+        return !structureSnapshotSymbolUnavailable && Boolean.getBoolean("welt.native.bo3Projects")
+                && Native.isGenEnabled() && NativeLoader.areSlicesAvailable();
+    }
+    /** Opaque specification IDs use WSPR v2; no material/random callbacks cross JNI. */
+    public static byte[] packBo3ProjectSnapshot(byte[] source) {
+        return packCoordinateSnapshot(source, isBo3ProjectSnapshotAvailable());
+    }
     private static byte[] packCoordinateSnapshot(byte[] source, boolean available) {
         if (!available || source == null || source.length < 32
                 || source.length > 32 + 262144 * 16) return null;
