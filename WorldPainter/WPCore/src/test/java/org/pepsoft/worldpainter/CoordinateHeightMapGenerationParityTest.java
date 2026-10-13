@@ -108,6 +108,35 @@ public class CoordinateHeightMapGenerationParityTest {
         byte[] after=new byte[length];invalid.duplicate().get(after);assertArrayEquals(before,after);
         rawAndStorage(BitmapWorldCreationBenchmark.proceduralMap("nested-warp"),1,-1);
     }
+    @Test public void fastNoiseCompositionsPreserveEveryNoiseAndFractalMode() throws Exception {
+        ready();
+        for(var type:org.pepsoft.worldpainter.heightMaps.noise.FastNoiseLite.NoiseType.values())
+            for(var fractal:new org.pepsoft.worldpainter.heightMaps.noise.FastNoiseLite.FractalType[]{
+                    org.pepsoft.worldpainter.heightMaps.noise.FastNoiseLite.FractalType.None,
+                    org.pepsoft.worldpainter.heightMaps.noise.FastNoiseLite.FractalType.FBm,
+                    org.pepsoft.worldpainter.heightMaps.noise.FastNoiseLite.FractalType.Ridged,
+                    org.pepsoft.worldpainter.heightMaps.noise.FastNoiseLite.FractalType.PingPong}) {
+                var noise=new FastNoiseLiteHeightMap(130,.7,3,17);noise.setNoiseType(type);noise.setFractalType(fractal);
+                rawAndStorage(new SumHeightMap(transform(noise),new ConstantHeightMap(7)),-1,1);
+            }
+    }
+    @Test public void fastNoiseLiveSettingsAndDomainsRemainExact() throws Exception {
+        ready();var noise=new FastNoiseLiteHeightMap(160,.7,3,Long.MAX_VALUE);
+        var map=new SumHeightMap(transform(noise),new NoiseHeightMap(45,.9,3,63));
+        rawAndStorage(map,-1,1);noise.setSeed(Long.MAX_VALUE);rawAndStorage(map,1,-1);
+        noise.setHeight(93.75);noise.setScale(1.9);noise.setOctaves(1);
+        noise.setNoiseType(org.pepsoft.worldpainter.heightMaps.noise.FastNoiseLite.NoiseType.Cellular);
+        noise.setFractalType(org.pepsoft.worldpainter.heightMaps.noise.FastNoiseLite.FractalType.PingPong);
+        rawAndStorage(map,131073,-131073);
+        rawAndStorage(new SumHeightMap(new TransformingHeightMap("FNL integer translation",noise,1,1,16777217,Integer.MIN_VALUE,0),new ConstantHeightMap(7)),0,0);
+        var uniform=new FastNoiseLiteHeightMap(93,Double.MAX_VALUE,3,17);
+        rawAndStorage(new SumHeightMap(transform(uniform),new ConstantHeightMap(7)),0,0);
+        assertNull(CoordinateHeightMapSource.prepare(new SumHeightMap(transform(new FastNoiseLiteHeightMap(93,Double.MIN_VALUE,3,17)),new ConstantHeightMap(7)),0,0,128,128));
+    }
+    @Test public void nestedFastNoiseDeformationKeepsRawSamplesAndAllPlanes() throws Exception {
+        ready();var map=BitmapWorldCreationBenchmark.proceduralMap("nested-fnl");
+        rawAndStorage(map,-1,1);map.setSeed(-173);rawAndStorage(map,1,-1);
+    }
     @Test public void coordinateProgramsAndBuffersRemainWorkerLocal() throws Exception {
         ready();
         var executor=java.util.concurrent.Executors.newFixedThreadPool(2);
@@ -149,7 +178,7 @@ public class CoordinateHeightMapGenerationParityTest {
         var terrain=new java.util.TreeMap<Integer,Terrain>(); terrain.put(-65,Terrain.GRASS);
         var theme=new SimpleTheme(197,62,terrain,null,-64,320,false,false);
         return new HeightMapTileFactory(197+index,BitmapWorldCreationBenchmark.proceduralMap(
-                index%3==0?"nested-warp":index%3==1?"nested-affine":"nested-translate"),-64,320,false,theme);
+                index%4==0?"nested-fnl":index%4==1?"nested-warp":index%4==2?"nested-affine":"nested-translate"),-64,320,false,theme);
     }
     @Test public void samplingMatrixSnapshotCannotChangeTheMap(){var map=new TransformingHeightMap("Matrix",new NoiseHeightMap(100,1,3,0),1.7f,.65f,31,-47,.37f);
         double before=map.getHeight(13,17);double[] matrix=new double[6];assertTrue(map.copySamplingMatrix(matrix));java.util.Arrays.fill(matrix,999);

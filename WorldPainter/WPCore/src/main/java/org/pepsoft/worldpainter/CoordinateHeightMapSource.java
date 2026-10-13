@@ -53,7 +53,7 @@ final class CoordinateHeightMapSource {
                         : type == SumHeightMap.class ? 2 : type == DifferenceHeightMap.class ? 3
                         : type == ProductHeightMap.class ? 4 : type == MinimisingHeightMap.class ? 5
                         : type == MaximisingHeightMap.class ? 6 : type == TransformingHeightMap.class ? 8
-                        : type == DisplacementHeightMap.class ? 9 : -1;
+                        : type == DisplacementHeightMap.class ? 9 : type == FastNoiseLiteHeightMap.class ? 11 : -1;
                 if (opcode < 0) {
                     return -1;
                 }
@@ -94,6 +94,14 @@ final class CoordinateHeightMapSource {
                             || noise.getScale() <= 0 || noise.getOctaves() > 10) return -1;
                     data.putDouble(p + 16, noise.getHeight()).putDouble(p + 24, noise.getScale())
                             .putLong(p + 32, noise.getSeed() + noise.getSeedOffset()).putInt(p + 40, noise.getOctaves());
+                } else if (opcode == 11) {
+                    FastNoiseLiteHeightMap noise = (FastNoiseLiteHeightMap) map;
+                    double frequency = 1.0 / (Constants.LARGE_BLOBS * noise.getScale());
+                    if (!Double.isFinite(noise.getHeight()) || !Double.isFinite(frequency)
+                            || !Float.isFinite((float) frequency) || frequency < 0 || noise.getOctaves() < 1 || noise.getOctaves() > 10) return -1;
+                    data.putDouble(p + 16, noise.getHeight()).putDouble(p + 24, frequency)
+                            .putLong(p + 32, noise.getSeed() + noise.getSeedOffset()).putInt(p + 40, noise.getOctaves())
+                            .putInt(p + 44, noise.getNoiseType().ordinal()).putInt(p + 48, noise.getFractalType().ordinal());
                 } else if (opcode == 8) {
                     TransformingHeightMap transform = (TransformingHeightMap) map;
                     if (depth > 0) nested = true;

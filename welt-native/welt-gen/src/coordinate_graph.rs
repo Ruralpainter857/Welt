@@ -33,6 +33,7 @@ impl Coordinates {
 enum Node {
     Constant(f64),
     Noise(NoiseHeightMapBulk),
+    FastNoise(fastnoise_lite::FastNoiseLite, f64),
     Binary(i32, usize, usize),
     Translate(usize, i32, i32),
     Affine(usize, [f64; 6]),
@@ -82,6 +83,45 @@ impl Program {
                         .map_err(|_| WeltError::IllegalArgument)?,
                     )
                 }
+                11 => {
+                    let height = number(r, 16);
+                    let frequency = number(r, 24);
+                    let octaves = word(r, 40);
+                    if !height.is_finite()
+                        || !frequency.is_finite()
+                        || frequency < 0.0
+                        || !(frequency as f32).is_finite()
+                        || !(1..=10).contains(&octaves)
+                    {
+                        return Err(WeltError::IllegalArgument);
+                    }
+                    use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
+                    let noise_type = match word(r, 44) {
+                        0 => NoiseType::OpenSimplex2,
+                        1 => NoiseType::OpenSimplex2S,
+                        2 => NoiseType::Cellular,
+                        3 => NoiseType::Perlin,
+                        4 => NoiseType::ValueCubic,
+                        5 => NoiseType::Value,
+                        _ => return Err(WeltError::IllegalArgument),
+                    };
+                    let fractal_type = match word(r, 48) {
+                        0 => FractalType::None,
+                        1 => FractalType::FBm,
+                        2 => FractalType::Ridged,
+                        3 => FractalType::PingPong,
+                        _ => return Err(WeltError::IllegalArgument),
+                    };
+                    let seed = i64::from_le_bytes(r[32..40].try_into().unwrap()) as i32;
+                    let mut noise = FastNoiseLite::with_seed(seed);
+                    noise.set_noise_type(Some(noise_type));
+                    noise.set_fractal_type(Some(fractal_type));
+                    noise.set_fractal_octaves(Some(octaves));
+                    noise.set_fractal_lacunarity(Some(2.0));
+                    noise.set_fractal_gain(Some(0.5));
+                    noise.set_frequency(Some(frequency as f32));
+                    Node::FastNoise(noise, height)
+                }
                 2..=6 => Node::Binary(op, child(left)?, child(right)?),
                 7 => Node::Translate(child(left)?, word(r, 40), word(r, 44)),
                 8 => {
@@ -123,6 +163,12 @@ impl Program {
             Node::Noise(noise) => {
                 let (x, y) = coords.doubles();
                 noise.get_value(x, y)
+            }
+            Node::FastNoise(noise, height) => {
+                // Java converts integer coordinates to float before FastNoiseLite sampling.
+                let (x, y) = coords.floats();
+                let normalised = (noise.get_noise_2d(x, y) + 1.0_f32) * 0.5_f32;
+                f64::from(normalised) * height
             }
             Node::Binary(op, left, right) => {
                 let a = self.sample(*left, coords)?;
@@ -330,6 +376,64 @@ mod tests {
         assert_eq!(p.sample(3, Coordinates::Integer(0, 0)).unwrap(), 7.0);
         p.nodes[1] = Node::Constant(1.0e20);
         assert!(p.sample(3, Coordinates::Integer(0, 0)).is_err());
+    }
+    #[test]
+    fn fast_noise_configurations_validate_and_keep_the_previous_cache() {
+        let mut record = vec![0_u8; STRIDE];
+        record[..4].copy_from_slice(&11_i32.to_le_bytes());
+        record[16..24].copy_from_slice(&160_f64.to_le_bytes());
+        record[24..32].copy_from_slice(&0.01_f64.to_le_bytes());
+        record[32..40].copy_from_slice(&17_i64.to_le_bytes());
+        record[40..44].copy_from_slice(&3_i32.to_le_bytes());
+        let mut program = Program::default();
+        for noise_type in 0..6_i32 {
+            for fractal in 0..4_i32 {
+                record[44..48].copy_from_slice(&noise_type.to_le_bytes());
+                record[48..52].copy_from_slice(&fractal.to_le_bytes());
+                program.configure(&record).unwrap();
+                assert!(program
+                    .sample(0, Coordinates::Integer(-128, 128))
+                    .unwrap()
+                    .is_finite());
+            }
+        }
+        let valid = record.clone();
+        record[44..48].copy_from_slice(&6_i32.to_le_bytes());
+        assert!(program.configure(&record).is_err());
+        assert_eq!(program.bytes, valid);
+    }
+    #[test]
+    fn fast_noise_integer_and_float_entry_coordinates_agree() {
+        let mut record = vec![0_u8; STRIDE];
+        record[..4].copy_from_slice(&11_i32.to_le_bytes());
+        record[16..24].copy_from_slice(&160_f64.to_le_bytes());
+        record[24..32].copy_from_slice(&0.01_f64.to_le_bytes());
+        record[32..40].copy_from_slice(&i64::MAX.to_le_bytes());
+        record[40..44].copy_from_slice(&3_i32.to_le_bytes());
+        let mut program = Program::default();
+        program.configure(&record).unwrap();
+        let integer = program
+            .sample(0, Coordinates::Integer(16_777_217, -16_777_217))
+            .unwrap();
+        let floating = program
+            .sample(
+                0,
+                Coordinates::Float(16_777_217_i32 as f32, -16_777_217_i32 as f32),
+            )
+            .unwrap();
+        assert_eq!(integer.to_bits(), floating.to_bits());
+        record[24..32].copy_from_slice(&0_f64.to_le_bytes());
+        program.configure(&record).unwrap();
+        assert_eq!(
+            program
+                .sample(0, Coordinates::Integer(0, 0))
+                .unwrap()
+                .to_bits(),
+            program
+                .sample(0, Coordinates::Integer(100, -100))
+                .unwrap()
+                .to_bits()
+        );
     }
     #[test]
     fn translate_keeps_integer_wrap_and_float_cast() {
