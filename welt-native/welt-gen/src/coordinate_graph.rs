@@ -32,6 +32,8 @@ impl Coordinates {
 }
 enum Node {
     Constant(f64),
+    Banded(i32, f64, i32, f64),
+    Mandelbrot,
     Noise(NoiseHeightMapBulk),
     FastNoise(fastnoise_lite::FastNoiseLite, f64),
     Binary(i32, usize, usize),
@@ -83,6 +85,23 @@ impl Program {
                         .map_err(|_| WeltError::IllegalArgument)?,
                     )
                 }
+                12 => {
+                    let first = word(r, 40);
+                    let second = word(r, 44);
+                    let a = number(r, 16);
+                    let b = number(r, 24);
+                    if first <= 0
+                        || second <= 0
+                        || first.checked_add(second).is_none()
+                        || !a.is_finite()
+                        || !b.is_finite()
+                        || word(r, 48) != 0
+                    {
+                        return Err(WeltError::IllegalArgument);
+                    }
+                    Node::Banded(first, a, second, b)
+                }
+                13 => Node::Mandelbrot,
                 11 => {
                     let height = number(r, 16);
                     let frequency = number(r, 24);
@@ -163,6 +182,35 @@ impl Program {
             Node::Noise(noise) => {
                 let (x, y) = coords.doubles();
                 noise.get_value(x, y)
+            }
+            Node::Mandelbrot => {
+                let (x0, y0) = coords.floats();
+                let mut x = 0_f32;
+                let mut y = 0_f32;
+                let mut iteration = 0;
+                while x * x + y * y < 4.0 && iteration < 255 {
+                    let next = x * x - y * y + x0;
+                    y = 2.0 * x * y + y0;
+                    x = next;
+                    iteration += 1;
+                }
+                iteration as f64
+            }
+            Node::Banded(first, a, second, b) => {
+                let (x, _) = coords.floats();
+                let total = first.wrapping_add(*second) as f32;
+                let d = if x < 0.0 {
+                    x + ((-x / total) as f64).ceil() as f32 * total
+                } else if x >= total {
+                    x - ((x / total) as f64).floor() as f32 * total
+                } else {
+                    x
+                };
+                if d < *first as f32 {
+                    b + (d / *first as f32) as f64 * (a - b)
+                } else {
+                    a + ((d - *first as f32) / *second as f32) as f64 * (b - a)
+                }
             }
             Node::FastNoise(noise, height) => {
                 // Java converts integer coordinates to float before FastNoiseLite sampling.
@@ -434,6 +482,32 @@ mod tests {
                 .unwrap()
                 .to_bits()
         );
+    }
+    #[test]
+    fn linear_bands_keep_negative_modulo_and_mandelbrot_iteration_limit() {
+        let p = Program {
+            bytes: vec![],
+            nodes: vec![Node::Banded(31, 43.0, 19, 177.0), Node::Mandelbrot],
+        };
+        assert_eq!(p.sample(0, Coordinates::Integer(-50, 7)).unwrap(), 177.0);
+        assert_eq!(p.sample(0, Coordinates::Integer(31, 7)).unwrap(), 43.0);
+        assert_eq!(p.sample(1, Coordinates::Integer(0, 0)).unwrap(), 255.0);
+        assert_eq!(p.sample(1, Coordinates::Integer(3, 0)).unwrap(), 1.0);
+    }
+    #[test]
+    fn smooth_band_records_reject_without_corrupting_the_cached_program() {
+        let mut record = vec![0_u8; STRIDE];
+        record[..4].copy_from_slice(&12_i32.to_le_bytes());
+        record[16..24].copy_from_slice(&43_f64.to_le_bytes());
+        record[24..32].copy_from_slice(&177_f64.to_le_bytes());
+        record[40..44].copy_from_slice(&31_i32.to_le_bytes());
+        record[44..48].copy_from_slice(&19_i32.to_le_bytes());
+        let mut p = Program::default();
+        p.configure(&record).unwrap();
+        let valid = record.clone();
+        record[48..52].copy_from_slice(&1_i32.to_le_bytes());
+        assert!(p.configure(&record).is_err());
+        assert_eq!(p.bytes, valid);
     }
     #[test]
     fn translate_keeps_integer_wrap_and_float_cast() {

@@ -137,6 +137,24 @@ public class CoordinateHeightMapGenerationParityTest {
         ready();var map=BitmapWorldCreationBenchmark.proceduralMap("nested-fnl");
         rawAndStorage(map,-1,1);map.setSeed(-173);rawAndStorage(map,1,-1);
     }
+    @Test public void transformedLinearBandsPreserveRawSamplesAndSmoothBandsKeepJava() throws Exception {
+        ready();
+        for(int first:new int[]{1,31,16777217}){
+            var bands=new BandedHeightMap(first,-13.75,19,177.125,false);
+            rawAndStorage(new SumHeightMap(transform(bands),new ConstantHeightMap(7)),-1,1);
+            rawAndStorage(new SumHeightMap(new TransformingHeightMap("Integer bands",bands,1,1,16777217,Integer.MIN_VALUE,0),new ConstantHeightMap(7)),0,0);
+        }
+        assertNull(CoordinateHeightMapSource.prepare(new SumHeightMap(transform(new BandedHeightMap(31,43,19,177,true)),new ConstantHeightMap(7)),0,0,128,128));
+        assertNull(CoordinateHeightMapSource.prepare(new SumHeightMap(transform(new BandedHeightMap(0,43,19,177,true)),new ConstantHeightMap(7)),0,0,128,128));
+        assertNull(CoordinateHeightMapSource.prepare(new SumHeightMap(transform(new BandedHeightMap(Integer.MAX_VALUE,43,19,177,true)),new ConstantHeightMap(7)),0,0,128,128));
+    }
+    @Test public void transformedMandelbrotKeepsFloatArithmeticAndIterationLimit() throws Exception {
+        ready();
+        var fractal=new TransformingHeightMap("Fractal",new MandelbrotHeightMap(),150,200,7,-11,.23f);
+        rawAndStorage(new SumHeightMap(fractal,new ConstantHeightMap(7)),-1,1);
+        rawAndStorage(new DisplacementHeightMap(new SumHeightMap(fractal,new ConstantHeightMap(7)),new ConstantHeightMap(.37),new ConstantHeightMap(13)),0,0);
+        rawAndStorage(BitmapWorldCreationBenchmark.proceduralMap("nested-shapes"),-1,1);
+    }
     @Test public void coordinateProgramsAndBuffersRemainWorkerLocal() throws Exception {
         ready();
         var executor=java.util.concurrent.Executors.newFixedThreadPool(2);
@@ -178,7 +196,7 @@ public class CoordinateHeightMapGenerationParityTest {
         var terrain=new java.util.TreeMap<Integer,Terrain>(); terrain.put(-65,Terrain.GRASS);
         var theme=new SimpleTheme(197,62,terrain,null,-64,320,false,false);
         return new HeightMapTileFactory(197+index,BitmapWorldCreationBenchmark.proceduralMap(
-                index%4==0?"nested-fnl":index%4==1?"nested-warp":index%4==2?"nested-affine":"nested-translate"),-64,320,false,theme);
+                index%5==0?"nested-shapes":index%5==1?"nested-fnl":index%5==2?"nested-warp":index%5==3?"nested-affine":"nested-translate"),-64,320,false,theme);
     }
     @Test public void samplingMatrixSnapshotCannotChangeTheMap(){var map=new TransformingHeightMap("Matrix",new NoiseHeightMap(100,1,3,0),1.7f,.65f,31,-47,.37f);
         double before=map.getHeight(13,17);double[] matrix=new double[6];assertTrue(map.copySamplingMatrix(matrix));java.util.Arrays.fill(matrix,999);

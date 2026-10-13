@@ -53,7 +53,8 @@ final class CoordinateHeightMapSource {
                         : type == SumHeightMap.class ? 2 : type == DifferenceHeightMap.class ? 3
                         : type == ProductHeightMap.class ? 4 : type == MinimisingHeightMap.class ? 5
                         : type == MaximisingHeightMap.class ? 6 : type == TransformingHeightMap.class ? 8
-                        : type == DisplacementHeightMap.class ? 9 : type == FastNoiseLiteHeightMap.class ? 11 : -1;
+                        : type == DisplacementHeightMap.class ? 9 : type == FastNoiseLiteHeightMap.class ? 11
+                        : type == BandedHeightMap.class ? 12 : type == MandelbrotHeightMap.class ? 13 : -1;
                 if (opcode < 0) {
                     return -1;
                 }
@@ -94,6 +95,13 @@ final class CoordinateHeightMapSource {
                             || noise.getScale() <= 0 || noise.getOctaves() > 10) return -1;
                     data.putDouble(p + 16, noise.getHeight()).putDouble(p + 24, noise.getScale())
                             .putLong(p + 32, noise.getSeed() + noise.getSeedOffset()).putInt(p + 40, noise.getOctaves());
+                } else if (opcode == 12) {
+                    BandedHeightMap bands = (BandedHeightMap) map;
+                    long total = (long) bands.getSegment1Length() + bands.getSegment2Length();
+                    if (bands.isSmooth() || bands.getSegment1Length() <= 0 || bands.getSegment2Length() <= 0 || total > Integer.MAX_VALUE
+                            || !Double.isFinite(bands.getSegment1EndHeight()) || !Double.isFinite(bands.getSegment2EndHeight())) return -1;
+                    data.putDouble(p + 16, bands.getSegment1EndHeight()).putDouble(p + 24, bands.getSegment2EndHeight())
+                            .putInt(p + 40, bands.getSegment1Length()).putInt(p + 44, bands.getSegment2Length()).putInt(p + 48, bands.isSmooth() ? 1 : 0);
                 } else if (opcode == 11) {
                     FastNoiseLiteHeightMap noise = (FastNoiseLiteHeightMap) map;
                     double frequency = 1.0 / (Constants.LARGE_BLOBS * noise.getScale());
