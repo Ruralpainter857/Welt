@@ -181,7 +181,7 @@ public class WeltDockingManagerTest {
             assertFalse(checkbox.isSelected());
             checkbox.doClick(); assertTrue(checkbox.isSelected());
             checkbox.doClick(); assertFalse(checkbox.isSelected());
-            var label = new com.jidesoft.swing.JideLabel("Show");
+            var label = new org.pepsoft.worldpainter.util.RotatableLabel("Show");
             label.setOrientation(SwingConstants.VERTICAL);
             assertEquals(SwingConstants.VERTICAL, label.getOrientation());
         });

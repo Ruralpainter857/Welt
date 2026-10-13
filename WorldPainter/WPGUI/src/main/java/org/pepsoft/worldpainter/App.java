@@ -7,7 +7,7 @@ package org.pepsoft.worldpainter;
 
 import org.pepsoft.worldpainter.docking.WeltDockPanel;
 import org.pepsoft.worldpainter.docking.WeltDockingManager;
-import com.jidesoft.swing.JideLabel;
+import org.pepsoft.worldpainter.util.RotatableLabel;
 import org.jetbrains.annotations.NonNls;
 import org.jetbrains.annotations.Nullable;
 import org.pepsoft.minecraft.Direction;
@@ -3171,13 +3171,13 @@ public final class App extends JFrame implements BrushControl,
         GridBagConstraints constraints = new GridBagConstraints();
         constraints.insets = new Insets(1, 1, 1, 1);
 
-        JideLabel label = new JideLabel("Show");
+        RotatableLabel label = new RotatableLabel("Show");
         label.setOrientation(SwingConstants.VERTICAL);
         label.setClockwise(false);
         label.setMinimumSize(label.getPreferredSize());
         constraints.anchor = GridBagConstraints.SOUTH;
         layerPanel.add(label, constraints);
-        label = new JideLabel("Solo");
+        label = new RotatableLabel("Solo");
         label.setOrientation(SwingConstants.VERTICAL);
         label.setClockwise(false);
         label.setMinimumSize(label.getPreferredSize());

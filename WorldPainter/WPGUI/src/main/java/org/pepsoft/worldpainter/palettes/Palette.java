@@ -6,7 +6,7 @@
 package org.pepsoft.worldpainter.palettes;
 
 import org.pepsoft.worldpainter.docking.WeltDockPanel;
-import com.jidesoft.swing.JideLabel;
+import org.pepsoft.worldpainter.util.RotatableLabel;
 import org.jetbrains.annotations.NotNull;
 import org.pepsoft.util.IconUtils;
 import org.pepsoft.worldpainter.layers.CustomLayer;
@@ -40,13 +40,13 @@ public class Palette {
         // Row: Show/Solo labels
         GridBagConstraints constraints = new GridBagConstraints();
         constraints.insets = new Insets(1, 1, 1, 1);
-        JideLabel label = new JideLabel("Show");
+        RotatableLabel label = new RotatableLabel("Show");
         label.setOrientation(SwingConstants.VERTICAL);
         label.setClockwise(false);
         label.setMinimumSize(label.getPreferredSize());
         constraints.anchor = GridBagConstraints.SOUTH;
         panel.add(label, constraints);
-        label = new JideLabel("Solo");
+        label = new RotatableLabel("Solo");
         label.setOrientation(SwingConstants.VERTICAL);
         label.setClockwise(false);
         label.setMinimumSize(label.getPreferredSize());
