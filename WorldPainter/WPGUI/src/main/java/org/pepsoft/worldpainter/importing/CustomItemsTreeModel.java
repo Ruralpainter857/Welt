@@ -50,6 +50,7 @@ public class CustomItemsTreeModel implements TreeModel {
 
     public List<Object> getSelectedItems(TreePath[] selectedTreePaths) {
         ArrayList<Object> selectedItems = new ArrayList<>();
+        if (selectedTreePaths == null) return selectedItems;
         for (TreePath selectedPath: selectedTreePaths) {
             Object object = selectedPath.getLastPathComponent();
             if (object == ROOT) {
@@ -124,8 +125,7 @@ public class CustomItemsTreeModel implements TreeModel {
         } else if (parent == BIOMES) {
             return customBiomes.size();
         } else {
-            // JIDE's CheckBoxTree insists on calling us with nodes that didn't
-            // come from us
+            // Leaf nodes have no children.
             return 0;
         }
     }

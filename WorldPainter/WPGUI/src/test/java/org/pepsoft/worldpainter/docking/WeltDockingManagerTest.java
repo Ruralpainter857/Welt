@@ -167,7 +167,7 @@ public class WeltDockingManagerTest {
             var first = new javax.swing.tree.DefaultMutableTreeNode("First");
             var second = new javax.swing.tree.DefaultMutableTreeNode("Second");
             root.add(first); root.add(second);
-            var tree = new com.jidesoft.swing.CheckBoxTree(new javax.swing.tree.DefaultTreeModel(root));
+            var tree = new org.pepsoft.worldpainter.util.CheckBoxTree(new javax.swing.tree.DefaultTreeModel(root));
             var path = new javax.swing.tree.TreePath(new Object[] {root, first});
             tree.getCheckBoxTreeSelectionModel().addSelectionPath(path);
             assertTrue(tree.getCheckBoxTreeSelectionModel().isPathSelected(path));
