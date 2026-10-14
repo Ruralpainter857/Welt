@@ -161,8 +161,6 @@ public class WeltDockingManagerTest {
     @Test public void openSourceSwingWidgetsRetainSelectionAndTristateBehaviour() throws Exception {
         onEdt(() -> {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-            com.jidesoft.plaf.LookAndFeelFactory.installJideExtension(
-                    com.jidesoft.plaf.LookAndFeelFactory.VSNET_STYLE_WITHOUT_MENU);
             var root = new javax.swing.tree.DefaultMutableTreeNode("Root");
             var first = new javax.swing.tree.DefaultMutableTreeNode("First");
             var second = new javax.swing.tree.DefaultMutableTreeNode("Second");

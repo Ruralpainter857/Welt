@@ -54,10 +54,11 @@
             <version>1.4.9</version>
         </dependency>
         <dependency>
-            <!-- Open source Swing widgets only; no commercial docking or licence runtime. -->
+            <!-- Reference implementations used only by migration parity tests. -->
             <groupId>com.formdev</groupId>
             <artifactId>jide-oss</artifactId>
             <version>3.7.15</version>
+            <scope>test</scope>
         </dependency>
         <dependency>
             <!-- Not in Maven central; here it comes from the worldpainter-private repo. -->

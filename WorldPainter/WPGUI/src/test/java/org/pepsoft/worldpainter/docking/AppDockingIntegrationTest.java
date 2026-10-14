@@ -18,6 +18,17 @@ import static org.junit.Assume.*;
 public class AppDockingIntegrationTest {
     @Test public void applicationOpensWorldAndRestoresItsToolPanels() throws Exception {
         assumeFalse(GraphicsEnvironment.isHeadless());
+        if (Boolean.getBoolean("welt.test.requireNoJide")) {
+            for (String name : new String[] {"com.jidesoft.swing.JideLabel",
+                    "com.jidesoft.plaf.LookAndFeelFactory", "com.jidesoft.docking.DockingManager"}) {
+                try {
+                    Class.forName(name, false, AppDockingIntegrationTest.class.getClassLoader());
+                    fail("Unexpected JIDE runtime class: " + name);
+                } catch (ClassNotFoundException expected) {
+                    // The production runtime must not expose JIDE classes.
+                }
+            }
+        }
         String root = System.getProperty("welt.docking.configRoot");
         assumeNotNull(root);
         assertTrue("Application configuration must remain inside the test directory",
@@ -34,8 +45,6 @@ public class AppDockingIntegrationTest {
             SwingUtilities.invokeAndWait(() -> {
                 try {
                     UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-                    com.jidesoft.plaf.LookAndFeelFactory.installJideExtension(
-                            com.jidesoft.plaf.LookAndFeelFactory.VSNET_STYLE_WITHOUT_MENU);
                     App app = App.getInstance(); window.set(app);
                     app.setWorld(world, true);
                     app.setSize(1200, 900);
