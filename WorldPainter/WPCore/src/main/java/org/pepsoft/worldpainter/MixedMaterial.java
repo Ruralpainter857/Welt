@@ -166,6 +166,35 @@ public final class MixedMaterial implements Serializable, Comparable<MixedMateri
         }
     }
     
+    /** Render the material editor cross-section, preserving colour callback order. */
+    public BufferedImage createPreview(int width, int height, ColourScheme colourScheme) {
+        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        try (MaterialPreviewAccess worker = (mode == Mode.BLOBS || mode == Mode.LAYERED)
+                ? MaterialPreviewAccess.fill(width, height, mode == Mode.BLOBS ? sortedRows : null,
+                    scale, mode == Mode.BLOBS ? sortedRows.length : materials.length,
+                    repeat, layerXSlope, layerNoiseheightMap, layerNoiseOffset) : null) {
+            if (worker != null) {
+                java.nio.ByteBuffer indices = worker.buffer();
+                int output = indices.getInt(32);
+                int[] pixels = ((java.awt.image.DataBufferInt) image.getRaster().getDataBuffer()).getData();
+                for (int x = 0; x < width; x++) {
+                    for (int y = 0; y < height; y++) {
+                        int at = x + y * width;
+                        int index = indices.getInt(output + at * 4);
+                        Material material = mode == Mode.BLOBS ? sortedRows[index].material : materials[index];
+                        pixels[at] = colourScheme.getColour(material);
+                    }
+                }
+            } else {
+                for (int x = 0; x < width; x++) {
+                    for (int y = 0; y < height; y++) {
+                        image.setRGB(x, y, colourScheme.getColour(getMaterial(0L, x, 0, height - y - 1)));
+                    }
+                }
+            }
+        }
+        return image;
+    }
     public Material getMaterial(long seed, int x, int y, float z) {
         switch (mode) {
             case SIMPLE:

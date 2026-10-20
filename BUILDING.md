@@ -646,3 +646,24 @@ Four direct release-DLL cases with -Xcheck:jni cover versions 1/2/3, integer and
 The complete sorted material classification of four 48-cubed modern schems, ten warm-ups and nine alternating trials with release Rust, measured Java/native medians 8.4685 / 1.4460 ms, paired median 4.659x (2.198–28.666), caller allocations 1,408 / 1,504 bytes, matching hash 2581299865396929. All 76 native transactions are checked. The extra allocation is 24 bytes per object. The earlier baseline ran the original Java visitor in both modes; its 8.6464 / 10.7901 ms timings establish no native gain. This measurement covers classification used by the editor, not complete dialog opening, import or export.
 
 Separate JVMs retaining the same integer-backed source and last classified material set measured post-GC heap 10,182,520 / 10,544,232 bytes, direct buffers 8,192 / 8,192 bytes and sampled peak RSS 99,684,352 / 102,838,272 bytes (Java/native). Source storage is held constant by disabling native schem loading. Peaks include startup, warm-up and validation, sampled every 100 ms. No memory reduction is claimed for classification. GenericObjectBenchmark supports standalone materials runs and reports zero reference-slot estimates for that operation; those estimates apply only to snapshot operations. The per-process timing observations are not alternating speed evidence.
+### Bulk custom-material editor previews
+
+`MixedMaterial.createPreview` is shared by the Swing custom-material dialog and
+its headless verification harness. `-Dwelt.native.materialPreview=true` enables
+the deterministic BLOBS and LAYERED classifiers when `wp.native.gen` is enabled.
+NOISE preserves its original Java random draws; SIMPLE, small previews, unusual
+scales, oversized palettes and missing JNI symbols retain the Java renderer.
+
+The WMP1 little-endian frame uses a 128-byte versioned header, eight bytes per
+BLOBS row (scale and threshold), and row-major 32-bit palette indices. A complete
+preview requires one JNI call. Frames, noise generators, prepared vertical axes
+and column contexts are reused per worker. The frame lease remains active while
+Java invokes colour callbacks, so nested previews cannot overwrite outer data.
+No project serialization fields or material identifiers change.
+
+Build the DLL in Rust release mode and run `MaterialPreviewParityTest` with
+`-Dwelt.test.requireMaterialPreview=true`. The `welt-docking-tests` Maven profile
+also runs `CustomMaterialPreviewIntegrationTest` against the actual Swing dialog
+under its isolated application configuration. `MaterialPreviewBenchmark` measures
+complete image creation with alternating execution order and supports separate
+memory runs through `welt.benchmark.previewSolo` and `welt.benchmark.previewNative`.

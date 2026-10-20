@@ -1884,5 +1884,13 @@ public final class NativeSlices {
                                                  int[] heightInts, int[] frostBitCounts,
                                                  byte[] updates);
 
+    /** Classify an entire custom-material preview in one worker-owned frame. */
+    public static boolean fillMaterialPreview(ByteBuffer buffer) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()
+                || buffer.isReadOnly() || buffer.position() != 0 || buffer.limit() < 128 || buffer.limit() > 4227200) return false;
+        try { return nativeFillMaterialPreview(buffer, buffer.limit()) == 0; }
+        catch (UnsatisfiedLinkError e) { return false; }
+    }
+    private static native int nativeFillMaterialPreview(ByteBuffer buffer, int length);
     static native int nativeAbiVersion();
 }

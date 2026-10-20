@@ -478,13 +478,7 @@ public class CustomMaterialDialog extends WorldPainterDialog implements Property
             previewUpdateTimer = null;
         }
         int width = labelPreview.getWidth(), height = labelPreview.getHeight();
-        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
-        MixedMaterial mixedMaterial = getNewMaterial();
-        for (int x = 0; x < width; x++) {
-            for (int y = 0; y < height; y++) {
-                image.setRGB(x, y, colourScheme.getColour(mixedMaterial.getMaterial(0L, x, 0, height - y - 1)));
-            }
-        }
+        BufferedImage image = getNewMaterial().createPreview(width, height, colourScheme);
         labelPreview.setIcon(new ImageIcon(image));
     }
 

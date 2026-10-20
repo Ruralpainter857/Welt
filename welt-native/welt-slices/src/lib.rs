@@ -4838,3 +4838,5 @@ mod brush_cache;
 
 mod critical_array;
 mod image_range;
+
+mod material_preview;
