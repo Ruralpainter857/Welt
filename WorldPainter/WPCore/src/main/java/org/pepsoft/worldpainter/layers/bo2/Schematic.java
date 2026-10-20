@@ -26,7 +26,7 @@ import static org.pepsoft.minecraft.Constants.TAG_POS;
  *
  * @author pepijn
  */
-public final class Schematic extends AbstractNBTItem implements WPObject, Bo2ObjectProvider {
+public final class Schematic extends AbstractNBTItem implements WPObject, Bo2ObjectProvider, org.pepsoft.worldpainter.objects.CompactObjectSource, org.pepsoft.worldpainter.objects.CompactTransformedObjectSource {
     @SuppressWarnings("unchecked") // Responsibility of creator of schematic
     public Schematic(String name, CompoundTag tag, Map<String, Serializable> attributes) {
         super(tag);
@@ -281,6 +281,24 @@ public final class Schematic extends AbstractNBTItem implements WPObject, Bo2Obj
         }
     }
     
+    /** Read-only state classification in historical Z/X/Y order; false retains Java traversal. */
+    @Override public boolean forEachClassificationMaterial(java.util.function.Consumer<Material> consumer) {
+        if (!dimensions.equals(new Point3i(width, length, height))) return false;
+        return org.pepsoft.worldpainter.objects.CompactMaterialVolume.forEachLegacyMaterial(
+                blocks, data, addBlocks, new int[] {width, length, height}, consumer);
+    }
+    @Override public org.pepsoft.worldpainter.objects.CompactMaterialVolume copyCompactVolume() {
+        if (!dimensions.equals(new Point3i(width, length, height))) return null;
+        return copyTransformedCompactVolume(new int[] {width, length, height, 0}, new org.pepsoft.worldpainter.Platform[0]);
+    }
+
+    @Override public org.pepsoft.worldpainter.objects.CompactMaterialVolume copyTransformedCompactVolume(
+            int[] parameters, org.pepsoft.worldpainter.Platform[] platforms) {
+        if (parameters == null || parameters.length < 4 || parameters[0] != width
+                || parameters[1] != length || parameters[2] != height) return null;
+        return org.pepsoft.worldpainter.objects.CompactMaterialVolume.captureLegacySchematic(
+                blocks, data, addBlocks, parameters, platforms);
+    }
     private int blockOffset(int x, int y, int z) {
         return x + width * y + width * length * z;
     }

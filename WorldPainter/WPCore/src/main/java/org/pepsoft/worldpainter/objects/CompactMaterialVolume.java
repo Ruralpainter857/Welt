@@ -69,6 +69,63 @@ public final class CompactMaterialVolume {
         if(!NativeSlices.remapTransformedMaterialVolume(packed,integers,sourceStride,mapping,palette.size(),parameters,output))return null;
         return new CompactMaterialVolume(transformed,output,count);
     }
+    /** Decode mutable legacy byte planes once per snapshot; transform only distinct materials in Java. */
+    public static CompactMaterialVolume captureLegacySchematic(byte[] blocks, byte[] data, byte[] add,
+            int[] parameters, org.pepsoft.worldpainter.Platform[] platforms) {
+        if (!NativeSlices.isIndexedObjectTransformsAvailable() || parameters == null || parameters.length < 4 || parameters.length > 68
+                || parameters[0] < 1 || parameters[1] < 1 || parameters[2] < 1) return null;
+        long countLong = (long) parameters[0] * parameters[1] * parameters[2];
+        if (countLong < 1 || countLong > 16 * 1024 * 1024 || blocks == null || data == null
+                || blocks.length < countLong || data.length < countLong
+                || add != null && add.length < (countLong + 1) / 2) return null;
+        int count = (int) countLong;
+        LegacyWorker worker = LEGACY_WORKERS.get();
+        java.util.Arrays.fill(worker.mapping, -1);
+        worker.seen.clear(); worker.ids.clear(); worker.palette.clear();
+        worker.palette.add(null); worker.ids.put(null, 0);
+        for (int i = 0; i < count; i++) {
+            if (blocks[i] == 0) continue;
+            int high = add == null ? 0 : (add[i / 2] >>> ((i & 1) * 4)) & 15;
+            int state = (((blocks[i] & 255) | (high << 8)) << 4) | (data[i] & 15);
+            worker.seen.set(state);
+        }
+        for (int state = worker.seen.nextSetBit(0); state >= 0; state = worker.seen.nextSetBit(state + 1)) {
+            Material material = Material.get(state >>> 4, state & 15);
+            Integer id = worker.ids.get(material);
+            if (id == null) {
+                id = worker.palette.size(); worker.ids.put(material, id); worker.palette.add(material);
+            }
+            worker.mapping[state] = id;
+        }
+        Material[] transformed = transformPalette(worker.palette.toArray(new Material[0]), parameters, platforms);
+        if (transformed == null) return null;
+        parameters[3] = transformed.length <= 256 ? 1 : 2;
+        byte[] output = new byte[count * parameters[3]];
+        if (!NativeSlices.transformLegacyMaterialVolume(blocks, data, add, worker.mapping,
+                transformed.length, parameters, output)) return null;
+        LEGACY_COMPLETED.incrementAndGet();
+        return new CompactMaterialVolume(transformed, output, count);
+    }
+
+    public static boolean forEachLegacyMaterial(byte[] blocks, byte[] data, byte[] add, int[] dimensions,
+            java.util.function.Consumer<Material> consumer) {
+        int[] states = NativeSlices.collectLegacyMaterialStates(blocks, data, add, dimensions);
+        if (states == null) return false;
+        LEGACY_CLASSIFIED.incrementAndGet();
+        for (int state : states) consumer.accept(Material.get(state >>> 4, state & 15));
+        return true;
+    }
+    static long completedLegacyClassifications(){return LEGACY_CLASSIFIED.get();}
+    private static final java.util.concurrent.atomic.AtomicLong LEGACY_CLASSIFIED=new java.util.concurrent.atomic.AtomicLong();
+    static long completedLegacySnapshots() { return LEGACY_COMPLETED.get(); }
+    private static final java.util.concurrent.atomic.AtomicLong LEGACY_COMPLETED = new java.util.concurrent.atomic.AtomicLong();
+    private static final ThreadLocal<LegacyWorker> LEGACY_WORKERS = ThreadLocal.withInitial(LegacyWorker::new);
+    private static final class LegacyWorker {
+        final int[] mapping = new int[65536];
+        final java.util.BitSet seen = new java.util.BitSet(65536);
+        final IdentityHashMap<Material, Integer> ids = new IdentityHashMap<>();
+        final ArrayList<Material> palette = new ArrayList<>();
+    }
     Material get(int index) {
         if (index < 0 || index >= count) throw new ArrayIndexOutOfBoundsException(index);
         int p = index * stride;

@@ -294,3 +294,187 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
         })
     }
 }
+
+/// # Safety
+/// Source arrays remain alive during this call; output cannot alias any source byte plane.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeTransformLegacyMaterialVolume(
+    env: *mut JNIEnv,
+    _class: jclass,
+    blocks: jobject,
+    data: jobject,
+    add: jobject,
+    mapping: jobject,
+    palette: jint,
+    parameters: jobject,
+    output: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            let error = WeltError::IllegalArgument as jint;
+            if blocks.is_null()
+                || data.is_null()
+                || mapping.is_null()
+                || parameters.is_null()
+                || output.is_null()
+                || !(1..=65536).contains(&palette)
+            {
+                return error;
+            }
+            type Length = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            type Same = unsafe extern "system" fn(*mut JNIEnv, jobject, jobject) -> u8;
+            let len: Length = std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            let same: Same = std::mem::transmute(function(env, 24));
+            let n = len(env, blocks);
+            let d = len(env, data);
+            let a = if add.is_null() { 0 } else { len(env, add) };
+            let p = len(env, parameters);
+            let bytes = len(env, output);
+            if !(1..=32 * 1024 * 1024).contains(&n)
+                || !(1..=32 * 1024 * 1024).contains(&d)
+                || !(0..=32 * 1024 * 1024).contains(&a)
+                || !(4..=68).contains(&p)
+                || !(1..=32 * 1024 * 1024).contains(&bytes)
+                || len(env, mapping) != 65536
+                || same(env, blocks, output) != 0
+                || same(env, data, output) != 0
+                || !add.is_null() && same(env, add, output) != 0
+            {
+                return error;
+            }
+            let Some(b) = schematic::borrow(env, blocks, false) else {
+                return error;
+            };
+            let Some(datum) = schematic::borrow(env, data, false) else {
+                return error;
+            };
+            let extra = if add.is_null() {
+                None
+            } else {
+                schematic::borrow(env, add, false)
+            };
+            if !add.is_null() && extra.is_none() {
+                return error;
+            }
+            let Some(map) = schematic::borrow(env, mapping, true) else {
+                return error;
+            };
+            let Some(params) = schematic::borrow(env, parameters, true) else {
+                return error;
+            };
+            let Some(mut out) = schematic::borrow(env, output, false) else {
+                return error;
+            };
+            let params = slice::from_raw_parts(params.pointer.cast::<i32>(), p as usize);
+            if params[..3].iter().any(|&value| value <= 0)
+                || params[3] != if palette <= 256 { 1 } else { 2 }
+            {
+                return error;
+            }
+            let ok = welt_objects::material_volume::legacy_transform(
+                slice::from_raw_parts(b.pointer.cast::<u8>(), n as usize),
+                slice::from_raw_parts(datum.pointer.cast::<u8>(), d as usize),
+                extra
+                    .as_ref()
+                    .map(|value| slice::from_raw_parts(value.pointer.cast::<u8>(), a as usize)),
+                slice::from_raw_parts(map.pointer.cast::<i32>(), 65536),
+                palette as usize,
+                [params[0] as usize, params[1] as usize, params[2] as usize],
+                &params[4..],
+                slice::from_raw_parts_mut(out.pointer.cast::<u8>(), bytes as usize),
+            );
+            out.commit = ok;
+            if ok {
+                WeltError::Ok as jint
+            } else {
+                error
+            }
+        })
+    }
+}
+
+thread_local! {
+    static LEGACY_CLASSIFICATION: std::cell::RefCell<(Box<[u64;1024]>,Vec<i32>)> =
+        std::cell::RefCell::new((Box::new([0;1024]),Vec::new()));
+}
+/// # Safety
+/// Java source arrays remain alive and read-only throughout this transaction.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeCollectLegacyMaterialStates(
+    env: *mut JNIEnv,
+    _class: jclass,
+    blocks: jobject,
+    data: jobject,
+    add: jobject,
+    dimensions: jobject,
+) -> jobject {
+    let mut result = std::ptr::null_mut();
+    unsafe {
+        jni_catch(env, || {
+            let error = WeltError::IllegalArgument as jint;
+            if blocks.is_null() || data.is_null() || dimensions.is_null() {
+                return error;
+            }
+            type Length = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let len: Length = std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            let n = len(env, blocks);
+            let d = len(env, data);
+            let a = if add.is_null() { 0 } else { len(env, add) };
+            if !(1..=32 * 1024 * 1024).contains(&n)
+                || !(1..=32 * 1024 * 1024).contains(&d)
+                || !(0..=32 * 1024 * 1024).contains(&a)
+                || len(env, dimensions) != 3
+            {
+                return error;
+            }
+            let Some(b) = schematic::borrow(env, blocks, false) else {
+                return error;
+            };
+            let Some(datum) = schematic::borrow(env, data, false) else {
+                return error;
+            };
+            let extra = if add.is_null() {
+                None
+            } else {
+                schematic::borrow(env, add, false)
+            };
+            if !add.is_null() && extra.is_none() {
+                return error;
+            }
+            let Some(size) = schematic::borrow(env, dimensions, true) else {
+                return error;
+            };
+            let dims = slice::from_raw_parts(size.pointer.cast::<i32>(), 3);
+            if dims.iter().any(|&v| v <= 0) {
+                return error;
+            }
+            LEGACY_CLASSIFICATION.with(|worker| {
+                let mut scratch = worker.borrow_mut();
+                let (seen, states) = &mut *scratch;
+                if !welt_objects::material_volume::legacy_states(
+                    slice::from_raw_parts(b.pointer.cast::<u8>(), n as usize),
+                    slice::from_raw_parts(datum.pointer.cast::<u8>(), d as usize),
+                    extra
+                        .as_ref()
+                        .map(|v| slice::from_raw_parts(v.pointer.cast::<u8>(), a as usize)),
+                    [dims[0] as usize, dims[1] as usize, dims[2] as usize],
+                    seen,
+                    states,
+                ) {
+                    return error;
+                }
+                type New = unsafe extern "system" fn(*mut JNIEnv, jint) -> jobject;
+                type Set = unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i32);
+                let new: New = std::mem::transmute(function(env, 179));
+                let set: Set = std::mem::transmute(function(env, SET_INT_ARRAY_REGION));
+                result = new(env, states.len() as jint);
+                if result.is_null() {
+                    return error;
+                }
+                set(env, result, 0, states.len() as jint, states.as_ptr());
+                WeltError::Ok as jint
+            })
+        });
+    }
+    result
+}

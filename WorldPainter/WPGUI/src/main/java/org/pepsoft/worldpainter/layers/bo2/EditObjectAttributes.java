@@ -99,11 +99,10 @@ public class EditObjectAttributes extends WorldPainterDialog {
             spinnerVerticalOffset.setValue(object.getAttribute(ATTRIBUTE_VERTICAL_OFFSET));
             spinnerRandomVariation.setValue(object.getAttribute(ATTRIBUTE_Y_VARIATION));
             SortedSet<Material> materials = new TreeSet<>(Comparator.comparing(Material::toString));
-            object.visitBlocks((WPObject o, int x, int y, int z, Material m) -> {
+            org.pepsoft.worldpainter.objects.CompactObjectMaterials.forEach(object, m -> {
                 if (m != AIR) {
                     materials.add(m);
                 }
-                return true;
             });
             if (! materials.isEmpty()) {
                 comboBoxReplacedMaterial.setModel(new DefaultComboBoxModel<>(materials.toArray(new Material[materials.size()])));

@@ -92,6 +92,26 @@ public final class NativeSlices {
         catch(UnsatisfiedLinkError e){indexedTransformSymbolUnavailable=true;return false;}
     }
     private static native int nativeRemapTransformedMaterialVolume(byte[] packed,int[] integers,int sourceStride,int[] mapping,int paletteSize,int[] parameters,byte[] output);
+    public static boolean transformLegacyMaterialVolume(byte[] blocks, byte[] data, byte[] add,
+            int[] mapping, int palette, int[] parameters, byte[] output) {
+        if (legacyTransformSymbolUnavailable || !isIndexedObjectTransformsAvailable() || blocks == null
+                || data == null || mapping == null || mapping.length != 65536 || parameters == null
+                || parameters.length < 4 || parameters.length > 68 || output == null
+                || output == blocks || output == data || output == add || palette < 1 || palette > 65536) return false;
+        try { return nativeTransformLegacyMaterialVolume(blocks, data, add, mapping, palette, parameters, output) == 0; }
+        catch (UnsatisfiedLinkError unavailable) { legacyTransformSymbolUnavailable = true; return false; }
+    }
+    private static native int nativeTransformLegacyMaterialVolume(byte[] blocks, byte[] data, byte[] add,
+            int[] mapping, int palette, int[] parameters, byte[] output);
+    private static volatile boolean legacyTransformSymbolUnavailable;
+    public static int[] collectLegacyMaterialStates(byte[] blocks, byte[] data, byte[] add, int[] dimensions) {
+        if (legacyClassificationSymbolUnavailable || !isMaterialVolumeAvailable() || blocks == null || data == null
+                || dimensions == null || dimensions.length != 3) return null;
+        try { return nativeCollectLegacyMaterialStates(blocks,data,add,dimensions); }
+        catch (UnsatisfiedLinkError unavailable) { legacyClassificationSymbolUnavailable=true; return null; }
+    }
+    private static native int[] nativeCollectLegacyMaterialStates(byte[] blocks,byte[] data,byte[] add,int[] dimensions);
+    private static volatile boolean legacyClassificationSymbolUnavailable;
     private static volatile boolean materialVolumeSymbolUnavailable;
     public static boolean isMaterialVolumeAvailable() {
         return !materialVolumeSymbolUnavailable && Boolean.getBoolean("welt.native.objectSnapshots")

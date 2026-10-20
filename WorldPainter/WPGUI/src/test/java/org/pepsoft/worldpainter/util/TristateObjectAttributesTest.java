@@ -114,4 +114,39 @@ public class TristateObjectAttributesTest {
             } finally { dialog.dispose(); }
         });
     }
+    @Test public void schematicDialogUsesNativeClassificationAndKeepsMaterialChoices() throws Exception {
+        String gen=System.getProperty("wp.native.gen"), snapshots=System.getProperty("welt.native.objectSnapshots");
+        try {
+            System.setProperty("wp.native.gen","true");System.setProperty("welt.native.objectSnapshots","true");
+            boolean available=org.pepsoft.worldpainter.nativeapi.NativeSlices.collectLegacyMaterialStates(
+                    new byte[]{1},new byte[]{0},null,new int[]{1,1,1})!=null;
+            if(Boolean.getBoolean("welt.test.requireLegacySnapshots"))assertTrue("Native classifier required",available);
+            else assumeTrue("Native classifier unavailable",available);
+            onEdt(()->{
+                java.util.Map<String,org.jnbt.Tag> tags=new java.util.HashMap<>();
+                tags.put("Materials",new org.jnbt.StringTag("Materials","Alpha"));
+                tags.put("Width",new org.jnbt.ShortTag("Width",(short)4));
+                tags.put("Length",new org.jnbt.ShortTag("Length",(short)1));
+                tags.put("Height",new org.jnbt.ShortTag("Height",(short)1));
+                tags.put("Blocks",new org.jnbt.ByteArrayTag("Blocks",new byte[]{1,53,54,1}));
+                tags.put("Data",new org.jnbt.ByteArrayTag("Data",new byte[]{0,1,2,0}));
+                var source=new org.pepsoft.worldpainter.layers.bo2.Schematic("Native classification",new org.jnbt.CompoundTag("Schematic",tags),null);
+                java.util.SortedSet<Material> expected=new java.util.TreeSet<>(java.util.Comparator.comparing(Material::toString));
+                source.visitBlocks((object,x,y,z,material)->{if(material!=Material.AIR)expected.add(material);return true;});
+                Dialog dialog=null;
+                try {
+                    var counter=org.pepsoft.worldpainter.objects.CompactMaterialVolume.class.getDeclaredMethod("completedLegacyClassifications");
+                    counter.setAccessible(true);long before=(Long)counter.invoke(null);
+                    dialog=new Dialog(List.of(source));assertEquals(before+1,(long)(Long)counter.invoke(null));
+                    Field field=EditObjectAttributes.class.getDeclaredField("comboBoxReplacedMaterial");field.setAccessible(true);
+                    ComboBoxModel<?> model=((JComboBox<?>)field.get(dialog)).getModel();assertEquals(expected.size(),model.getSize());
+                    int index=0;for(Material material:expected)assertSame(material,model.getElementAt(index++));
+                } catch(ReflectiveOperationException error){throw new AssertionError(error);}
+                finally {if(dialog!=null)dialog.dispose();}
+            });
+        } finally {
+            if(gen==null)System.clearProperty("wp.native.gen");else System.setProperty("wp.native.gen",gen);
+            if(snapshots==null)System.clearProperty("welt.native.objectSnapshots");else System.setProperty("welt.native.objectSnapshots",snapshots);
+        }
+    }
 }

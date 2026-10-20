@@ -402,3 +402,253 @@ mod fused_transform_tests {
         assert_eq!(output, [9; 2]);
     }
 }
+
+/// Decode legacy IDs and metadata directly into a transformed immutable palette plane.
+/// A zero low ID byte is absent even when AddBlocks contributes a nonzero high nibble.
+pub fn legacy_transform(
+    blocks: &[u8],
+    data: &[u8],
+    add: Option<&[u8]>,
+    mapping: &[i32],
+    palette: usize,
+    dimensions: [usize; 3],
+    operations: &[i32],
+    output: &mut [u8],
+) -> bool {
+    let [width, length, height] = dimensions;
+    let Some(count) = width
+        .checked_mul(length)
+        .and_then(|n| n.checked_mul(height))
+    else {
+        return false;
+    };
+    if count == 0
+        || count > 16 * 1024 * 1024
+        || !(1..=65536).contains(&palette)
+        || mapping.len() != 65536
+        || blocks.len() < count
+        || data.len() < count
+        || add.is_some_and(|bytes| bytes.len() < count.div_ceil(2))
+    {
+        return false;
+    }
+    let stride = if palette <= 256 { 1 } else { 2 };
+    if output.len() != count * stride {
+        return false;
+    }
+    let state = |i: usize| {
+        let high = add.map_or(0, |bytes| (bytes[i / 2] >> ((i & 1) * 4)) & 15);
+        ((usize::from(blocks[i]) | (usize::from(high) << 8)) << 4) | usize::from(data[i] & 15)
+    };
+    for i in 0..count {
+        if blocks[i] != 0 {
+            let id = mapping[state(i)];
+            if id < 0 || id as usize >= palette {
+                return false;
+            }
+        }
+    }
+    visit_transformed(width, length, height, operations, |target, source| {
+        let id = if blocks[source] == 0 {
+            0
+        } else {
+            mapping[state(source)]
+        };
+        output[target * stride] = id as u8;
+        if stride == 2 {
+            output[target * stride + 1] = (id >> 8) as u8;
+        }
+    })
+}
+
+#[cfg(test)]
+mod legacy_transform_tests {
+    use super::*;
+    #[test]
+    fn nibbles_low_byte_mask_and_rectangular_rotation() {
+        let blocks = [0, 1, 2, 0, 1, 2];
+        let data = [3, 15, 4, 6, 8, 1];
+        let add = [0x21, 0x43, 0x65];
+        let mut mapping = vec![-1; 65536];
+        for (state, id) in [
+            (513 * 16 + 15, 1),
+            (770 * 16 + 4, 2),
+            (1281 * 16 + 8, 3),
+            (1538 * 16 + 1, 4),
+        ] {
+            mapping[state] = id;
+        }
+        let mut out = [9; 6];
+        assert!(legacy_transform(
+            &blocks,
+            &data,
+            Some(&add),
+            &mapping,
+            5,
+            [3, 2, 1],
+            &[1],
+            &mut out
+        ));
+        assert_eq!(out, [0, 0, 3, 1, 4, 2]);
+        assert!(legacy_transform(
+            &blocks,
+            &data,
+            Some(&add),
+            &mapping,
+            5,
+            [3, 2, 1],
+            &[3, 5, 1],
+            &mut out
+        ));
+        assert_eq!(out, [2, 1, 0, 4, 3, 0]);
+    }
+    #[test]
+    fn wide_palette_odd_height_and_rejection_before_writes() {
+        let mut mapping = vec![-1; 65536];
+        mapping[16] = 256;
+        let mut out = [7; 6];
+        assert!(legacy_transform(
+            &[1, 0, 1],
+            &[0; 3],
+            Some(&[0; 2]),
+            &mapping,
+            257,
+            [1, 1, 3],
+            &[],
+            &mut out
+        ));
+        assert_eq!(out, [0, 1, 0, 0, 0, 1]);
+        for operation in [6, -1] {
+            out.fill(7);
+            assert!(!legacy_transform(
+                &[1, 0, 1],
+                &[0; 3],
+                None,
+                &mapping,
+                257,
+                [1, 1, 3],
+                &[operation],
+                &mut out
+            ));
+            assert_eq!(out, [7; 6]);
+        }
+        out.fill(7);
+        assert!(!legacy_transform(
+            &[1, 0, 1],
+            &[0; 3],
+            Some(&[0]),
+            &mapping,
+            257,
+            [1, 1, 3],
+            &[],
+            &mut out
+        ));
+        assert_eq!(out, [7; 6]);
+        mapping[16] = -1;
+        assert!(!legacy_transform(
+            &[1, 0, 1],
+            &[0; 3],
+            None,
+            &mapping,
+            257,
+            [1, 1, 3],
+            &[],
+            &mut out
+        ));
+        assert_eq!(out, [7; 6]);
+    }
+}
+
+/// Collect legacy states in the default visitor's Z/X/Y first-encounter order.
+/// Scratch storage is supplied by the worker; no voxel plane is produced.
+pub fn legacy_states(
+    blocks: &[u8],
+    data: &[u8],
+    add: Option<&[u8]>,
+    dimensions: [usize; 3],
+    seen: &mut [u64; 1024],
+    states: &mut Vec<i32>,
+) -> bool {
+    let [width, length, height] = dimensions;
+    let Some(count) = width
+        .checked_mul(length)
+        .and_then(|n| n.checked_mul(height))
+    else {
+        return false;
+    };
+    if count == 0
+        || count > 16 * 1024 * 1024
+        || blocks.len() < count
+        || data.len() < count
+        || add.is_some_and(|bytes| bytes.len() < count.div_ceil(2))
+    {
+        return false;
+    }
+    seen.fill(0);
+    states.clear();
+    for z in 0..height {
+        for x in 0..width {
+            for y in 0..length {
+                let i = x + y * width + z * width * length;
+                if blocks[i] == 0 {
+                    continue;
+                }
+                let high = add.map_or(0, |bytes| (bytes[i / 2] >> ((i & 1) * 4)) & 15);
+                let state = ((usize::from(blocks[i]) | (usize::from(high) << 8)) << 4)
+                    | usize::from(data[i] & 15);
+                let bit = 1u64 << (state & 63);
+                if seen[state / 64] & bit == 0 {
+                    seen[state / 64] |= bit;
+                    states.push(state as i32);
+                }
+            }
+        }
+    }
+    true
+}
+#[cfg(test)]
+mod legacy_states_tests {
+    use super::*;
+    #[test]
+    fn visitor_order_masks_and_worker_reset() {
+        let mut seen = [0; 1024];
+        let mut states = vec![];
+        assert!(legacy_states(
+            &[1, 2, 3, 4, 0, 2],
+            &[0; 6],
+            None,
+            [3, 2, 1],
+            &mut seen,
+            &mut states
+        ));
+        assert_eq!(states, [16, 64, 32, 48]);
+        assert!(legacy_states(
+            &[0, 1, 1],
+            &[0, 0, 15],
+            Some(&[0x21, 0x03]),
+            [1, 1, 3],
+            &mut seen,
+            &mut states
+        ));
+        assert_eq!(states, [513 * 16, 769 * 16 + 15]);
+        let original = states.clone();
+        assert!(!legacy_states(
+            &[1],
+            &[],
+            None,
+            [1, 1, 1],
+            &mut seen,
+            &mut states
+        ));
+        assert_eq!(states, original);
+        assert!(legacy_states(
+            &[0],
+            &[0],
+            None,
+            [1, 1, 1],
+            &mut seen,
+            &mut states
+        ));
+        assert!(states.is_empty());
+    }
+}
