@@ -149,3 +149,68 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
         })
     }
 }
+/// # Safety
+/// Source and output byte arrays must not alias. The arithmetic-only critical
+/// section performs no allocation, locking, callbacks, or other JVM operations.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeScaleBitmapBrush(
+    env: *mut JNIEnv,
+    _class: jclass,
+    source: jobject,
+    level: f32,
+    output: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            let error = WeltError::IllegalArgument as jint;
+            if source.is_null() || output.is_null() || level.is_nan() || level >= 1.0 {
+                return error;
+            }
+            type Length = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            type Same = unsafe extern "system" fn(*mut JNIEnv, jobject, jobject) -> u8;
+            type Get = unsafe extern "system" fn(*mut JNIEnv, jobject, *mut u8) -> *mut c_void;
+            type Release = unsafe extern "system" fn(*mut JNIEnv, jobject, *mut c_void, jint);
+            let length: Length = std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            let same: Same = std::mem::transmute(function(env, 24));
+            let count = length(env, source);
+            if !(4096..=4_194_304).contains(&count)
+                || length(env, output) != count
+                || same(env, source, output) != 0
+            {
+                return error;
+            }
+            let get: Get = std::mem::transmute(function(env, 222));
+            let release: Release = std::mem::transmute(function(env, 223));
+            let pointer = get(env, source, std::ptr::null_mut());
+            if pointer.is_null() {
+                return error;
+            }
+            let input = CriticalPlane {
+                env,
+                array: source,
+                pointer,
+                release,
+                mode: JNI_ABORT,
+            };
+            let pointer = get(env, output, std::ptr::null_mut());
+            if pointer.is_null() {
+                return error;
+            }
+            let target = CriticalPlane {
+                env,
+                array: output,
+                pointer,
+                release,
+                mode: 0,
+            };
+            match welt_core::brush_cache::scale_bitmap(
+                slice::from_raw_parts(input.pointer.cast::<u8>(), count as usize),
+                level,
+                slice::from_raw_parts_mut(target.pointer.cast::<u8>(), count as usize),
+            ) {
+                Ok(()) => WeltError::Ok as jint,
+                Err(_) => error,
+            }
+        })
+    }
+}

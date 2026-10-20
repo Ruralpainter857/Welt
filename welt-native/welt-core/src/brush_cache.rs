@@ -115,3 +115,52 @@ mod raster_tests {
         }
     }
 }
+/// Match the 8-bit lookup table used by Java RescaleOp with zero offset.
+/// The full-strength plane stays immutable across successive intensity changes.
+pub fn scale_bitmap(source: &[u8], level: f32, output: &mut [u8]) -> Result<(), &'static str> {
+    if source.len() != output.len() || source.len() > 4_194_304 || level.is_nan() || level >= 1.0 {
+        return Err("Invalid bitmap brush scaling request");
+    }
+    let mut lookup = [0_u8; 256];
+    for (i, value) in lookup.iter_mut().enumerate() {
+        *value = ((i as f32 * level) as i32).clamp(0, 255) as u8;
+    }
+    for (result, full) in output.iter_mut().zip(source) {
+        *result = lookup[*full as usize];
+    }
+    Ok(())
+}
+#[cfg(test)]
+mod bitmap_tests {
+    use super::*;
+    #[test]
+    fn all_byte_values_and_negative_levels_match_java_cast_and_clamp() {
+        let source: Vec<u8> = (0..=255).collect();
+        for level in [
+            0.0,
+            -0.0,
+            0.1,
+            0.375,
+            0.875,
+            0.99999,
+            -3.0,
+            f32::NEG_INFINITY,
+        ] {
+            let mut output = vec![42; 256];
+            scale_bitmap(&source, level, &mut output).unwrap();
+            for i in 0..256 {
+                assert_eq!(output[i], ((i as f32 * level) as i32).clamp(0, 255) as u8);
+            }
+        }
+    }
+    #[test]
+    fn invalid_bitmap_requests_preserve_output() {
+        let mut output = [42; 2];
+        for level in [1.0, f32::NAN, f32::INFINITY] {
+            assert!(scale_bitmap(&[0, 255], level, &mut output).is_err());
+            assert_eq!(output, [42; 2]);
+        }
+        assert!(scale_bitmap(&[1], 0.5, &mut output).is_err());
+        assert_eq!(output, [42; 2]);
+    }
+}

@@ -1892,5 +1892,14 @@ public final class NativeSlices {
         catch (UnsatisfiedLinkError e) { return false; }
     }
     private static native int nativeFillMaterialPreview(ByteBuffer buffer, int length);
+    /** Apply an intensity lookup to a complete bitmap brush plane. */
+    public static boolean scaleBitmapBrush(byte[] source, float level, byte[] output) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || source == null || output == null
+                || source == output || source.length < 4096 || source.length > 4194304 || output.length != source.length
+                || Float.isNaN(level) || level >= 1f) return false;
+        try { return nativeScaleBitmapBrush(source, level, output) == 0; }
+        catch (UnsatisfiedLinkError e) { return false; }
+    }
+    private static native int nativeScaleBitmapBrush(byte[] source, float level, byte[] output);
     static native int nativeAbiVersion();
 }

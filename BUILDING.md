@@ -667,3 +667,19 @@ also runs `CustomMaterialPreviewIntegrationTest` against the actual Swing dialog
 under its isolated application configuration. `MaterialPreviewBenchmark` measures
 complete image creation with alternating execution order and supports separate
 memory runs through `welt.benchmark.previewSolo` and `welt.benchmark.previewNative`.
+### Bitmap brush intensity preparation
+
+`-Dwelt.native.bitmapBrush=true` enables reuse of the immutable bicubic mask
+across intensity changes, with one bulk JNI byte lookup per scaled mask when
+`wp.native.gen` is enabled. Radius changes and reclaimed soft caches still
+rebuild the mask through the original Java2D bicubic renderer. Clones share the
+immutable mask and retain independent intensity planes. Ordinary strength reads
+never call JNI. Unsupported sizes or missing native symbols use `RescaleOp`.
+
+Build `welt-slices` in release mode and run `BitmapBrushParityTest` with
+`-Dwelt.test.requireBitmapBrush=true`. This compares every byte input against
+Java `RescaleOp`, every brush sample across sizes and intensities, clone state,
+cache recreation and rejected aliased buffers. `BitmapBrushBenchmark` measures
+intensity changes plus preparation of the first usable sample, alternates both
+paths after warmup, and accepts `welt.benchmark.bitmapMode=java|native` for
+separate memory measurements. This operation does not measure painting a world.

@@ -4,6 +4,9 @@
  */
 package org.pepsoft.worldpainter.brushes;
 
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,6 +20,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.ref.Reference;
 import java.lang.ref.SoftReference;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * A {@link Brush} based on a bitmap image. If it is constructed with a file to load the image from, then the image is
@@ -80,7 +84,8 @@ public final class BitmapBrush extends AbstractBrush {
             logger.debug("{{}} level going from {} to {}", getName(), this.level, level);
             this.level = level;
             rescaleOp = new RescaleOp(level, 0, null);
-            dataReference = null;
+            levelDirty = true;
+            if (!nativeCacheEnabled()) dataReference = null;
         }
     }
 
@@ -94,11 +99,15 @@ public final class BitmapBrush extends AbstractBrush {
         if (data == null) {
             logger.debug("{{}} data not present; (re)creating data", getName());
             data = createData();
-            dataReference = new SoftReference<>(data);
+        } else if (levelDirty) {
+            data = applyLevel(data.fullStrengthMask);
+        } else {
+            return data;
         }
+        dataReference = new SoftReference<>(data);
+        levelDirty = false;
         return data;
     }
-
     private Data createData() {
         BufferedImage image = this.image;
         if (image == null) {
@@ -117,9 +126,23 @@ public final class BitmapBrush extends AbstractBrush {
         } finally {
             g2.dispose();
         }
+        return applyLevel(fullStrengthMask);
+    }
+
+    private Data applyLevel(BufferedImage fullStrengthMask) {
         Data data = new Data();
+        data.fullStrengthMask = fullStrengthMask;
         data.fullStrengthBuffer = (DataBufferByte) fullStrengthMask.getRaster().getDataBuffer();
         if (level < 1.0f) {
+            byte[] source = data.fullStrengthBuffer.getData();
+            if (nativeCacheEnabled() && source.length >= 4096 && source.length <= 4194304) {
+                byte[] output = new byte[source.length];
+                if (NativeSlices.scaleBitmapBrush(source, level, output)) {
+                    data.buffer = new DataBufferByte(output, output.length);
+                    NATIVE_TRANSACTIONS.increment();
+                    return data;
+                }
+            }
             BufferedImage mask = rescaleOp.filter(fullStrengthMask, null);
             data.buffer = (DataBufferByte) mask.getRaster().getDataBuffer();
         } else {
@@ -128,6 +151,10 @@ public final class BitmapBrush extends AbstractBrush {
         return data;
     }
 
+    private static boolean nativeCacheEnabled() {
+        return Native.isGenEnabled() && Boolean.getBoolean("welt.native.bitmapBrush") && NativeLoader.areSlicesAvailable();
+    }
+    static long nativeTransactions() { return NATIVE_TRANSACTIONS.sum(); }
     private BufferedImage loadImage(File imageFile) {
         try {
             return ImageIO.read(imageFile);
@@ -151,10 +178,13 @@ public final class BitmapBrush extends AbstractBrush {
     private int radius, diameter = 1;
     private float level = 1.0f;
     private RescaleOp rescaleOp = new RescaleOp(1.0f, 0, null);
+    private boolean levelDirty;
 
     private static final Logger logger = LoggerFactory.getLogger(BitmapBrush.class);
+    private static final LongAdder NATIVE_TRANSACTIONS = new LongAdder();
 
     static class Data {
         DataBufferByte fullStrengthBuffer, buffer;
+        BufferedImage fullStrengthMask;
     }
 }
