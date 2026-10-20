@@ -15,6 +15,7 @@ import java.util.zip.*;
 public final class GenericObjectBenchmark {
     private static volatile GenericObject[] heldLibrary;
     private static volatile WPObject heldSource;
+    private static volatile Set<Material> heldMaterials;
     private static volatile long checksum;
     private static WPObject fixture(String kind, int width, int length, int height) throws Exception {
         WPObject object;
@@ -67,7 +68,7 @@ public final class GenericObjectBenchmark {
         java.util.function.Consumer<Material> collect = material -> { if(material != Material.AIR) result.add(material); };
         if(nativeMode) CompactObjectMaterials.forEach(source, collect);
         else source.visitBlocks((object,x,y,z,material)->{collect.accept(material);return true;});
-        long hash=1; for(Material material:result) hash=31*hash+material.hashCode(); return hash;
+        long hash=1; for(Material material:result) hash=31*hash+material.hashCode(); heldMaterials=result;return hash;
     }
     private static void mode(boolean nativeMode) {
         System.setProperty("wp.native.gen",Boolean.toString(nativeMode));
@@ -80,7 +81,7 @@ public final class GenericObjectBenchmark {
         int objects=Integer.getInteger("welt.benchmark.genericObjects",8),warmups=Integer.getInteger("welt.benchmark.genericWarmups",20);
         WPObject[] source=new WPObject[2];
         for(int m=0;m<2;m++){mode(m==1);source[m]=fixture(kind,Integer.getInteger("welt.benchmark.genericWidth",96),Integer.getInteger("welt.benchmark.genericLength",64),Integer.getInteger("welt.benchmark.genericHeight",48));}
-        long legacyBefore=operation.equals("materials")?CompactMaterialVolume.completedLegacyClassifications():CompactMaterialVolume.completedLegacySnapshots();
+        long legacyBefore=operation.equals("materials")?(kind.equals("schem")?CompactMaterialVolume.completedIndexedClassifications():CompactMaterialVolume.completedLegacyClassifications()):CompactMaterialVolume.completedLegacySnapshots();
         var bean=(com.sun.management.ThreadMXBean)ManagementFactory.getThreadMXBean();bean.setThreadAllocatedMemoryEnabled(true);
         long thread=Thread.currentThread().getId();double[][] times=new double[2][9];long[][] allocation=new long[2][9];
         for(int trial=-warmups;trial<9;trial++)for(int turn=0;turn<2;turn++) {
@@ -101,10 +102,10 @@ public final class GenericObjectBenchmark {
         }
         double[] ratios=new double[9];for(int i=0;i<9;i++)ratios[i]=times[0][i]/times[1][i];
         Arrays.sort(ratios);for(int m=0;m<2;m++){Arrays.sort(times[m]);Arrays.sort(allocation[m]);}
-        if (kind.equals("legacy")) {
-            long calls=(operation.equals("materials")?CompactMaterialVolume.completedLegacyClassifications():CompactMaterialVolume.completedLegacySnapshots())-legacyBefore;
+        if (kind.equals("legacy") || kind.equals("schem") && operation.equals("materials")) {
+            long calls=(operation.equals("materials")?(kind.equals("schem")?CompactMaterialVolume.completedIndexedClassifications():CompactMaterialVolume.completedLegacyClassifications()):CompactMaterialVolume.completedLegacySnapshots())-legacyBefore;
             if (calls != (long) objects*(warmups+9)) throw new AssertionError("Native snapshot transaction count differs: " + calls);
-            System.out.println("legacyNativeTransactions="+calls);
+            System.out.println("nativeObjectTransactions="+calls);
         }
         System.out.printf(Locale.ROOT,"genericComparison operation=%s source=%s javaMs=%.6f compactMs=%.6f pairedRatio=%.3f range=%.3f..%.3f callerAllocatedBytes=%d/%d checksum=%d%n",operation,kind,times[0][4],times[1][4],ratios[4],ratios[0],ratios[8],allocation[0][4],allocation[1][4],checksum);
     }
@@ -113,19 +114,21 @@ public final class GenericObjectBenchmark {
         String operation=System.getProperty("welt.benchmark.genericOperation","copy"),kind=System.getProperty("welt.benchmark.genericSource","generic");
         int width=Integer.getInteger("welt.benchmark.genericWidth",96),length=Integer.getInteger("welt.benchmark.genericLength",64),height=Integer.getInteger("welt.benchmark.genericHeight",48);
         int objects=Integer.getInteger("welt.benchmark.genericObjects",8),warmups=Integer.getInteger("welt.benchmark.genericWarmups",20);
-        if (!Set.of("generic","schem","legacy").contains(kind)||!Set.of("copy","access","save").contains(operation)||width<1||length<1||height<1||(long)width*length*height>4*1024*1024||objects<1||objects>16||warmups<5||warmups>100) throw new IllegalArgumentException("Invalid snapshot parameters");
+        if (!Set.of("generic","schem","legacy").contains(kind)||!Set.of("copy","access","save","materials").contains(operation)||width<1||length<1||height<1||(long)width*length*height>4*1024*1024||objects<1||objects>16||warmups<5||warmups>100) throw new IllegalArgumentException("Invalid snapshot parameters");
         WPObject source=fixture(kind,width,length,height);heldSource=source;
         var bean=(com.sun.management.ThreadMXBean)ManagementFactory.getThreadMXBean();if(!bean.isThreadAllocatedMemoryEnabled())bean.setThreadAllocatedMemoryEnabled(true);
         long thread=Thread.currentThread().getId();double[] times=new double[9];long[] allocations=new long[9];
         for (int trial=-warmups;trial<9;trial++) {
             GenericObject[] loaded=new GenericObject[objects];
-            if (!operation.equals("copy")) for(int i=0;i<objects;i++)loaded[i]=new GenericObject(source);
+            if (!operation.equals("copy") && !operation.equals("materials")) for(int i=0;i<objects;i++)loaded[i]=new GenericObject(source);
             ByteArrayOutputStream saved=null;long before=bean.getThreadAllocatedBytes(thread),start=System.nanoTime(),hash=1;
             if(operation.equals("copy"))for(int i=0;i<objects;i++)loaded[i]=new GenericObject(source);
+            else if(operation.equals("materials"))for(int i=0;i<objects;i++)hash=hash*31+materials(source,Boolean.getBoolean("welt.native.objectSnapshots"));
             else if(operation.equals("access"))for(GenericObject object:loaded)hash=hash*31+visit(object);
             else {saved=new ByteArrayOutputStream();try(ObjectOutputStream out=new ObjectOutputStream(new GZIPOutputStream(saved))){out.writeObject(loaded);}hash=saved.size();}
             long elapsed=System.nanoTime()-start,allocated=bean.getThreadAllocatedBytes(thread)-before;
-            for(GenericObject object:loaded)validate(source,object);
+            if(operation.equals("materials")){long expected=1;for(int i=0;i<objects;i++)expected=expected*31+materials(source,false);if(expected!=hash)throw new AssertionError("Material classification differs");}
+            else for(GenericObject object:loaded)validate(source,object);
             if(saved!=null)try(ObjectInputStream in=new ObjectInputStream(new GZIPInputStream(new ByteArrayInputStream(saved.toByteArray())))){GenericObject[] restored=(GenericObject[])in.readObject();if(restored.length!=objects)throw new AssertionError("Project size differs");for(GenericObject object:restored)validate(source,object);}
             heldLibrary=loaded;checksum=hash;if(trial>=0){times[trial]=elapsed/1e6;allocations[trial]=allocated;}
         }
@@ -133,7 +136,7 @@ public final class GenericObjectBenchmark {
         long direct=ManagementFactory.getPlatformMXBeans(java.lang.management.BufferPoolMXBean.class).stream().filter(pool->pool.getName().equals("direct")).mapToLong(java.lang.management.BufferPoolMXBean::getMemoryUsed).sum();
         System.out.println("postGcDirectBytes="+direct);
         boolean compressedOops=Boolean.parseBoolean(ManagementFactory.getPlatformMXBean(com.sun.management.HotSpotDiagnosticMXBean.class).getVMOption("UseCompressedOops").getValue());
-        Point3i d=source.getDimensions();long slots=(long)d.x*d.y*d.z*objects*(compressedOops?4:8);
+        Point3i d=source.getDimensions();long slots=operation.equals("materials")?0:(long)d.x*d.y*d.z*objects*(compressedOops?4:8);
         System.out.printf(Locale.ROOT,"genericLibrary operation=%s source=%s dimensions=%dx%dx%d objects=%d medianMs=%.3f callerAllocatedBytes=%d postGcHeapBytes=%d javaReferenceSlotBytes=%d compressedOops=%s checksum=%d%n",operation,kind,d.x,d.y,d.z,objects,times[4],allocations[4],ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed(),slots,compressedOops,checksum);
     }
 }

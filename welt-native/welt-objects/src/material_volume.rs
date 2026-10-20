@@ -652,3 +652,140 @@ mod legacy_states_tests {
         assert!(states.is_empty());
     }
 }
+
+/// Unique source palette indices in Z/X/Y order, without creating a remapped voxel plane.
+pub fn indexed_states(
+    packed: Option<(&[u8], usize)>,
+    integers: Option<&[i32]>,
+    palette: usize,
+    dimensions: [usize; 3],
+    seen: &mut [u64; 1024],
+    states: &mut Vec<i32>,
+) -> bool {
+    let [width, length, height] = dimensions;
+    let Some(count) = width
+        .checked_mul(length)
+        .and_then(|n| n.checked_mul(height))
+    else {
+        return false;
+    };
+    if count == 0
+        || count > 16 * 1024 * 1024
+        || !(1..=65536).contains(&palette)
+        || packed.is_some() == integers.is_some()
+    {
+        return false;
+    }
+    if let Some((bytes, stride)) = packed {
+        if !(1..=2).contains(&stride) || bytes.len() < count * stride {
+            return false;
+        }
+    }
+    if integers.is_some_and(|values| values.len() < count) {
+        return false;
+    }
+    seen.fill(0);
+    states.clear();
+    for z in 0..height {
+        for x in 0..width {
+            for y in 0..length {
+                let i = x + y * width + z * width * length;
+                let id = if let Some((bytes, stride)) = packed {
+                    i32::from(bytes[i * stride])
+                        | if stride == 2 {
+                            i32::from(bytes[i * stride + 1]) << 8
+                        } else {
+                            0
+                        }
+                } else {
+                    integers.unwrap()[i]
+                };
+                if id < 0 || id as usize >= palette {
+                    return false;
+                }
+                let index = id as usize;
+                let bit = 1u64 << (index & 63);
+                if seen[index / 64] & bit == 0 {
+                    seen[index / 64] |= bit;
+                    states.push(id);
+                }
+            }
+        }
+    }
+    true
+}
+#[cfg(test)]
+mod indexed_states_tests {
+    use super::*;
+    #[test]
+    fn integer_byte_and_wide_inputs_keep_first_encounter_order() {
+        let mut seen = [0; 1024];
+        let mut states = vec![];
+        let input = [0, 1, 2, 3, 0, 1];
+        assert!(indexed_states(
+            None,
+            Some(&input),
+            4,
+            [3, 2, 1],
+            &mut seen,
+            &mut states
+        ));
+        assert_eq!(states, [0, 3, 1, 2]);
+        assert!(indexed_states(
+            Some((&[0, 1, 2, 3, 0, 1], 1)),
+            None,
+            4,
+            [3, 2, 1],
+            &mut seen,
+            &mut states
+        ));
+        assert_eq!(states, [0, 3, 1, 2]);
+        assert!(indexed_states(
+            Some((&[0, 0, 0, 1, 1, 1], 2)),
+            None,
+            258,
+            [1, 1, 3],
+            &mut seen,
+            &mut states
+        ));
+        assert_eq!(states, [0, 256, 257]);
+    }
+    #[test]
+    fn invalid_indices_and_source_sizes_reject_and_worker_resets() {
+        let mut seen = [0; 1024];
+        let mut states = vec![];
+        assert!(!indexed_states(
+            None,
+            Some(&[-1]),
+            4,
+            [1, 1, 1],
+            &mut seen,
+            &mut states
+        ));
+        assert!(!indexed_states(
+            None,
+            Some(&[4]),
+            4,
+            [1, 1, 1],
+            &mut seen,
+            &mut states
+        ));
+        assert!(!indexed_states(
+            Some((&[1], 2)),
+            None,
+            4,
+            [1, 1, 1],
+            &mut seen,
+            &mut states
+        ));
+        assert!(indexed_states(
+            None,
+            Some(&[2, 2, 2]),
+            4,
+            [1, 1, 3],
+            &mut seen,
+            &mut states
+        ));
+        assert_eq!(states, [2]);
+    }
+}

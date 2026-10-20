@@ -373,6 +373,10 @@ public final class Schem extends AbstractNBTItem implements WPObject, org.pepsof
         return org.pepsoft.worldpainter.objects.CompactMaterialVolume.captureTransformedSchematic(palette,compactBlocks,blocks,compactStride,(int)count,parameters,platforms);
     }
 
+    @Override public boolean forEachClassificationMaterial(java.util.function.Consumer<Material> consumer) {
+        return org.pepsoft.worldpainter.objects.CompactMaterialVolume.forEachIndexedMaterial(
+                palette,compactBlocks,blocks,compactStride,new int[]{width,length,height},consumer);
+    }
     private int paletteIndex(int index) {
         if (compactBlocks == null) return blocks[index];
         if (index < 0 || index >= compactBlocks.length / compactStride) throw new ArrayIndexOutOfBoundsException(index);

@@ -394,7 +394,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 }
 
 thread_local! {
-    static LEGACY_CLASSIFICATION: std::cell::RefCell<(Box<[u64;1024]>,Vec<i32>)> =
+    static MATERIAL_CLASSIFICATION: std::cell::RefCell<(Box<[u64;1024]>,Vec<i32>)> =
         std::cell::RefCell::new((Box::new([0;1024]),Vec::new()));
 }
 /// # Safety
@@ -448,7 +448,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             if dims.iter().any(|&v| v <= 0) {
                 return error;
             }
-            LEGACY_CLASSIFICATION.with(|worker| {
+            MATERIAL_CLASSIFICATION.with(|worker| {
                 let mut scratch = worker.borrow_mut();
                 let (seen, states) = &mut *scratch;
                 if !welt_objects::material_volume::legacy_states(
@@ -457,6 +457,98 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                     extra
                         .as_ref()
                         .map(|v| slice::from_raw_parts(v.pointer.cast::<u8>(), a as usize)),
+                    [dims[0] as usize, dims[1] as usize, dims[2] as usize],
+                    seen,
+                    states,
+                ) {
+                    return error;
+                }
+                type New = unsafe extern "system" fn(*mut JNIEnv, jint) -> jobject;
+                type Set = unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i32);
+                let new: New = std::mem::transmute(function(env, 179));
+                let set: Set = std::mem::transmute(function(env, SET_INT_ARRAY_REGION));
+                result = new(env, states.len() as jint);
+                if result.is_null() {
+                    return error;
+                }
+                set(env, result, 0, states.len() as jint, states.as_ptr());
+                WeltError::Ok as jint
+            })
+        });
+    }
+    result
+}
+
+/// # Safety
+/// Source arrays remain alive and immutable until the returned Java index array is created.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeCollectIndexedMaterialStates(
+    env: *mut JNIEnv,
+    _class: jclass,
+    packed: jobject,
+    integers: jobject,
+    stride: jint,
+    palette: jint,
+    dimensions: jobject,
+) -> jobject {
+    let mut result = std::ptr::null_mut();
+    unsafe {
+        jni_catch(env, || {
+            let error = WeltError::IllegalArgument as jint;
+            if packed.is_null() == integers.is_null()
+                || dimensions.is_null()
+                || !(1..=65536).contains(&palette)
+            {
+                return error;
+            }
+            type Length = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let len: Length = std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            let source = if packed.is_null() { integers } else { packed };
+            let n = len(env, source);
+            if n < 1
+                || n > if packed.is_null() {
+                    16 * 1024 * 1024
+                } else {
+                    32 * 1024 * 1024
+                }
+                || len(env, dimensions) != 3
+                || !packed.is_null() && !(1..=2).contains(&stride)
+            {
+                return error;
+            }
+            let Some(input) = schematic::borrow(env, source, packed.is_null()) else {
+                return error;
+            };
+            let Some(size) = schematic::borrow(env, dimensions, true) else {
+                return error;
+            };
+            let dims = slice::from_raw_parts(size.pointer.cast::<i32>(), 3);
+            if dims.iter().any(|&v| v <= 0) {
+                return error;
+            }
+            MATERIAL_CLASSIFICATION.with(|worker| {
+                let mut scratch = worker.borrow_mut();
+                let (seen, states) = &mut *scratch;
+                let bytes = if packed.is_null() {
+                    None
+                } else {
+                    Some((
+                        slice::from_raw_parts(input.pointer.cast::<u8>(), n as usize),
+                        stride as usize,
+                    ))
+                };
+                let values = if integers.is_null() {
+                    None
+                } else {
+                    Some(slice::from_raw_parts(
+                        input.pointer.cast::<i32>(),
+                        n as usize,
+                    ))
+                };
+                if !welt_objects::material_volume::indexed_states(
+                    bytes,
+                    values,
+                    palette as usize,
                     [dims[0] as usize, dims[1] as usize, dims[2] as usize],
                     seen,
                     states,

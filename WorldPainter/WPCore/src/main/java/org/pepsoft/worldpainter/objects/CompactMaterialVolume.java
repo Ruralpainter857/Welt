@@ -115,6 +115,16 @@ public final class CompactMaterialVolume {
         for (int state : states) consumer.accept(Material.get(state >>> 4, state & 15));
         return true;
     }
+    public static boolean forEachIndexedMaterial(Material[] palette,byte[] packed,int[] integers,int stride,int[] dimensions,
+            java.util.function.Consumer<Material> consumer) {
+        int[] indices=NativeSlices.collectIndexedMaterialStates(packed,integers,stride,palette.length,dimensions);
+        if(indices==null)return false;
+        INDEXED_CLASSIFIED.incrementAndGet();
+        for(int index:indices){Material material=palette[index];if(material!=null&&material!=Material.AIR)consumer.accept(material);}
+        return true;
+    }
+    static long completedIndexedClassifications(){return INDEXED_CLASSIFIED.get();}
+    private static final java.util.concurrent.atomic.AtomicLong INDEXED_CLASSIFIED=new java.util.concurrent.atomic.AtomicLong();
     static long completedLegacyClassifications(){return LEGACY_CLASSIFIED.get();}
     private static final java.util.concurrent.atomic.AtomicLong LEGACY_CLASSIFIED=new java.util.concurrent.atomic.AtomicLong();
     static long completedLegacySnapshots() { return LEGACY_COMPLETED.get(); }

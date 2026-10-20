@@ -112,6 +112,14 @@ public final class NativeSlices {
     }
     private static native int[] nativeCollectLegacyMaterialStates(byte[] blocks,byte[] data,byte[] add,int[] dimensions);
     private static volatile boolean legacyClassificationSymbolUnavailable;
+    public static int[] collectIndexedMaterialStates(byte[] packed,int[] integers,int stride,int paletteSize,int[] dimensions) {
+        if(indexedClassificationSymbolUnavailable || !isMaterialVolumeAvailable() || (packed==null)==(integers==null)
+                || dimensions==null || dimensions.length!=3 || paletteSize<1 || paletteSize>65536) return null;
+        try{return nativeCollectIndexedMaterialStates(packed,integers,stride,paletteSize,dimensions);}
+        catch(UnsatisfiedLinkError unavailable){indexedClassificationSymbolUnavailable=true;return null;}
+    }
+    private static native int[] nativeCollectIndexedMaterialStates(byte[] packed,int[] integers,int stride,int paletteSize,int[] dimensions);
+    private static volatile boolean indexedClassificationSymbolUnavailable;
     private static volatile boolean materialVolumeSymbolUnavailable;
     public static boolean isMaterialVolumeAvailable() {
         return !materialVolumeSymbolUnavailable && Boolean.getBoolean("welt.native.objectSnapshots")

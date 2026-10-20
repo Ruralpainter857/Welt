@@ -9,4 +9,5 @@ public interface CompactObjectSource {
      */
     default boolean forEachClassificationMaterial(java.util.function.Consumer<org.pepsoft.minecraft.Material> consumer) {
         return false;
-    }}
+    }
+}
