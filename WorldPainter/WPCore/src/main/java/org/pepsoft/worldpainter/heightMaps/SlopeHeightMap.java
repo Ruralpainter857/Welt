@@ -19,6 +19,7 @@ package org.pepsoft.worldpainter.heightMaps;
 
 import org.pepsoft.util.IconUtils;
 import org.pepsoft.worldpainter.HeightMap;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
 import javax.swing.*;
 import java.awt.*;
@@ -84,6 +85,65 @@ public class SlopeHeightMap extends DelegatingHeightMap {
                 Math.max(Math.abs(baseHeightMap.getHeight(x, y + 1) - baseHeightMap.getHeight(x, y - 1)) / 2,
                 Math.abs(baseHeightMap.getHeight(x - 1, y + 1) - baseHeightMap.getHeight(x + 1, y - 1)) / ROOT_EIGHT))) * RADIANS_TO_DEGREES;
         }
+    }
+
+    /**
+     * Computes a slope tile from an already sampled base-map buffer with a one-cell halo.
+     * The input is row-major and the output contains {@code inputWidth - 2} by
+     * {@code inputHeight - 2} values, also row-major.
+     */
+    public boolean fillSamples(double[] baseSamples, int inputWidth, int inputHeight, double[] samples) {
+        final int outputWidth = inputWidth - 2;
+        final int outputHeight = inputHeight - 2;
+        if ((baseSamples == null) || (samples == null) || (outputWidth <= 0) || (outputHeight <= 0)
+                || ((long) inputWidth * inputHeight != baseSamples.length)
+                || ((long) outputWidth * outputHeight != samples.length)) {
+            return false;
+        }
+        if (NativeSlices.fillSlopeSamples(baseSamples, inputWidth, inputHeight,
+                verticalScaling, samples)) {
+            return true;
+        }
+        final boolean scaled = verticalScaling != 1.0f;
+        for (int y = 0; y < outputHeight; y++) {
+            final int sourceRow = (y + 1) * inputWidth;
+            final int northRow = sourceRow - inputWidth;
+            final int southRow = sourceRow + inputWidth;
+            final int outputRow = y * outputWidth;
+            for (int x = 0; x < outputWidth; x++) {
+                final int west = sourceRow + x;
+                final int centre = west + 1;
+                final int east = west + 2;
+                final double horizontal;
+                if (scaled) {
+                    horizontal = Math.abs((baseSamples[east] / verticalScaling
+                            - baseSamples[west] / verticalScaling) / 2);
+                } else {
+                    horizontal = Math.abs((baseSamples[east] / verticalScaling - baseSamples[west]) / 2);
+                }
+                final double diagonal1;
+                final double vertical;
+                final double diagonal2;
+                if (scaled) {
+                    diagonal1 = Math.abs((baseSamples[southRow + east - sourceRow] / verticalScaling
+                            - baseSamples[northRow + west - sourceRow] / verticalScaling) / ROOT_EIGHT);
+                    vertical = Math.abs((baseSamples[southRow + centre - sourceRow] / verticalScaling
+                            - baseSamples[northRow + centre - sourceRow] / verticalScaling) / 2);
+                    diagonal2 = Math.abs((baseSamples[southRow + west - sourceRow] / verticalScaling
+                            - baseSamples[northRow + east - sourceRow] / verticalScaling) / ROOT_EIGHT);
+                } else {
+                    diagonal1 = Math.abs((baseSamples[southRow + east - sourceRow]
+                            - baseSamples[northRow + west - sourceRow]) / ROOT_EIGHT);
+                    vertical = Math.abs((baseSamples[southRow + centre - sourceRow]
+                            - baseSamples[northRow + centre - sourceRow]) / 2);
+                    diagonal2 = Math.abs((baseSamples[southRow + west - sourceRow]
+                            - baseSamples[northRow + east - sourceRow]) / ROOT_EIGHT);
+                }
+                final double maximum = Math.max(Math.max(horizontal, diagonal1), Math.max(vertical, diagonal2));
+                samples[outputRow + x] = Math.tan(maximum) * RADIANS_TO_DEGREES;
+            }
+        }
+        return true;
     }
 
     @Override

@@ -95,6 +95,8 @@ public final class Material implements Serializable {
             identity = new Identity(namespace + ":" + simpleName, singletonMap("data_value", Integer.toString(data)));
         }
         name = identity.name;
+        waterlogged = identity.properties != null
+                && "true".equals(identity.properties.get(MC_WATERLOGGED));
         stringRep = createStringRep();
         legacyStringRep = createLegacyStringRep();
         modded = (namespace != MINECRAFT);
@@ -177,6 +179,8 @@ public final class Material implements Serializable {
      */
     @SuppressWarnings({"unchecked", "StringEquality"}) // Guaranteed by contents of file; interned string
     private Material(Identity identity) {
+        waterlogged = identity.properties != null
+                && "true".equals(identity.properties.get(MC_WATERLOGGED));
         // See if this modern material matches a legacy one to set a block type and data value for backwards
         // compatibility
         int legacyIndex = -1;
@@ -918,7 +922,14 @@ public final class Material implements Serializable {
      * water.
      */
     public boolean containsWater() {
-        return watery || is(WATERLOGGED) || (isNamed(MC_WATER) && (getProperty(LEVEL, 0) == 0));
+        byte cached = containsWaterCache;
+        if (cached == 0) {
+            final boolean hasWater = watery || waterlogged
+                    || (isNamed(MC_WATER) && (getProperty(LEVEL, 0) == 0));
+            cached = (byte) (hasWater ? 2 : 1);
+            containsWaterCache = cached;
+        }
+        return cached == 2;
     }
 
     private HorizontalOrientationScheme[] determineHorizontalOrientations(Identity identity, String override) {
@@ -1519,6 +1530,11 @@ public final class Material implements Serializable {
      * "under water") rather than having a waterlogged property.
      */
     public final transient boolean watery;
+
+    /** Whether the {@code waterlogged} property is true for this material variant. */
+    private final transient boolean waterlogged;
+
+    private transient volatile byte containsWaterCache;
 
     /**
      * Whether the block contains nothing physical and is fully transparent.

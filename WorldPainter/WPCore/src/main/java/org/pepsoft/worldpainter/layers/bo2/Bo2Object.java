@@ -26,6 +26,11 @@ import static java.nio.charset.StandardCharsets.US_ASCII;
  */
 public final class Bo2Object extends AbstractObject implements Bo2ObjectProvider {
     private Bo2Object(String name, Map<String, String> properties, Map<Point3i, Bo2BlockSpec> blocks, Point3i origin, Point3i dimensions, Map<String, Serializable> attributes) {
+        this(name, properties, blocks, origin, dimensions, attributes, null);
+    }
+
+    private Bo2Object(String name, Map<String, String> properties, Map<Point3i, Bo2BlockSpec> blocks, Point3i origin, Point3i dimensions, Map<String, Serializable> attributes, Bo2CompactBlocks compact) {
+        this.compactBlocks = compact;
         this.name = name;
         this.properties = properties;
         this.blocks = blocks;
@@ -72,11 +77,18 @@ public final class Bo2Object extends AbstractObject implements Bo2ObjectProvider
 
     @Override
     public Material getMaterial(int x, int y, int z) {
+        if (compactBlocks != null) {
+            Material material = compactBlocks.material(x, y, z, origin);
+            if (material != null) return material;
+            // Preserve the original VM-generated exception for an absent coordinate.
+            return Collections.<Point3i, Bo2BlockSpec>emptyMap().get(new Point3i(x - origin.x, y - origin.y, z - origin.z)).getMaterial();
+        }
         return blocks.get(new Point3i(x - origin.x, y - origin.y, z - origin.z)).getMaterial();
     }
 
     @Override
     public boolean getMask(int x, int y, int z) {
+        if (compactBlocks != null) return compactBlocks.mask(x, y, z, origin);
         return blocks.containsKey(new Point3i(x - origin.x, y - origin.y, z - origin.z));
     }
 
@@ -132,6 +144,7 @@ public final class Bo2Object extends AbstractObject implements Bo2ObjectProvider
 
     @Override
     public boolean visitBlocks(BlockVisitor visitor) {
+        if (compactBlocks != null) return compactBlocks.visit(this, visitor, origin);
         for (Map.Entry<Point3i, Bo2BlockSpec> entry: blocks.entrySet()) {
             Point3i coords = entry.getKey();
             if (! visitor.visitBlock(this, coords.x + origin.x, coords.y + origin.y, coords.z + origin.z, entry.getValue().getMaterial())) {
@@ -204,6 +217,12 @@ public final class Bo2Object extends AbstractObject implements Bo2ObjectProvider
             guessConnectBlocks();
         }
         version = 3;
+        if (org.pepsoft.worldpainter.nativeapi.NativeSlices.isBo2ProjectSnapshotAvailable()) {
+            Bo2CompactBlocks restored;
+            try { restored = Bo2CompactBlocks.capture(blocks, origin, dimensions); }
+            catch (RuntimeException unsupported) { return; }
+            if (restored != null) { compactBlocks = restored; blocks = null; }
+        }
     }
 
     /**
@@ -232,6 +251,22 @@ public final class Bo2Object extends AbstractObject implements Bo2ObjectProvider
      * @throws IOException If an I/O error occurred while reading the stream.
      */
     public static Bo2Object load(String objectName, InputStream stream) throws IOException {
+        if (! org.pepsoft.worldpainter.nativeapi.NativeSlices.isBo2LoadingAvailable()) return loadJava(objectName, stream);
+        try (InputStream owned = stream) {
+            byte[] prefix = owned.readNBytes(16 * 1024 * 1024 + 1);
+            Bo2NativeParser.Decoded decoded = prefix.length <= 16 * 1024 * 1024 ? Bo2NativeParser.decode(prefix) : null;
+            if (decoded != null) {
+                Bo2Object object = new Bo2Object(objectName, decoded.properties(), decoded.blocks(), decoded.origin(), decoded.dimensions(), null, decoded.compact());
+                Bo2NativeParser.completed();
+                return object;
+            }
+            InputStream original = new SequenceInputStream(new ByteArrayInputStream(prefix), new FilterInputStream(owned) { @Override public void close() { } });
+            // The outer resource owns the original stream, including fallback and exception paths.
+            return loadJava(objectName, new FilterInputStream(original) { @Override public void close() { } });
+        }
+    }
+
+    private static Bo2Object loadJava(String objectName, InputStream stream) throws IOException {
         try (BufferedReader in = new BufferedReader(new InputStreamReader(stream, US_ASCII))) {
             final Map<String, String> properties = new HashMap<>();
             final Map<Point3i, Bo2BlockSpec> blocks = new HashMap<>();
@@ -316,9 +351,22 @@ public final class Bo2Object extends AbstractObject implements Bo2ObjectProvider
         }
     }
  
+    /** Native index bytes, or -1 while the historical map is retained. */
+    public long getBlockIndexStorageBytes() { return compactBlocks == null ? -1 : compactBlocks.storageBytes(); }
+
+    private void writeObject(ObjectOutputStream out) throws IOException {
+        ObjectOutputStream.PutField fields = out.putFields();
+        fields.put("name", name); fields.put("properties", properties);
+        fields.put("blocks", compactBlocks == null ? blocks : compactBlocks.historicalMap());
+        fields.put("origin", origin); fields.put("dimensions", dimensions);
+        fields.put("attributes", attributes); fields.put("version", version);
+        out.writeFields();
+    }
+
     private String name;
     private final Map<String, String> properties;
-    private final Map<Point3i, Bo2BlockSpec> blocks;
+    private Map<Point3i, Bo2BlockSpec> blocks;
+    private transient Bo2CompactBlocks compactBlocks;
     private Point3i origin, dimensions;
     private Map<String, Serializable> attributes;
     private int version = 3;

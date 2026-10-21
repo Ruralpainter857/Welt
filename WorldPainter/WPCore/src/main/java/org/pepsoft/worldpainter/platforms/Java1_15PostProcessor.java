@@ -397,26 +397,29 @@ public class Java1_15PostProcessor extends PostProcessor {
                 progressReceiver.setMessage("Post processing exported blocks (fluids pass)");
             }
             // Pass 2 (water and lava pass)
-            for (int x = x1; x <= x2; x++) {
-                for (int y = y1; y <= y2; y++) {
-                    // Iterate over one column from bottom to top
-                    // Water at the lowest level can always flow down into the void, so skip that level
-                    Material materialBelow = (minZ + 1 <= worldMinZ) ? AIR : minecraftWorld.getMaterialAt(x, y, minZ);
-                    Material materialAbove = minecraftWorld.getMaterialAt(x, y, minZ + 1);
-                    final int columnMaxZ = Math.min(minecraftWorld.getHighestNonAirBlock(x, y), maxZ);
-                    for (int z = minZ + 1; z <= columnMaxZ; z++) {
-                        Material material = materialAbove;
-                        materialAbove = (z < worldMaxZ) ? minecraftWorld.getMaterialAt(x, y, z + 1) : AIR;
-                        if (flowWater && containsAnyWater(material) && (! isWaterContained(minecraftWorld, x, y, z, materialBelow))) {
-                            minecraftWorld.markForUpdateWorld(x, y, z);
-                        } else if (flowLava && material.isNamed(MC_LAVA) && (! isLavaContained(minecraftWorld, x, y, z, materialBelow))) {
-                            minecraftWorld.markForUpdateWorld(x, y, z);
+            if (!NativeFluidFlow.process(minecraftWorld, x1, x2, y1, y2, minZ, maxZ,
+                    flowWater, flowLava, progressReceiver)) {
+                for (int x = x1; x <= x2; x++) {
+                    for (int y = y1; y <= y2; y++) {
+                        // Iterate over one column from bottom to top
+                        // Water at the lowest level can always flow down into the void, so skip that level
+                        Material materialBelow = (minZ + 1 <= worldMinZ) ? AIR : minecraftWorld.getMaterialAt(x, y, minZ);
+                        Material materialAbove = minecraftWorld.getMaterialAt(x, y, minZ + 1);
+                        final int columnMaxZ = Math.min(minecraftWorld.getHighestNonAirBlock(x, y), maxZ);
+                        for (int z = minZ + 1; z <= columnMaxZ; z++) {
+                            Material material = materialAbove;
+                            materialAbove = (z < worldMaxZ) ? minecraftWorld.getMaterialAt(x, y, z + 1) : AIR;
+                            if (flowWater && containsAnyWater(material) && (! isWaterContained(minecraftWorld, x, y, z, materialBelow))) {
+                                minecraftWorld.markForUpdateWorld(x, y, z);
+                            } else if (flowLava && material.isNamed(MC_LAVA) && (! isLavaContained(minecraftWorld, x, y, z, materialBelow))) {
+                                minecraftWorld.markForUpdateWorld(x, y, z);
+                            }
+                            materialBelow = material;
                         }
-                        materialBelow = material;
                     }
-                }
-                if (progressReceiver != null) {
-                    progressReceiver.setProgress(0.75f + (float) (x - x1 + 1) / (x2 - x1 + 1) * 0.25f);
+                    if (progressReceiver != null) {
+                        progressReceiver.setProgress(0.75f + (float) (x - x1 + 1) / (x2 - x1 + 1) * 0.25f);
+                    }
                 }
             }
         } else if (progressReceiver != null) {

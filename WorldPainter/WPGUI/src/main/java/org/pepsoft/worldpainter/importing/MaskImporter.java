@@ -8,7 +8,9 @@ package org.pepsoft.worldpainter.importing;
 import com.google.common.collect.ImmutableSet;
 import org.pepsoft.util.ProgressReceiver;
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.ImageRangeAccess;
 import org.pepsoft.worldpainter.HeightMap;
+import org.pepsoft.worldpainter.MaskImportAccess;
 import org.pepsoft.worldpainter.Terrain;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.heightMaps.BitmapHeightMap;
@@ -102,6 +104,8 @@ public class MaskImporter {
             case SIXTEEN_BIT_GREY_SCALE:
             case THIRTY_TWO_BIT_GREY_SCALE:
                 final long lImageMaxValue = (inputType == EIGHT_BIT_GREY_SCALE) ? 255L : ((inputType == SIXTEEN_BIT_GREY_SCALE) ? 65535L : 4294967295L);
+                double[] integralRange = ImageRangeAccess.range(image, 0, true, Integer.MAX_VALUE, Integer.MIN_VALUE, 0, lImageMaxValue, true);
+                if (integralRange != null) { imageLowValue=integralRange[0]; imageHighValue=integralRange[1]; break; }
                 long lImageLowValue = Integer.MAX_VALUE, lImageHighValue = Integer.MIN_VALUE;
 outer:          for (int x = 0; x < width; x++) {
                     for (int y = 0; y < height; y++) {
@@ -124,6 +128,8 @@ outer:          for (int x = 0; x < width; x++) {
             case FLOAT_GREY_SCALE:
             case DOUBLE_GREY_SCALE:
                 final double dImageMaxValue = Double.MAX_VALUE;
+                double[] floatingRange = ImageRangeAccess.range(image, 0, false, Double.MAX_VALUE, -Double.MAX_VALUE, 0.0, dImageMaxValue);
+                if (floatingRange != null) { imageLowValue=floatingRange[0]; imageHighValue=floatingRange[1]; break; }
                 double dImageLowValue = Double.MAX_VALUE, dImageHighValue = -Double.MAX_VALUE;
 outer:          for (int x = 0; x < width; x++) {
                     for (int y = 0; y < height; y++) {
@@ -170,12 +176,15 @@ outer:          for (int x = 0; x < width; x++) {
         // Scale the mask, if necessary
         BufferedImage scaledImage;
         final HeightMap scaledHeightMap;
+        final HeightMap nativeSamplingMap;
+        boolean clampSamples=false;
         final int oldWidth = image.getWidth(), oldHeight = image.getHeight();
         final int width = Math.round(oldWidth * scale), height = Math.round(oldHeight * scale);
         if ((width == oldWidth) && (height == oldHeight)) {
             // No scaling necessary
             scaledImage = image;
             scaledHeightMap = BitmapHeightMap.build().withImage(image).now();
+            nativeSamplingMap = scaledHeightMap;
         } else if (colour) {
             // We are mapping a colour image. Colour images might need dithering, which we have to do via the image. For
             // now, colour images can be smoothed. TODO: that might change if we introduce mapping discrete colours to
@@ -193,16 +202,22 @@ outer:          for (int x = 0; x < width; x++) {
                 scaledImage = Mapping.ditherMask(scaledImage);
             }
             scaledHeightMap = null;
+            nativeSamplingMap = null;
         } else {
             HeightMap heightMap = BitmapHeightMap.build().withImage(image).now();
             if ((! bitmask) && (! discrete)) {
                 heightMap = heightMap.smoothed();
             }
-            scaledHeightMap = heightMap.scaled(scale)
+            nativeSamplingMap = heightMap.scaled(scale);
+            clampSamples=true;
+            scaledHeightMap = nativeSamplingMap
                     // Clamp the result, because ringing might otherwise cause values outside the original range:
                     .clamped(imageLowValue, imageHighValue);
             scaledImage = null;
         }
+        lastNativeImportCalls=0;
+        MaskImportAccess nativeImport=MaskImportAccess.prepare(mapping.nativePlan(),applyToLayer,nativeSamplingMap,
+                colour?scaledImage:null,discrete,clampSamples,imageLowValue,imageHighValue,imageMaxValue,threshold);
         image = null; // The original image is no longer necessary, so allow it to be garbage collected to make more space available for the import
 
         if (dimension.getWorld() != null) {
@@ -226,64 +241,70 @@ outer:          for (int x = 0; x < width; x++) {
                 }
                 tile.inhibitEvents();
                 try {
-                    // First remove the existing layer, if requested
-                    final int tileOffsetX = (tileX << TILE_SIZE_BITS) - xOffset, tileOffsetY = (tileY << TILE_SIZE_BITS) - yOffset;
-                    if ((applyToLayer != null) && removeExistingLayer) {
-                        // Crude heuristic to decide whether a tile lies entirely inside the area covered by the mask:
-                        if ((tileX > tileX1) && (tileX < tileX2) && (tileY > tileY1) && (tileY < tileY2)) {
-                            tile.clearLayerData(applyToLayer);
-                        } else {
-                            if (applyToLayer.dataSize.maxValue == 1) {
-                                for (int xInTile = 0; xInTile < TILE_SIZE; xInTile++) {
-                                    for (int yInTile = 0; yInTile < TILE_SIZE; yInTile++) {
-                                        final int imageX = tileOffsetX + xInTile, imageY = tileOffsetY + yInTile;
-                                        if ((imageX >= 0) && (imageX < width) && (imageY >= 0) && (imageY < height)) {
-                                            tile.setBitLayerValue(applyToLayer, xInTile, yInTile, false);
-                                        }
-                                    }
-                                }
-                            } else {
-                                final int defaultValue = applyToLayer.getDefaultValue();
-                                for (int xInTile = 0; xInTile < TILE_SIZE; xInTile++) {
-                                    for (int yInTile = 0; yInTile < TILE_SIZE; yInTile++) {
-                                        final int imageX = tileOffsetX + xInTile, imageY = tileOffsetY + yInTile;
-                                        if ((imageX >= 0) && (imageX < width) && (imageY >= 0) && (imageY < height)) {
-                                            tile.setLayerValue(applyToLayer, xInTile, yInTile, defaultValue);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    mapping.setTile(tile);
-                    if (colour) {
-                        for (int xInTile = 0; xInTile < TILE_SIZE; xInTile++) {
-                            for (int yInTile = 0; yInTile < TILE_SIZE; yInTile++) {
-                                final int imageX = tileOffsetX + xInTile, imageY = tileOffsetY + yInTile;
-                                if ((imageX >= 0) && (imageX < width) && (imageY >= 0) && (imageY < height)) {
-                                    mapping.applyColour(xInTile, yInTile, scaledImage.getRGB(imageX, imageY));
-                                }
-                            }
-                        }
-                    } else if (discrete) {
-                        for (int xInTile = 0; xInTile < TILE_SIZE; xInTile++) {
-                            for (int yInTile = 0; yInTile < TILE_SIZE; yInTile++) {
-                                final int imageX = tileOffsetX + xInTile, imageY = tileOffsetY + yInTile;
-                                if ((imageX >= 0) && (imageX < width) && (imageY >= 0) && (imageY < height)) {
-                                    // This is warranted because doubles can still precisely store integers up to around
-                                    // 2⁵³ and the expected values for discrete layers will always be much smaller than
-                                    // that
-                                    mapping.applyDiscrete(xInTile, yInTile, (int) scaledHeightMap.getHeight(imageX, imageY));
-                                }
-                            }
-                        }
+                    final int nativeImageX=(tileX << TILE_SIZE_BITS)-xOffset,nativeImageY=(tileY << TILE_SIZE_BITS)-yOffset;
+                    if(nativeImport!=null && nativeImport.apply(tile,nativeImageX,nativeImageY,width,height,removeExistingLayer,
+                            tileX>tileX1&&tileX<tileX2&&tileY>tileY1&&tileY<tileY2)) {
+                        lastNativeImportCalls++;mapping.setTile(tile);
                     } else {
-                        for (int xInTile = 0; xInTile < TILE_SIZE; xInTile++) {
-                            for (int yInTile = 0; yInTile < TILE_SIZE; yInTile++) {
-                                final int imageX = tileOffsetX + xInTile, imageY = tileOffsetY + yInTile;
-                                if ((imageX >= 0) && (imageX < width) && (imageY >= 0) && (imageY < height)) {
-                                    mapping.applyGreyScale(xInTile, yInTile, scaledHeightMap.getHeight(imageX, imageY));
+                        // First remove the existing layer, if requested
+                        final int tileOffsetX = (tileX << TILE_SIZE_BITS) - xOffset, tileOffsetY = (tileY << TILE_SIZE_BITS) - yOffset;
+                        if ((applyToLayer != null) && removeExistingLayer) {
+                            // Crude heuristic to decide whether a tile lies entirely inside the area covered by the mask:
+                            if ((tileX > tileX1) && (tileX < tileX2) && (tileY > tileY1) && (tileY < tileY2)) {
+                                tile.clearLayerData(applyToLayer);
+                            } else {
+                                if (applyToLayer.dataSize.maxValue == 1) {
+                                    for (int xInTile = 0; xInTile < TILE_SIZE; xInTile++) {
+                                        for (int yInTile = 0; yInTile < TILE_SIZE; yInTile++) {
+                                            final int imageX = tileOffsetX + xInTile, imageY = tileOffsetY + yInTile;
+                                            if ((imageX >= 0) && (imageX < width) && (imageY >= 0) && (imageY < height)) {
+                                                tile.setBitLayerValue(applyToLayer, xInTile, yInTile, false);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    final int defaultValue = applyToLayer.getDefaultValue();
+                                    for (int xInTile = 0; xInTile < TILE_SIZE; xInTile++) {
+                                        for (int yInTile = 0; yInTile < TILE_SIZE; yInTile++) {
+                                            final int imageX = tileOffsetX + xInTile, imageY = tileOffsetY + yInTile;
+                                            if ((imageX >= 0) && (imageX < width) && (imageY >= 0) && (imageY < height)) {
+                                                tile.setLayerValue(applyToLayer, xInTile, yInTile, defaultValue);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        mapping.setTile(tile);
+                        if (colour) {
+                            for (int xInTile = 0; xInTile < TILE_SIZE; xInTile++) {
+                                for (int yInTile = 0; yInTile < TILE_SIZE; yInTile++) {
+                                    final int imageX = tileOffsetX + xInTile, imageY = tileOffsetY + yInTile;
+                                    if ((imageX >= 0) && (imageX < width) && (imageY >= 0) && (imageY < height)) {
+                                        mapping.applyColour(xInTile, yInTile, scaledImage.getRGB(imageX, imageY));
+                                    }
+                                }
+                            }
+                        } else if (discrete) {
+                            for (int xInTile = 0; xInTile < TILE_SIZE; xInTile++) {
+                                for (int yInTile = 0; yInTile < TILE_SIZE; yInTile++) {
+                                    final int imageX = tileOffsetX + xInTile, imageY = tileOffsetY + yInTile;
+                                    if ((imageX >= 0) && (imageX < width) && (imageY >= 0) && (imageY < height)) {
+                                        // This is warranted because doubles can still precisely store integers up to around
+                                        // 2⁵³ and the expected values for discrete layers will always be much smaller than
+                                        // that
+                                        mapping.applyDiscrete(xInTile, yInTile, (int) scaledHeightMap.getHeight(imageX, imageY));
+                                    }
+                                }
+                            }
+                        } else {
+                            for (int xInTile = 0; xInTile < TILE_SIZE; xInTile++) {
+                                for (int yInTile = 0; yInTile < TILE_SIZE; yInTile++) {
+                                    final int imageX = tileOffsetX + xInTile, imageY = tileOffsetY + yInTile;
+                                    if ((imageX >= 0) && (imageX < width) && (imageY >= 0) && (imageY < height)) {
+                                        mapping.applyGreyScale(xInTile, yInTile, scaledHeightMap.getHeight(imageX, imageY));
+                                    }
                                 }
                             }
                         }
@@ -298,6 +319,10 @@ outer:          for (int x = 0; x < width; x++) {
             }
         }
     }
+
+    /** Successful tile JNI transactions in the most recent import. */
+    public int getLastNativeImportCalls() { return lastNativeImportCalls; }
+    private int lastNativeImportCalls;
 
     public InputType getInputType() {
         return inputType;

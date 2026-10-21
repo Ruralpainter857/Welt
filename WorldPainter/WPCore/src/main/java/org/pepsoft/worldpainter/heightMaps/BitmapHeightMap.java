@@ -7,6 +7,7 @@
 package org.pepsoft.worldpainter.heightMaps;
 
 import org.pepsoft.util.IconUtils;
+import org.pepsoft.worldpainter.ImageRangeAccess;
 import org.pepsoft.util.MathUtils;
 
 import javax.swing.*;
@@ -14,6 +15,7 @@ import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.awt.image.Raster;
 import java.io.File;
+import java.util.Arrays;
 
 import static java.awt.image.DataBuffer.*;
 
@@ -81,6 +83,111 @@ public final class BitmapHeightMap extends AbstractHeightMap {
 
     public int getHeight() {
         return height;
+    }
+
+    /** Bulk-reads a rectangle using the same clipping and repeat rules as {@link #getHeight(int, int)}. */
+    public boolean fillSamples(int x, int y, int sampleWidth, int sampleHeight,
+                               double[] samples, double[] rowSamples) {
+        return fillSamples(x, y, sampleWidth, sampleHeight, samples, rowSamples, repeat);
+    }
+
+    /** Bulk-reads a rectangle with wrapping even when this bitmap itself is non-repeating. */
+    public boolean fillRepeatedSamples(int x, int y, int sampleWidth, int sampleHeight,
+                                       double[] samples, double[] rowSamples) {
+        return fillSamples(x, y, sampleWidth, sampleHeight, samples, rowSamples, true);
+    }
+
+    /** Live grouped source reads for a bicubic patch, including repeated or extended edges. */
+    public boolean fillBicubicPatch(int x, int y, int patchWidth, int patchHeight,
+                                    boolean repeatEdges, double[] samples, double[] rowSamples) {
+        long area = (long) patchWidth * patchHeight;
+        if (patchWidth <= 0 || patchHeight <= 0 || area > 262144 || samples == null
+                || samples.length < area || rowSamples == null || rowSamples.length < patchWidth
+                || (long) x + patchWidth > Integer.MAX_VALUE || (long) y + patchHeight > Integer.MAX_VALUE) return false;
+        for (int row = 0; row < patchHeight; row++) {
+            int sourceY = repeatEdges ? MathUtils.mod(y + row, height) : Math.max(0, Math.min(height - 1, y + row));
+            int column = 0;
+            while (column < patchWidth) {
+                int physicalX = x + column;
+                int sourceX = repeatEdges ? MathUtils.mod(physicalX, width) : Math.max(0, Math.min(width - 1, physicalX));
+                int count = repeatEdges ? Math.min(patchWidth - column, width - sourceX)
+                        : physicalX < 0 ? (int) Math.min(patchWidth - column, -(long) physicalX)
+                        : physicalX >= width ? patchWidth - column : Math.min(patchWidth - column, width - sourceX);
+                if (!repeatEdges && (physicalX < 0 || physicalX >= width)) {
+                    Arrays.fill(samples, row * patchWidth + column, row * patchWidth + column + count, getSample(sourceX, sourceY));
+                } else {
+                    raster.getSamples(sourceX, sourceY, count, 1, channel, rowSamples);
+                    for (int i = 0; i < count; i++) {
+                        double value = rowSamples[i];
+                        samples[row * patchWidth + column + i] = !floatingPoint && !signed && bitDepth == 32
+                                ? ((long) value & 0xffffffffL) : value;
+                    }
+                }
+                column += count;
+            }
+        }
+        return true;
+    }
+
+    private boolean fillSamples(int x, int y, int sampleWidth, int sampleHeight,
+                                double[] samples, double[] rowSamples, boolean repeatCoordinates) {
+        if ((sampleWidth <= 0) || (sampleHeight <= 0) || (samples == null)
+                || ((long) sampleWidth * sampleHeight != samples.length)) {
+            return false;
+        }
+        if ((x >= 0) && (y >= 0)
+                && ((long) x + sampleWidth <= width) && ((long) y + sampleHeight <= height)) {
+            raster.getSamples(x, y, sampleWidth, sampleHeight, channel, samples);
+            return true;
+        }
+        if ((rowSamples == null) || (rowSamples.length < sampleWidth)) {
+            return false;
+        }
+        Arrays.fill(samples, minHeight);
+        for (int row = 0; row < sampleHeight; row++) {
+            final int worldY = y + row;
+            final int sourceY;
+            if (repeatCoordinates) {
+                sourceY = MathUtils.mod(worldY, height);
+            } else {
+                if ((worldY < 0) || (worldY >= height)) {
+                    continue;
+                }
+                sourceY = worldY;
+            }
+            final int outputRow = row * sampleWidth;
+            if (repeatCoordinates && (width <= sampleWidth)) {
+                raster.getSamples(0, sourceY, width, 1, channel, rowSamples);
+                for (int column = 0; column < sampleWidth; column++) {
+                    samples[outputRow + column] = rowSamples[MathUtils.mod(x + column, width)];
+                }
+                continue;
+            }
+            int column = 0;
+            while (column < sampleWidth) {
+                final int worldX = x + column;
+                final int sourceX;
+                final int runLength;
+                if (repeatCoordinates) {
+                    sourceX = MathUtils.mod(worldX, width);
+                    final int beforeOverflow = (int) Math.min(Integer.MAX_VALUE - (long) worldX + 1L,
+                            Integer.MAX_VALUE);
+                    runLength = Math.min(Math.min(sampleWidth - column, width - sourceX), beforeOverflow);
+                } else if (worldX < 0) {
+                    column += (int) Math.min(sampleWidth - column, -(long) worldX);
+                    continue;
+                } else if (worldX >= width) {
+                    break;
+                } else {
+                    sourceX = worldX;
+                    runLength = Math.min(sampleWidth - column, width - sourceX);
+                }
+                raster.getSamples(sourceX, sourceY, runLength, 1, channel, rowSamples);
+                System.arraycopy(rowSamples, 0, samples, outputRow + column, runLength);
+                column += runLength;
+            }
+        }
+        return true;
     }
 
     /**
@@ -158,6 +265,8 @@ public final class BitmapHeightMap extends AbstractHeightMap {
     @Override
     public double[] getRange() {
         if (range == null) {
+            range = ImageRangeAccess.range(image, channel, !signed && !floatingPoint, Double.MAX_VALUE, -Double.MAX_VALUE, minHeight, maxHeight);
+            if (range != null) return range;
             double imageLowValue = Double.MAX_VALUE, imageHighValue = -Double.MAX_VALUE;
             outer:
             for (int x = 0; x < width; x++) {

@@ -6,6 +6,7 @@ package org.pepsoft.worldpainter.layers.exporters;
 
 import com.google.common.collect.ImmutableMap;
 import org.pepsoft.minecraft.Chunk;
+import org.pepsoft.minecraft.ChunkPaletteBuffer;
 import org.pepsoft.minecraft.Material;
 import org.pepsoft.util.PerlinNoise;
 import org.pepsoft.util.Version;
@@ -14,12 +15,16 @@ import org.pepsoft.worldpainter.exporting.AbstractLayerExporter;
 import org.pepsoft.worldpainter.exporting.FirstPassLayerExporter;
 import org.pepsoft.worldpainter.layers.Resources;
 import org.pepsoft.worldpainter.layers.Void;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.Serial;
 import java.io.Serializable;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static java.lang.Math.floor;
 import static org.pepsoft.minecraft.Constants.*;
@@ -35,6 +40,49 @@ import static org.pepsoft.worldpainter.layers.exporters.ResourcesExporter.Resour
  * @author pepijn
  */
 public class ResourcesExporter extends AbstractLayerExporter<Resources> implements FirstPassLayerExporter {
+    private static final String NATIVE_PROFILE_PROPERTY = "welt.export.profileResourcesNative";
+    private static final AtomicLong NATIVE_PROFILE_PREP_NANOS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_CALL_NANOS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_COPY_NANOS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_RUST_NANOS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_RUST_SETUP_NANOS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_RUST_SCAN_NANOS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_RUST_NOISE_SAMPLES = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_APPLY_NANOS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_CHUNKS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_PALETTE_CHUNKS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_PALETTE_VIEWS = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_PALETTE_VIEW_MISSES = new AtomicLong();
+    private static final AtomicLong NATIVE_PROFILE_PALETTE_REJECTIONS = new AtomicLong();
+
+    /** Resets optional, out-of-band timings for the native Resources path. */
+    public static void resetNativeProfile() {
+        NATIVE_PROFILE_PREP_NANOS.set(0);
+        NATIVE_PROFILE_CALL_NANOS.set(0);
+        NATIVE_PROFILE_COPY_NANOS.set(0);
+        NATIVE_PROFILE_RUST_NANOS.set(0);
+        NATIVE_PROFILE_RUST_SETUP_NANOS.set(0);
+        NATIVE_PROFILE_RUST_SCAN_NANOS.set(0);
+        NATIVE_PROFILE_RUST_NOISE_SAMPLES.set(0);
+        NATIVE_PROFILE_APPLY_NANOS.set(0);
+        NATIVE_PROFILE_CHUNKS.set(0);
+        NATIVE_PROFILE_PALETTE_CHUNKS.set(0);
+        NATIVE_PROFILE_PALETTE_VIEWS.set(0);
+        NATIVE_PROFILE_PALETTE_VIEW_MISSES.set(0);
+        NATIVE_PROFILE_PALETTE_REJECTIONS.set(0);
+    }
+
+    /** Returns preparation, JNI-call, result-application nanoseconds and chunk count. */
+    public static long[] nativeProfileSnapshot() {
+        return new long[]{NATIVE_PROFILE_PREP_NANOS.get(), NATIVE_PROFILE_CALL_NANOS.get(),
+                NATIVE_PROFILE_APPLY_NANOS.get(), NATIVE_PROFILE_CHUNKS.get(),
+                NATIVE_PROFILE_COPY_NANOS.get(), NATIVE_PROFILE_RUST_NANOS.get(),
+                NATIVE_PROFILE_PALETTE_CHUNKS.get(), NATIVE_PROFILE_RUST_SETUP_NANOS.get(),
+                NATIVE_PROFILE_RUST_SCAN_NANOS.get(), NATIVE_PROFILE_RUST_NOISE_SAMPLES.get(),
+                NATIVE_PROFILE_PALETTE_VIEWS.get(), NATIVE_PROFILE_PALETTE_VIEW_MISSES.get(),
+                NATIVE_PROFILE_PALETTE_REJECTIONS.get()};
+    }
+
     public ResourcesExporter(Dimension dimension, Platform platform, ExporterSettings settings) {
         super(dimension, platform, (settings != null) ? settings : defaultSettings(platform, dimension.getAnchor(), dimension.getMinHeight(), dimension.getMaxHeight()), Resources.INSTANCE);
         final ResourcesExporterSettings resourcesSettings = (ResourcesExporterSettings) super.settings;
@@ -66,6 +114,24 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
                 noiseGenerators[i].setSeed(dimension.getSeed() + seedOffsets[i]);
             }
         }
+        nativeSeeds = new long[this.activeMaterials.length];
+        nativeDirtMaterials = new byte[this.activeMaterials.length];
+        nativeFlattenedChances = new float[this.activeMaterials.length * 16];
+        for (int i = 0; i < this.activeMaterials.length; i++) {
+            nativeSeeds[i] = noiseGenerators[i].getSeed();
+            nativeDirtMaterials[i] = (byte) (this.activeMaterials[i].isNamedOneOf(MC_DIRT, MC_GRAVEL) ? 1 : 0);
+            System.arraycopy(chances[i], 0, nativeFlattenedChances, i * 16, 16);
+        }
+        nativePaletteTargets = new Material[this.activeMaterials.length * 2];
+        final boolean nether = dimension.getAnchor().dim == DIM_NETHER;
+        for (int i = 0; i < this.activeMaterials.length; i++) {
+            final Material material = this.activeMaterials[i];
+            final Material normalTarget = nether && material.isNamed(MC_GOLD_ORE)
+                    ? NETHER_GOLD_ORE : material;
+            nativePaletteTargets[i * 2] = normalTarget;
+            nativePaletteTargets[i * 2 + 1] = ORE_TO_DEEPSLATE_VARIANT.getOrDefault(
+                    material.name, normalTarget);
+        }
     }
 
     @Override
@@ -75,19 +141,25 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
 
     @Override
     public void render(Tile tile, Chunk chunk, HeightMap minHeightField) {
+        if (renderNativeResources(tile, chunk, minHeightField)) {
+            return;
+        }
         final int minimumLevel = ((ResourcesExporterSettings) super.settings).getMinimumLevel();
         final int xOffset = (chunk.getxPos() & 7) << 4;
         final int zOffset = (chunk.getzPos() & 7) << 4;
         final boolean coverSteepTerrain = dimension.isCoverSteepTerrain(), nether = (dimension.getAnchor().dim == DIM_NETHER);
+        final NativeResourceBuffers buffers = nativeResourceBuffers.get();
+        copyResourceLayerColumns(tile, xOffset, zOffset, buffers);
 //        int[] counts = new int[256];
         for (int x = 0; x < 16; x++) {
             for (int z = 0; z < 16; z++) {
                 final int localX = xOffset + x, localY = zOffset + z;
                 final int worldX = tile.getX() * TILE_SIZE + localX, worldY = tile.getY() * TILE_SIZE + localY;
-                if (tile.getBitLayerValue(Void.INSTANCE, localX, localY)) {
+                final int column = x * 16 + z;
+                if (buffers.voidValues[column] != 0) {
                     continue;
                 }
-                final int resourcesValue = Math.max(minimumLevel, tile.getLayerValue(Resources.INSTANCE, localX, localY));
+                final int resourcesValue = Math.max(minimumLevel, buffers.resourceValues[column]);
                 if (resourcesValue > 0) {
                     final int terrainheight = tile.getIntHeight(localX, localY);
                     final int topLayerDepth = dimension.getTopLayerDepth(worldX, worldY, terrainheight);
@@ -141,12 +213,249 @@ public class ResourcesExporter extends AbstractLayerExporter<Resources> implemen
 //        System.out.println();
     }
 
+    /**
+     * Computes the resource-noise decisions in one Rust call. All tile queries
+     * and block mutations remain in Java, preserving the historical exporter
+     * behavior if native code is disabled or unavailable.
+     */
+    private boolean renderNativeResources(Tile tile, Chunk chunk, HeightMap minHeightField) {
+        if (!Native.isResourcesExportEnabled() || !NativeLoader.areSlicesAvailable()) {
+            return false;
+        }
+        final int minimumLevel = ((ResourcesExporterSettings) super.settings).getMinimumLevel();
+        final int xOffset = (chunk.getxPos() & 7) << 4;
+        final int zOffset = (chunk.getzPos() & 7) << 4;
+        final NativeResourceBuffers buffers = nativeResourceBuffers.get();
+        final int[] columnMinZ = buffers.columnMinZ;
+        final int[] columnMaxZ = buffers.columnMaxZ;
+        final int[] resourceValues = buffers.resourceValues;
+        final double[] tinyX = buffers.tinyX, tinyY = buffers.tinyY;
+        final double[] dirtX = buffers.dirtX, dirtY = buffers.dirtY;
+        final boolean profile = Boolean.getBoolean(NATIVE_PROFILE_PROPERTY);
+        final long preparationStart = profile ? System.nanoTime() : 0L;
+        copyResourceLayerColumns(tile, xOffset, zOffset, buffers);
+        int effectiveMinZ = Integer.MAX_VALUE;
+        int effectiveMaxZ = Integer.MIN_VALUE;
+        for (int x = 0; x < 16; x++) {
+            for (int z = 0; z < 16; z++) {
+                final int column = x * 16 + z;
+                final int localX = xOffset + x, localY = zOffset + z;
+                if (buffers.voidValues[column] != 0) {
+                    resourceValues[column] = 0;
+                    columnMinZ[column] = this.minZ;
+                    columnMaxZ[column] = this.minZ - 1;
+                    continue;
+                }
+                final int resourcesValue = Math.max(minimumLevel, resourceValues[column]);
+                resourceValues[column] = resourcesValue;
+                if (resourcesValue == 0) {
+                    columnMinZ[column] = this.minZ;
+                    columnMaxZ[column] = this.minZ - 1;
+                    continue;
+                }
+                final int worldX = tile.getX() * TILE_SIZE + localX;
+                final int worldY = tile.getY() * TILE_SIZE + localY;
+                final int terrainheight = tile.getIntHeight(localX, localY);
+                final int topLayerDepth = dimension.getTopLayerDepth(worldX, worldY, terrainheight);
+                int subsurfaceMaxHeight = terrainheight - topLayerDepth;
+                if (dimension.isCoverSteepTerrain()) {
+                    subsurfaceMaxHeight = Math.min(subsurfaceMaxHeight,
+                            Math.min(Math.min(dimension.getIntHeightAt(worldX - 1, worldY, Integer.MAX_VALUE),
+                                            dimension.getIntHeightAt(worldX + 1, worldY, Integer.MAX_VALUE)),
+                                    Math.min(dimension.getIntHeightAt(worldX, worldY - 1, Integer.MAX_VALUE),
+                                            dimension.getIntHeightAt(worldX, worldY + 1, Integer.MAX_VALUE))));
+                }
+                tinyX[column] = worldX / TINY_BLOBS;
+                tinyY[column] = worldY / TINY_BLOBS;
+                dirtX[column] = worldX / SMALL_BLOBS;
+                dirtY[column] = worldY / SMALL_BLOBS;
+                columnMinZ[column] = minHeightField != null
+                        ? (int) floor(minHeightField.getHeight(worldX, worldY)) : this.minZ;
+                columnMaxZ[column] = Math.min(subsurfaceMaxHeight, maxZ);
+                final int startZ = Math.max(columnMinZ[column], this.minZ);
+                if (startZ <= columnMaxZ[column]) {
+                    effectiveMinZ = Math.min(effectiveMinZ, startZ);
+                    effectiveMaxZ = Math.max(effectiveMaxZ, columnMaxZ[column]);
+                }
+            }
+        }
+        if (effectiveMinZ > effectiveMaxZ) {
+            if (profile) {
+                NATIVE_PROFILE_PREP_NANOS.addAndGet(System.nanoTime() - preparationStart);
+                NATIVE_PROFILE_CHUNKS.incrementAndGet();
+            }
+            return true;
+        }
+        final long outputLengthLong = 256L * ((long) effectiveMaxZ - effectiveMinZ + 1L);
+        if (outputLengthLong <= 0L || outputLengthLong > 1_048_576L) {
+            return false;
+        }
+        final int outputLength = (int) outputLengthLong;
+        final byte[] selected = buffers.output(outputLength);
+        final boolean nether = dimension.getAnchor().dim == DIM_NETHER;
+        final ChunkPaletteBuffer.LivePaletteView paletteView =
+                ChunkPaletteBuffer.openLivePaletteView(chunk, effectiveMinZ, effectiveMaxZ,
+                        nativePaletteTargets);
+        if (profile) {
+            (paletteView != null ? NATIVE_PROFILE_PALETTE_VIEWS : NATIVE_PROFILE_PALETTE_VIEW_MISSES)
+                    .incrementAndGet();
+        }
+        if (paletteView != null) {
+            final int sectionCount = paletteView.sectionCount();
+            final int[][] sectionIndexes = buffers.sectionIndexes;
+            final byte[][] paletteFlags = buffers.paletteFlags;
+            final int[][] outputPaletteIndexes = buffers.outputPaletteIndexes;
+            for (int section = 0; section < sectionCount; section++) {
+                sectionIndexes[section] = paletteView.indexes(section);
+                final int paletteSize = paletteView.paletteSize(section);
+                if (paletteFlags[section] == null || paletteFlags[section].length < paletteSize) {
+                    paletteFlags[section] = new byte[paletteSize];
+                }
+                for (int paletteIndex = 0; paletteIndex < paletteSize; paletteIndex++) {
+                    final Material material = paletteView.paletteMaterial(section, paletteIndex);
+                    paletteFlags[section][paletteIndex] = (byte) ((material != null
+                            && material.isNamed(MC_DEEPSLATE)) ? 1 : 0);
+                }
+                if (outputPaletteIndexes[section] == null
+                        || outputPaletteIndexes[section].length != nativePaletteTargets.length) {
+                    outputPaletteIndexes[section] = new int[nativePaletteTargets.length];
+                }
+                for (int material = 0; material < nativePaletteTargets.length; material++) {
+                    outputPaletteIndexes[section][material] =
+                            paletteView.paletteIndex(section, nativePaletteTargets[material]);
+                }
+            }
+            final long paletteNativeStart = profile ? System.nanoTime() : 0L;
+            if (profile) {
+                buffers.nativeProfileNanos[0] = 0L;
+                buffers.nativeProfileNanos[1] = 0L;
+                buffers.nativeApplyNanos[0] = 0L;
+            }
+            final boolean paletteApplied;
+            try {
+                paletteApplied = NativeSlices.resourceMaterialsIntoPalette(effectiveMinZ, effectiveMaxZ,
+                    tinyX, tinyY, dirtX, dirtY, columnMinZ, columnMaxZ, resourceValues,
+                    nativeSeeds, minLevels, maxLevels, nativeDirtMaterials, nativeFlattenedChances,
+                    selected, paletteView.minY(), sectionCount, sectionIndexes, paletteFlags,
+                    outputPaletteIndexes, profile ? buffers.nativeProfileNanos : null,
+                    profile ? buffers.nativeApplyNanos : null);
+            } finally {
+                java.util.Arrays.fill(sectionIndexes, 0, sectionCount, null);
+            }
+            if (paletteApplied) {
+                if (profile) {
+                    final long nativeEnd = System.nanoTime();
+                    NATIVE_PROFILE_PREP_NANOS.addAndGet(paletteNativeStart - preparationStart);
+                    NATIVE_PROFILE_CALL_NANOS.addAndGet(nativeEnd - paletteNativeStart);
+                    NATIVE_PROFILE_COPY_NANOS.addAndGet(buffers.nativeProfileNanos[0]);
+                    NATIVE_PROFILE_RUST_NANOS.addAndGet(buffers.nativeProfileNanos[1]);
+                    NATIVE_PROFILE_RUST_SETUP_NANOS.addAndGet(buffers.nativeProfileNanos[2]);
+                    NATIVE_PROFILE_RUST_SCAN_NANOS.addAndGet(buffers.nativeProfileNanos[3]);
+                    NATIVE_PROFILE_RUST_NOISE_SAMPLES.addAndGet(buffers.nativeProfileNanos[4]);
+                    NATIVE_PROFILE_APPLY_NANOS.addAndGet(buffers.nativeApplyNanos[0]);
+                    NATIVE_PROFILE_CHUNKS.incrementAndGet();
+                    NATIVE_PROFILE_PALETTE_CHUNKS.incrementAndGet();
+                }
+                return true;
+            }
+            if (profile) {
+                NATIVE_PROFILE_PALETTE_REJECTIONS.incrementAndGet();
+            }
+        }
+
+        final long nativeStart = profile ? System.nanoTime() : 0L;
+        if (!NativeSlices.resourceMaterialsInto(effectiveMinZ, effectiveMaxZ,
+                tinyX, tinyY, dirtX, dirtY, columnMinZ, columnMaxZ, resourceValues,
+                nativeSeeds, minLevels, maxLevels, nativeDirtMaterials, nativeFlattenedChances,
+                selected, profile ? buffers.nativeProfileNanos : null)) {
+            return false;
+        }
+        if (profile) {
+            final long nativeEnd = System.nanoTime();
+            NATIVE_PROFILE_PREP_NANOS.addAndGet(nativeStart - preparationStart);
+            NATIVE_PROFILE_CALL_NANOS.addAndGet(nativeEnd - nativeStart);
+            NATIVE_PROFILE_COPY_NANOS.addAndGet(buffers.nativeProfileNanos[0]);
+            NATIVE_PROFILE_RUST_NANOS.addAndGet(buffers.nativeProfileNanos[1]);
+            NATIVE_PROFILE_RUST_SETUP_NANOS.addAndGet(buffers.nativeProfileNanos[2]);
+            NATIVE_PROFILE_RUST_SCAN_NANOS.addAndGet(buffers.nativeProfileNanos[3]);
+            NATIVE_PROFILE_RUST_NOISE_SAMPLES.addAndGet(buffers.nativeProfileNanos[4]);
+            NATIVE_PROFILE_CHUNKS.incrementAndGet();
+        }
+        final long applyStart = profile ? System.nanoTime() : 0L;
+        final int verticalRange = effectiveMaxZ - effectiveMinZ + 1;
+        for (int x = 0; x < 16; x++) {
+            for (int z = 0; z < 16; z++) {
+                final int column = x * 16 + z;
+                for (int y = Math.min(columnMaxZ[column], effectiveMaxZ);
+                     y >= Math.max(columnMinZ[column], effectiveMinZ); y--) {
+                    final int materialIndex = (selected[column * verticalRange + y - effectiveMinZ] & 0xff) - 1;
+                    if (materialIndex >= 0) {
+                        final Material material = activeMaterials[materialIndex];
+                        final Material existingMaterial = chunk.getMaterial(x, y, z);
+                        if (existingMaterial.isNamed(MC_DEEPSLATE) && ORE_TO_DEEPSLATE_VARIANT.containsKey(material.name)) {
+                            chunk.setMaterial(x, y, z, ORE_TO_DEEPSLATE_VARIANT.get(material.name));
+                        } else if (nether && material.isNamed(MC_GOLD_ORE)) {
+                            chunk.setMaterial(x, y, z, NETHER_GOLD_ORE);
+                        } else {
+                            chunk.setMaterial(x, y, z, material);
+                        }
+                    }
+                }
+            }
+        }
+        if (profile) {
+            NATIVE_PROFILE_APPLY_NANOS.addAndGet(System.nanoTime() - applyStart);
+        }
+        return true;
+    }
+
+    private static void copyResourceLayerColumns(Tile tile, int xOffset, int zOffset,
+                                                 NativeResourceBuffers buffers) {
+        tile.copyBitLayerValues(Void.INSTANCE, xOffset, zOffset, 16, 16,
+                buffers.voidValues, 0);
+        tile.copyLayerValues(Resources.INSTANCE, xOffset, zOffset, 16, 16,
+                buffers.resourceValues, 0);
+    }
+
 //  TODO: resource frequenties onderzoeken met Statistics tool!
 
     private final Material[] activeMaterials;
     private final PerlinNoise[] noiseGenerators;
     private final int[] minLevels, maxLevels;
     private final float[][] chances;
+    private final long[] nativeSeeds;
+    private final byte[] nativeDirtMaterials;
+    private final float[] nativeFlattenedChances;
+    private final Material[] nativePaletteTargets;
+    private final ThreadLocal<NativeResourceBuffers> nativeResourceBuffers =
+            ThreadLocal.withInitial(NativeResourceBuffers::new);
+
+    private static final class NativeResourceBuffers {
+        private final byte[] voidValues = new byte[256];
+        private final int[] columnMinZ = new int[256];
+        private final int[] columnMaxZ = new int[256];
+        private final int[] resourceValues = new int[256];
+        private final double[] tinyX = new double[256], tinyY = new double[256];
+        private final double[] dirtX = new double[256], dirtY = new double[256];
+        private final byte[][] outputs = new byte[8][];
+        private final int[][] sectionIndexes = new int[256][];
+        private final byte[][] paletteFlags = new byte[256][];
+        private final int[][] outputPaletteIndexes = new int[256][];
+        private final long[] nativeProfileNanos = new long[5];
+        private final long[] nativeApplyNanos = new long[1];
+        private int nextOutputSlot;
+
+        private byte[] output(int length) {
+            for (byte[] candidate : outputs) {
+                if (candidate != null && candidate.length == length) {
+                    return candidate;
+                }
+            }
+            final byte[] output = new byte[length];
+            outputs[nextOutputSlot++ & 7] = output;
+            return output;
+        }
+    }
 
     private static final Map<String, Material> ORE_TO_DEEPSLATE_VARIANT = ImmutableMap.of(
             MC_COAL_ORE, DEEPSLATE_COAL_ORE,

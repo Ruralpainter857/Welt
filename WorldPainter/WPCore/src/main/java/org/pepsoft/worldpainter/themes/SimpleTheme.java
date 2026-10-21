@@ -12,22 +12,29 @@ import org.pepsoft.worldpainter.Terrain;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.layers.Frost;
 import org.pepsoft.worldpainter.layers.Layer;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
+import org.pepsoft.worldpainter.nativeapi.SnapshotRandom;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.io.ObjectInputStream;
 import java.util.*;
 
 import static org.pepsoft.util.MathUtils.clamp;
 import static org.pepsoft.worldpainter.Constants.SMALL_BLOBS;
+import static org.pepsoft.worldpainter.Constants.TILE_SIZE;
+import static org.pepsoft.worldpainter.Constants.TILE_SIZE_BITS;
 import static org.pepsoft.worldpainter.Constants.TINY_BLOBS;
 
 /**
  *
  * @author SchmitzP
  */
-public class SimpleTheme implements Theme, Cloneable {
+public class SimpleTheme implements Theme, ThemeColourer, ThemeBlockMapper, Cloneable {
     @Deprecated
     public SimpleTheme(long seed, int waterHeight, Terrain[] terrainRangesTable, int minHeight, int maxHeight, boolean randomise, boolean beaches) {
         setSeed(seed);
@@ -35,6 +42,7 @@ public class SimpleTheme implements Theme, Cloneable {
         this.minHeight = minHeight;
         this.maxHeight = terrainRangesTable.length;
         this.terrainRangesTable = terrainRangesTable;
+        terrainRangesTableExternallyMutable = true;
         fixTerrainRangesTable();
         setMinMaxHeight(minHeight, maxHeight, HeightTransform.IDENTITY);
         setRandomise(randomise);
@@ -55,6 +63,462 @@ public class SimpleTheme implements Theme, Cloneable {
 
     @Override
     public void apply(Tile tile, int x, int y) {
+        apply(tile, x, y, false);
+    }
+
+    /** Réapplique un thème sur une tuile existante avec un seul appel JNI et des buffers par worker. */
+    public final boolean applyToExistingTile(Tile tile) {
+        if (getClass() != SimpleTheme.class || tile.getClass() != Tile.class || !tile.isEventsInhibited()
+                || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return false;
+        if (uniformTerrain != null && !beaches && layerCache == null && bitLayerCache == null) {
+            tile.fillTerrain(uniformTerrain); return true;
+        }
+        int count = getFreshTileLayerCount();
+        int range = maxHeight - minHeight;
+        if (count > 64 || range <= 0 || range > 1_048_576) return false;
+        for (Terrain terrain : terrainRangesTable) if (terrain == null) return false;
+        ThemeEditScratch scratch = THEME_EDIT_SCRATCH.get();
+        if (scratch.ranges.length != range) scratch.ranges = new int[range];
+        if (scratch.layers.length != count) {
+            scratch.layers = new Layer[count]; scratch.values = new byte[count][TILE_SIZE * TILE_SIZE];
+        }
+        int numeric = layerCache == null ? 0 : layerCache.length;
+        for (int l = 0; l < count; l++) scratch.layers[l] = l < numeric ? layerCache[l] : bitLayerCache[l - numeric];
+        for (int l = 0; l < numeric; l++) {
+            int d = layerCache[l].getDefaultValue();
+            if (d < 0 || d > layerCache[l].getDataSize().maxValue) return false;
+        }
+        tile.copyQuantisedHeights(scratch.heights);
+        for (int i = 0; i < scratch.heights.length; i++) {
+            int h = clamp(minHeight, scratch.heights[i], maxHeight - 1);
+            scratch.heights[i] = h;
+            for (int l = 0; l < numeric; l++) {
+                int value = layerLevelCache[l][h - minHeight];
+                if (value < 0 || value > layerCache[l].getDataSize().maxValue) return false;
+                scratch.values[l][i] = (byte) value;
+            }
+        }
+        copyTerrainRangeOrdinals(scratch.ranges);
+        if (!NativeSlices.fillSimpleThemeTerrainOrdinals(0, 0, TILE_SIZE, TILE_SIZE, minHeight, maxHeight,
+                waterHeight, randomise, beaches, Terrain.BEACHES.ordinal(), seed, scratch.heights,
+                scratch.ranges, scratch.terrains)) return false;
+        // Les tirages restent en Java, dans l'ordre exact X/Y/couche de la boucle historique.
+        for (int x = 0; x < TILE_SIZE; x++) for (int y = 0; y < TILE_SIZE; y++) {
+            int index = x | y << TILE_SIZE_BITS;
+            for (int l = numeric; l < count; l++) {
+                int level = bitLayerLevelCache[l - numeric][scratch.heights[index] - minHeight];
+                scratch.values[l][index] = (byte) ((level > 0 && (level == 15 || random.nextInt(15) < level)) ? 1 : 0);
+            }
+        }
+        tile.applyPreparedTheme(scratch.terrains, scratch.layers, scratch.values);
+        return true;
+    }
+
+    /** Prépare une seule fois le thème à hauteur constante, sans consommer le flux aléatoire partagé. */
+    public final HeightFillPlan prepareHeightFill(int height) {
+        if (getClass() != SimpleTheme.class || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return null;
+        int h = clamp(minHeight, height, maxHeight - 1), count = getFreshTileLayerCount();
+        int range = maxHeight - minHeight, numeric = layerCache == null ? 0 : layerCache.length;
+        if (count > 64 || range <= 0 || range > 1_048_576) return null;
+        Layer[] layers = new Layer[count]; byte[] levels = new byte[count];
+        for (int l = 0; l < count; l++) {
+            Layer layer = l < numeric ? layerCache[l] : bitLayerCache[l - numeric];
+            int value = l < numeric ? layerLevelCache[l][h - minHeight] : bitLayerLevelCache[l - numeric][h - minHeight];
+            if (l >= numeric) {
+                // Une probabilité intermédiaire dépend de l'ordre exact du parcours Java.
+                if (value > 0 && value != 15) return null;
+                value = value == 15 ? 1 : 0;
+            }
+            if (value < 0 || value > layer.getDataSize().maxValue || layer.getDefaultValue() < 0
+                    || layer.getDefaultValue() > layer.getDataSize().maxValue) return null;
+            layers[l] = layer; levels[l] = (byte) value;
+        }
+        byte[] terrain = new byte[TILE_SIZE * TILE_SIZE];
+        if (uniformTerrain != null && !beaches) Arrays.fill(terrain, (byte) uniformTerrain.ordinal());
+        else {
+            for (Terrain t : terrainRangesTable) if (t == null) return null;
+            ThemeEditScratch scratch = THEME_EDIT_SCRATCH.get();
+            if (scratch.ranges.length != range) scratch.ranges = new int[range];
+            Arrays.fill(scratch.heights, h); copyTerrainRangeOrdinals(scratch.ranges);
+            if (!NativeSlices.fillSimpleThemeTerrainOrdinals(0, 0, TILE_SIZE, TILE_SIZE, minHeight, maxHeight,
+                    waterHeight, randomise, beaches, Terrain.BEACHES.ordinal(), seed, scratch.heights,
+                    scratch.ranges, scratch.terrains)) return null;
+            for (int i = 0; i < terrain.length; i++) terrain[i] = (byte) scratch.terrains[i];
+        }
+        return new HeightFillPlan(terrain, layers, levels, uniformTerrain != null && !beaches ? 0 : 1);
+    }
+
+    /** Plan immuable propre à l'action ; aucun scratch de worker n'est retenu lors d'une reprise. */
+    public static final class HeightFillPlan {
+        private final byte[] terrain, values;
+        private final Layer[] layers;
+        private final int preparationCalls;
+        private HeightFillPlan(byte[] terrain, Layer[] layers, byte[] values, int preparationCalls) {
+            this.terrain = terrain; this.layers = layers; this.values = values; this.preparationCalls = preparationCalls;
+        }
+        public int getPreparationCalls() { return preparationCalls; }
+        public void copyTerrain(ByteBuffer data) {
+            data.duplicate().position(64 + TILE_SIZE * TILE_SIZE * 4).put(terrain);
+        }
+        public void apply(Tile tile, ByteBuffer data) {
+            tile.applyHeightThemeFlood(data, layers, values);
+        }
+    }
+
+    /** Snapshot immutable theme inputs for a complete heightmap import action. */
+    public final ImportPlan prepareImport() {
+        int range = maxHeight - minHeight, count = getFreshTileLayerCount();
+        if (getClass() != SimpleTheme.class || range <= 0 || range > 8192 || count > 61) return null;
+        int numeric = layerCache == null ? 0 : layerCache.length;
+        Layer[] layers = new Layer[count]; int[][] levels = new int[count][];
+        Set<Layer> unique = new HashSet<>();
+        for (int l = 0; l < count; l++) {
+            Layer layer = l < numeric ? layerCache[l] : bitLayerCache[l - numeric];
+            Layer.DataSize size = layer.getDataSize();
+            if (!unique.add(layer) || size != Layer.DataSize.BIT && size != Layer.DataSize.BIT_PER_CHUNK
+                    && size != Layer.DataSize.NIBBLE && size != Layer.DataSize.BYTE
+                    || layer.getDefaultValue() < 0 || layer.getDefaultValue() > size.maxValue) return null;
+            int[] table = l < numeric ? layerLevelCache[l] : bitLayerLevelCache[l - numeric];
+            if (table.length != range) return null;
+            if (l < numeric) for (int level : table) if (level < 0 || level > size.maxValue) return null;
+            layers[l] = layer; levels[l] = table.clone();
+        }
+        for (Terrain terrain : terrainRangesTable) if (terrain == null) return null;
+        return new ImportPlan(minHeight, maxHeight, waterHeight, seed,
+                (randomise ? 1 : 0) | (beaches ? 2 : 0), getTerrainRangeOrdinals(), layers, levels);
+    }
+
+    /** Theme metadata and level tables are stable for the duration of an import. */
+    public static final class ImportPlan {
+        private final int min, max, water, flags;
+        private final long seed;
+        private final int[] terrains;
+        private final Layer[] layers;
+        private final int[][] levels;
+        private ImportPlan(int min, int max, int water, long seed, int flags, int[] terrains,
+                           Layer[] layers, int[][] levels) {
+            this.min = min; this.max = max; this.water = water; this.seed = seed; this.flags = flags;
+            this.terrains = terrains; this.layers = layers; this.levels = levels;
+        }
+        public Layer[] getLayers() { return layers.clone(); }
+        public boolean supportsFreshImport() {
+            for (int l = 0; l < layers.length; l++) if (layers[l].dataSize == Layer.DataSize.BIT
+                    || layers[l].dataSize == Layer.DataSize.BIT_PER_CHUNK)
+                for (int level : levels[l]) if (level > 15) return false;
+            return true;
+        }
+        public int bytes() { return 32 + terrains.length * 4 + layers.length * (4 + terrains.length * 4); }
+        public void write(ByteBuffer data, int offset, Layer[] outputLayers) {
+            data.putInt(offset, min).putInt(offset+4, max).putInt(offset+8, water).putInt(offset+12, flags)
+                    .putLong(offset+16, seed).putInt(offset+24, layers.length).putInt(offset+28, 0);
+            int p = offset + 32;
+            for (int terrain : terrains) { data.putInt(p, terrain); p += 4; }
+            for (int l = 0; l < layers.length; l++) {
+                int index = Arrays.asList(outputLayers).indexOf(layers[l]);
+                if (index < 3) throw new IllegalArgumentException("Missing theme output plane");
+                data.putInt(p, index); p += 4;
+                for (int level : levels[l]) { data.putInt(p, level); p += 4; }
+            }
+        }
+    }
+
+    /** Commit the shared random state only after a successful exclusive JNI transaction. */
+    public static boolean processHeightMapImport(ByteBuffer data) {
+        synchronized (random) {
+            data.putLong(104, random.snapshotState());
+            if (!NativeSlices.importHeightMapTile(data)) return false;
+            random.restoreState(data.getLong(104));
+            return true;
+        }
+    }
+
+    /** The complete brush commits the shared stream only after native validation succeeds. */
+    public static boolean processThemedHeightBrush(ByteBuffer data) {
+        synchronized(random) {
+            data.putLong(80,random.snapshotState());
+            if(!NativeSlices.applyThemedHeightBrush(data))return false;
+            random.restoreState(data.getLong(80));return true;
+        }
+    }
+
+    private static final ThreadLocal<ThemeEditScratch> THEME_EDIT_SCRATCH = ThreadLocal.withInitial(ThemeEditScratch::new);
+
+    private static final class ThemeEditScratch {
+        final int[] heights = new int[TILE_SIZE * TILE_SIZE], terrains = new int[TILE_SIZE * TILE_SIZE];
+        int[] ranges = new int[0];
+        Layer[] layers = new Layer[0];
+        byte[][] values = new byte[0][];
+    }
+
+    /**
+     * Apply the theme to a freshly constructed tile whose layer values have
+     * not yet been written. The caller must not use this for an existing tile.
+     */
+    public void applyToFreshTile(Tile tile, int x, int y) {
+        apply(tile, x, y, true);
+    }
+
+    /** Resolves the terrain for a fresh tile when its quantised height is already available. */
+    public final Terrain getTerrainForFreshTile(Tile tile, int x, int y, int quantisedHeight) {
+        final int height = clamp(minHeight, quantisedHeight, maxHeight - 1);
+        final Terrain terrain = getTerrain(x, y, height);
+        if (terrain == null) {
+            throw new NullPointerException("apply(" + tile + ", " + x + ", " + y
+                    + ": getTerrain() returned null for " + this);
+        }
+        return terrain;
+    }
+
+    /** Applies cached layers after terrain has been batch-initialised on a fresh tile. */
+    public final void applyLayersToFreshTile(Tile tile, int x, int y, int quantisedHeight) {
+        final int height = clamp(minHeight, quantisedHeight, maxHeight - 1);
+        applyLayers(tile, x, y, height, true);
+    }
+
+    /**
+     * Applies deterministic cached layers to a fresh tile in bulk. Returns
+     * false without changing the tile when a bit layer would consume the
+     * shared random stream, so the caller can preserve the original cell order.
+     */
+    public final boolean applyDeterministicLayersToFreshTile(Tile tile, int[] quantisedHeights,
+                                                             int lowestHeight, int highestHeight,
+                                                             byte[] layerScratch) {
+        return applyDeterministicLayersToFreshTile(tile, quantisedHeights, lowestHeight,
+                highestHeight, layerScratch, null);
+    }
+
+    /** Applies deterministic layers, optionally using caller-owned native output scratch. */
+    public final boolean applyDeterministicLayersToFreshTile(Tile tile, int[] quantisedHeights,
+                                                             int lowestHeight, int highestHeight,
+                                                             byte[] layerScratch,
+                                                             byte[] nativeLayerScratch) {
+        final int area = TILE_SIZE * TILE_SIZE;
+        if ((quantisedHeights == null) || (quantisedHeights.length != area)
+                || (layerScratch == null) || (layerScratch.length != area)) {
+            throw new IllegalArgumentException("Expected one height and scratch value for every tile cell");
+        }
+        final int firstHeight = clamp(minHeight, lowestHeight, maxHeight - 1);
+        final int lastHeight = clamp(minHeight, highestHeight, maxHeight - 1);
+        if (firstHeight > lastHeight) {
+            throw new IllegalArgumentException("Tile height range does not overlap the theme height range");
+        }
+
+        if (layerCache != null) {
+            for (int layerIndex = 0; layerIndex < layerCache.length; layerIndex++) {
+                final int maxValue = layerCache[layerIndex].getDataSize().maxValue;
+                final int[] levels = layerLevelCache[layerIndex];
+                for (int height = firstHeight; height <= lastHeight; height++) {
+                    final int level = levels[height - minHeight];
+                    if ((level < 0) || (level > maxValue)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        if (bitLayerCache != null) {
+            for (int layerIndex = 0; layerIndex < bitLayerCache.length; layerIndex++) {
+                final int[] levels = bitLayerLevelCache[layerIndex];
+                for (int height = firstHeight; height <= lastHeight; height++) {
+                    final int level = levels[height - minHeight];
+                    if ((level > 0) && (level != 15)) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        if (applyNativeLayerValuesToFreshTile(tile, quantisedHeights, firstHeight, lastHeight,
+                nativeLayerScratch, true)) {
+            return true;
+        }
+
+        if (layerCache != null) {
+            for (int layerIndex = 0; layerIndex < layerCache.length; layerIndex++) {
+                final int[] levels = layerLevelCache[layerIndex];
+                for (int index = 0; index < area; index++) {
+                    final int height = clamp(minHeight, quantisedHeights[index], maxHeight - 1);
+                    layerScratch[index] = (byte) levels[height - minHeight];
+                }
+                tile.initializeLayerValues(layerCache[layerIndex], layerScratch);
+            }
+        }
+        if (bitLayerCache != null) {
+            for (int layerIndex = 0; layerIndex < bitLayerCache.length; layerIndex++) {
+                final int[] levels = bitLayerLevelCache[layerIndex];
+                for (int index = 0; index < area; index++) {
+                    final int height = clamp(minHeight, quantisedHeights[index], maxHeight - 1);
+                    layerScratch[index] = (byte) ((levels[height - minHeight] == 15) ? 1 : 0);
+                }
+                tile.initializeLayerValues(bitLayerCache[layerIndex], layerScratch);
+            }
+        }
+        return true;
+    }
+
+    /** Initializes deterministic non-bit layers when random bit layers need a per-cell pass. */
+    public final boolean applyDeterministicValueLayersToFreshTile(Tile tile, int[] quantisedHeights,
+                                                                  int lowestHeight, int highestHeight,
+                                                                  byte[] layerScratch) {
+        return applyDeterministicValueLayersToFreshTile(tile, quantisedHeights, lowestHeight,
+                highestHeight, layerScratch, null);
+    }
+
+    /** Applies deterministic value layers, optionally using caller-owned native output scratch. */
+    public final boolean applyDeterministicValueLayersToFreshTile(Tile tile, int[] quantisedHeights,
+                                                                  int lowestHeight, int highestHeight,
+                                                                  byte[] layerScratch,
+                                                                  byte[] nativeLayerScratch) {
+        final int area = TILE_SIZE * TILE_SIZE;
+        if ((quantisedHeights == null) || (quantisedHeights.length != area)
+                || (layerScratch == null) || (layerScratch.length != area)) {
+            throw new IllegalArgumentException("Expected one height and scratch value for every tile cell");
+        }
+        final int firstHeight = clamp(minHeight, lowestHeight, maxHeight - 1);
+        final int lastHeight = clamp(minHeight, highestHeight, maxHeight - 1);
+        if (firstHeight > lastHeight) {
+            throw new IllegalArgumentException("Tile height range does not overlap the theme height range");
+        }
+        if (layerCache != null) {
+            for (int layerIndex = 0; layerIndex < layerCache.length; layerIndex++) {
+                final int maxValue = layerCache[layerIndex].getDataSize().maxValue;
+                final int[] levels = layerLevelCache[layerIndex];
+                for (int height = firstHeight; height <= lastHeight; height++) {
+                    final int level = levels[height - minHeight];
+                    if ((level < 0) || (level > maxValue)) {
+                        return false;
+                    }
+                }
+            }
+            if (applyNativeLayerValuesToFreshTile(tile, quantisedHeights, firstHeight, lastHeight,
+                    nativeLayerScratch, false)) {
+                return true;
+            }
+            for (int layerIndex = 0; layerIndex < layerCache.length; layerIndex++) {
+                final int[] levels = layerLevelCache[layerIndex];
+                for (int index = 0; index < area; index++) {
+                    final int height = clamp(minHeight, quantisedHeights[index], maxHeight - 1);
+                    layerScratch[index] = (byte) levels[height - minHeight];
+                }
+                tile.initializeLayerValues(layerCache[layerIndex], layerScratch);
+            }
+        }
+        return true;
+    }
+
+    /** Number of cached output planes produced for a complete fresh-tile theme application. */
+    public final int getFreshTileLayerCount() {
+        return ((layerCache != null) ? layerCache.length : 0)
+                + ((bitLayerCache != null) ? bitLayerCache.length : 0);
+    }
+
+    private boolean applyNativeLayerValuesToFreshTile(Tile tile, int[] quantisedHeights,
+                                                       int firstHeight, int lastHeight,
+                                                       byte[] nativeLayerScratch,
+                                                       boolean includeBitLayers) {
+        final int valueLayerCount = (layerCache != null) ? layerCache.length : 0;
+        final int bitLayerCount = includeBitLayers && (bitLayerCache != null)
+                ? bitLayerCache.length : 0;
+        final int layerCount = valueLayerCount + bitLayerCount;
+        final int area = TILE_SIZE * TILE_SIZE;
+        if ((layerCount == 0) || (nativeLayerScratch == null)
+                || (nativeLayerScratch.length < (long) area * layerCount)) {
+            return false;
+        }
+        final int[][] valueTables = (layerLevelCache != null) ? layerLevelCache : EMPTY_LEVEL_TABLES;
+        final int[][] bitTables = (bitLayerCount > 0) ? bitLayerLevelCache : EMPTY_LEVEL_TABLES;
+        if (!NativeSlices.fillSimpleThemeLayerValues(TILE_SIZE, TILE_SIZE,
+                minHeight, maxHeight, firstHeight, lastHeight, quantisedHeights,
+                valueTables, bitTables, nativeLayerScratch)) {
+            return false;
+        }
+        for (int layerIndex = 0; layerIndex < valueLayerCount; layerIndex++) {
+            tile.initializeLayerValues(layerCache[layerIndex], nativeLayerScratch, layerIndex * area);
+        }
+        for (int layerIndex = 0; layerIndex < bitLayerCount; layerIndex++) {
+            tile.initializeLayerValues(bitLayerCache[layerIndex], nativeLayerScratch,
+                    (valueLayerCount + layerIndex) * area);
+        }
+        return true;
+    }
+
+    /** Applies cached bit layers in the original per-cell order on a fresh tile. */
+    public final void applyBitLayersToFreshTile(Tile tile, int x, int y, int quantisedHeight) {
+        if (bitLayerCache == null) {
+            return;
+        }
+        final int height = clamp(minHeight, quantisedHeight, maxHeight - 1);
+        for (int layerIndex = 0; layerIndex < bitLayerCache.length; layerIndex++) {
+            final int level = bitLayerLevelCache[layerIndex][height - minHeight];
+            final boolean set = (level > 0) && ((level == 15) || (random.nextInt(15) < level));
+            if (set) {
+                tile.setBitLayerValue(bitLayerCache[layerIndex], x, y, true);
+            }
+        }
+    }
+
+    /** Number of cached bit-layer planes on this theme. */
+    public final int getFreshTileBitLayerCount() {
+        return (bitLayerCache != null) ? bitLayerCache.length : 0;
+    }
+
+    /**
+     * Applies random bit layers from a fresh tile in bulk. Java owns the shared
+     * random stream and records draws in the original x/y/layer order; Rust
+     * maps those draws to bit planes when available. The fallback uses the
+     * same recorded draws and Tile's normal copy-on-write initializer.
+     */
+    public final boolean applyRandomBitLayersToFreshTile(Tile tile, int[] quantisedHeights,
+                                                          byte[] drawsAndOutput) {
+        if (bitLayerCache == null) {
+            return true;
+        }
+        final int area = TILE_SIZE * TILE_SIZE;
+        final long requiredLength = (long) area * bitLayerCache.length;
+        if ((quantisedHeights == null) || (quantisedHeights.length != area)
+                || (drawsAndOutput == null) || (requiredLength > drawsAndOutput.length)) {
+            return false;
+        }
+
+        for (int x = 0; x < TILE_SIZE; x++) {
+            for (int y = 0; y < TILE_SIZE; y++) {
+                final int index = x | (y << TILE_SIZE_BITS);
+                final int height = clamp(minHeight, quantisedHeights[index], maxHeight - 1);
+                for (int layerIndex = 0; layerIndex < bitLayerCache.length; layerIndex++) {
+                    final int level = bitLayerLevelCache[layerIndex][height - minHeight];
+                    drawsAndOutput[layerIndex * area + index] =
+                            (byte) (((level > 0) && (level < 15)) ? random.nextInt(15) : 0xFF);
+                }
+            }
+        }
+
+        if (!NativeSlices.fillSimpleThemeRandomBitLayers(TILE_SIZE, TILE_SIZE,
+                minHeight, maxHeight, quantisedHeights, bitLayerLevelCache, drawsAndOutput)) {
+            for (int layerIndex = 0; layerIndex < bitLayerCache.length; layerIndex++) {
+                final int[] levels = bitLayerLevelCache[layerIndex];
+                final int outputStart = layerIndex * area;
+                for (int index = 0; index < area; index++) {
+                    final int height = clamp(minHeight, quantisedHeights[index], maxHeight - 1);
+                    final int level = levels[height - minHeight];
+                    final int draw = drawsAndOutput[outputStart + index] & 0xFF;
+                    drawsAndOutput[outputStart + index] = (byte) ((level > 0)
+                            && ((level == 15) || (draw < level)) ? 1 : 0);
+                }
+            }
+        }
+        for (int layerIndex = 0; layerIndex < bitLayerCache.length; layerIndex++) {
+            tile.initializeLayerValues(bitLayerCache[layerIndex], drawsAndOutput, layerIndex * area);
+        }
+        return true;
+    }
+
+    private void apply(Tile tile, int x, int y, boolean freshTile) {
+        if ((getClass() == SimpleTheme.class) && (uniformTerrain != null) && (! beaches)
+                && (layerCache == null) && (bitLayerCache == null)) {
+            if (freshTile ? uniformTerrain.ordinal() != 0 : tile.getTerrain(x, y) != uniformTerrain) {
+                tile.setTerrain(x, y, uniformTerrain);
+            }
+            return;
+        }
         // height has been observed to be far out of bounds in the wild, so restrict it to min- and maxHeight:
         // TODO: determine why this happens and fix the root cause
         final int height = clamp(minHeight, tile.getIntHeight(x, y), maxHeight - 1);
@@ -63,13 +527,18 @@ public class SimpleTheme implements Theme, Cloneable {
         if (terrain == null) {
             throw new NullPointerException("apply(" + tile + ", " + x + ", " + y + ": getTerrain() returned null for " + this);
         }
-        if (tile.getTerrain(x, y) != terrain) {
+        if (freshTile ? terrain.ordinal() != 0 : tile.getTerrain(x, y) != terrain) {
             tile.setTerrain(x, y, terrain);
         }
+        applyLayers(tile, x, y, height, freshTile);
+    }
+
+    private void applyLayers(Tile tile, int x, int y, int height, boolean freshTile) {
         if (layerCache != null) {
             for (int i = 0; i < layerCache.length; i++) {
                 final int level = layerLevelCache[i][height - minHeight];
-                if (level != tile.getLayerValue(layerCache[i], x, y)) {
+                if (freshTile ? level != layerCache[i].getDefaultValue()
+                        : level != tile.getLayerValue(layerCache[i], x, y)) {
                     tile.setLayerValue(layerCache[i], x, y, level);
                 }
             }
@@ -78,7 +547,7 @@ public class SimpleTheme implements Theme, Cloneable {
             for (int i = 0; i < bitLayerCache.length; i++) {
                 final int level = bitLayerLevelCache[i][height - minHeight];
                 final boolean set = (level > 0) && ((level == 15) || (random.nextInt(15) < level));
-                if (set != tile.getBitLayerValue(bitLayerCache[i], x, y)) {
+                if (freshTile ? set : set != tile.getBitLayerValue(bitLayerCache[i], x, y)) {
                     tile.setBitLayerValue(bitLayerCache[i], x, y, set);
                 }
             }
@@ -96,10 +565,29 @@ public class SimpleTheme implements Theme, Cloneable {
         perlinNoise = new PerlinNoise(seed);
     }
 
+    @Override
     public final SortedMap<Integer, Terrain> getTerrainRanges() {
         return terrainRanges;
     }
 
+    /** Returns a copy of the terrain lookup table as stable enum ordinals. */
+    public final int[] getTerrainRangeOrdinals() {
+        final int[] ordinals = new int[terrainRangesTable.length];
+        copyTerrainRangeOrdinals(ordinals);
+        return ordinals;
+    }
+
+    /** Copies the current terrain lookup table into a reusable caller-owned buffer. */
+    public final void copyTerrainRangeOrdinals(final int[] ordinals) {
+        if ((ordinals == null) || (ordinals.length != terrainRangesTable.length)) {
+            throw new IllegalArgumentException("Expected one ordinal for every theme height");
+        }
+        for (int i = 0; i < terrainRangesTable.length; i++) {
+            ordinals[i] = terrainRangesTable[i].ordinal();
+        }
+    }
+
+    @Override
     public final void setTerrainRanges(SortedMap<Integer, Terrain> terrainRanges) {
         if (terrainRanges == null) {
             throw new NullPointerException("terrainRanges");
@@ -124,6 +612,7 @@ public class SimpleTheme implements Theme, Cloneable {
         updateTerrainRangesTable();
     }
 
+    @Override
     public final boolean isRandomise() {
         return randomise;
     }
@@ -142,6 +631,7 @@ public class SimpleTheme implements Theme, Cloneable {
         this.waterHeight = waterHeight;
     }
 
+    @Override
     public final boolean isBeaches() {
         return beaches;
     }
@@ -169,6 +659,7 @@ public class SimpleTheme implements Theme, Cloneable {
             waterHeight = clamp(minHeight, transform.transformHeight(waterHeight), maxHeight - 1);
             final Terrain[] oldTerrainRangesTable = terrainRangesTable;
             terrainRangesTable = new Terrain[maxHeight - minHeight];
+            terrainRangesTableExternallyMutable = false;
             if (terrainRanges != null) {
                 SortedMap<Integer, Terrain> oldTerrainRanges = this.terrainRanges;
                 terrainRanges = new TreeMap<>();
@@ -196,6 +687,7 @@ public class SimpleTheme implements Theme, Cloneable {
                         terrainRangesTable[i] = oldTerrainRangesTable[oldIndex];
                     }
                 }
+                updateUniformTerrainCache();
             }
             if (layerMap != null) {
                 final Map<Filter, Layer> newLayerMap = new HashMap<>();
@@ -216,15 +708,18 @@ public class SimpleTheme implements Theme, Cloneable {
         }
     }
 
+    @Override
     public final Map<Filter, Layer> getLayerMap() {
         return layerMap;
     }
 
+    @Override
     public final void setLayerMap(Map<Filter, Layer> layerMap) {
         this.layerMap = layerMap;
         initCaches();
     }
 
+    @Override
     public final Map<Layer, Integer> getDiscreteValues() {
         return discreteValues;
     }
@@ -242,6 +737,8 @@ public class SimpleTheme implements Theme, Cloneable {
                 clone.terrainRanges = new TreeMap<>(terrainRanges);
             }
             clone.terrainRangesTable = terrainRangesTable.clone();
+            clone.terrainRangesTableExternallyMutable = false;
+            clone.updateUniformTerrainCache();
             if (layerMap != null) {
                 clone.setLayerMap(new HashMap<>(layerMap));
             }
@@ -267,9 +764,12 @@ public class SimpleTheme implements Theme, Cloneable {
                 '}';
     }
 
-    protected Terrain getTerrain(int x, int y, int height) {
+    @Override
+    public Terrain getTerrain(int x, int y, int height) {
         if (beaches && (height >= (waterHeight - 2)) && (height <= (waterHeight + 1))) {
             return Terrain.BEACHES;
+        } else if (uniformTerrain != null) {
+            return uniformTerrain;
         } else {
             if (isRandomise()) {
                 height += perlinNoise.getPerlinNoise(x / SMALL_BLOBS, y / SMALL_BLOBS, height / SMALL_BLOBS) * 5;
@@ -299,6 +799,24 @@ public class SimpleTheme implements Theme, Cloneable {
         for (int i = minHeight; i < maxHeight; i++) {
             terrainRangesTable[i - minHeight] = terrainRanges.get(terrainRanges.headMap(i).lastKey());
         }
+        updateUniformTerrainCache();
+    }
+
+    private void updateUniformTerrainCache() {
+        uniformTerrain = null;
+        if (terrainRangesTableExternallyMutable || (terrainRangesTable.length == 0)) {
+            return;
+        }
+        final Terrain firstTerrain = terrainRangesTable[0];
+        if (firstTerrain == null) {
+            return;
+        }
+        for (int i = 1; i < terrainRangesTable.length; i++) {
+            if (terrainRangesTable[i] != firstTerrain) {
+                return;
+            }
+        }
+        uniformTerrain = firstTerrain;
     }
 
     private void initCaches() {
@@ -404,6 +922,7 @@ public class SimpleTheme implements Theme, Cloneable {
                 terrainRangesTable[i] = Terrain.BARE_GRASS;
             }
         }
+        updateUniformTerrainCache();
     }
 
     public static SimpleTheme createSingleTerrain(Terrain terrain, int minHeight, int maxHeight, int waterHeight) {
@@ -434,13 +953,16 @@ public class SimpleTheme implements Theme, Cloneable {
     private SortedMap<Integer, Terrain> terrainRanges;
     private boolean randomise, beaches;
     private Terrain[] terrainRangesTable;
+    private transient Terrain uniformTerrain;
+    private transient boolean terrainRangesTableExternallyMutable;
     private Map<Filter, Layer> layerMap;
     private transient PerlinNoise perlinNoise = new PerlinNoise(0);
     private Layer[] layerCache, bitLayerCache;
     private int[][] layerLevelCache, bitLayerLevelCache;
     private Map<Layer, Integer> discreteValues;
 
-    private static final Random random = new Random();
+    private static final SnapshotRandom random = new SnapshotRandom();
+    private static final int[][] EMPTY_LEVEL_TABLES = new int[0][];
     private static final Logger logger = LoggerFactory.getLogger(SimpleTheme.class);
     private static final long serialVersionUID = 1L;
 }

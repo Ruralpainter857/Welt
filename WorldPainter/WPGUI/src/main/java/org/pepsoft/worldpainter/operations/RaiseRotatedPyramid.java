@@ -8,6 +8,7 @@ package org.pepsoft.worldpainter.operations;
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.Terrain;
 import org.pepsoft.worldpainter.WorldPainter;
+import org.pepsoft.worldpainter.PyramidAccess;
 
 import javax.swing.*;
 
@@ -34,11 +35,14 @@ public class RaiseRotatedPyramid extends MouseOrTabletOperation {
         float height = dimension.getHeightAt(centreX, centreY);
         dimension.setEventsInhibited(true);
         try {
+            int maxR = dimension.getMaxHeight() - dimension.getMinHeight();
+            if (PyramidAccess.tryApply(dimension, centreX, centreY, true)) {
+                return;
+            }
             if (height < (dimension.getMaxHeight() - 1.5f)) {
                 dimension.setHeightAt(centreX, centreY, height + 1);
             }
             dimension.setTerrainAt(centreX, centreY, Terrain.SANDSTONE);
-            int maxR = dimension.getMaxHeight() - dimension.getMinHeight();
             for (int r = 1; r < maxR; r++) {
                 if (! raiseRing(dimension, centreX, centreY, r, height--)) {
                     break;

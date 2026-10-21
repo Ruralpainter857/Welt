@@ -5,10 +5,13 @@
 package org.pepsoft.worldpainter.operations;
 
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.FluidBrushAccess;
 import org.pepsoft.worldpainter.HeightMapTileFactory;
 import org.pepsoft.worldpainter.TileFactory;
 import org.pepsoft.worldpainter.WorldPainterView;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 
 import javax.swing.*;
 
@@ -45,16 +48,19 @@ public class Sponge extends AbstractBrushOperation {
         dimension.setEventsInhibited(true);
         try {
             final int radius = getEffectiveRadius();
-            for (int dx = -radius; dx <= radius; dx++) {
-                for (int dy = -radius; dy <= radius; dy++) {
-                    if (getStrength(centreX, centreY, centreX + dx, centreY + dy) != 0f) {
-                        if (inverse) {
-                            if (waterHeight != -1) {
-                                dimension.setWaterLevelAt(centreX + dx, centreY + dy, waterHeight);
-                                dimension.setBitLayerValueAt(FloodWithLava.INSTANCE, centreX + dx, centreY + dy, false);
+            if (!applyNativeSponge(dimension, centreX, centreY, radius,
+                    inverse, waterHeight)) {
+                for (int dx = -radius; dx <= radius; dx++) {
+                    for (int dy = -radius; dy <= radius; dy++) {
+                        if (getStrength(centreX, centreY, centreX + dx, centreY + dy) != 0f) {
+                            if (inverse) {
+                                if (waterHeight != -1) {
+                                    dimension.setWaterLevelAt(centreX + dx, centreY + dy, waterHeight);
+                                    dimension.setBitLayerValueAt(FloodWithLava.INSTANCE, centreX + dx, centreY + dy, false);
+                                }
+                            } else {
+                                dimension.setWaterLevelAt(centreX + dx, centreY + dy, minHeight);
                             }
-                        } else {
-                            dimension.setWaterLevelAt(centreX + dx, centreY + dy, minHeight);
                         }
                     }
                 }
@@ -64,5 +70,35 @@ public class Sponge extends AbstractBrushOperation {
         }
     }
 
+    private boolean applyNativeSponge(Dimension dimension, int centreX, int centreY,
+                                      int radius, boolean inverse, int waterHeight) {
+        final long diameterLong = 2L * radius + 1L;
+        if (radius < 0 || diameterLong > 255L || !Native.isGenEnabled()
+                || !NativeLoader.areSlicesAvailable()) {
+            return false;
+        }
+        final int diameter = (int) diameterLong;
+        final int area = diameter * diameter;
+        ensureNativeBuffers(area);
+
+        int index = 0;
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dy = -radius; dy <= radius; dy++) {
+                nativeStrengths[index++] = getStrength(
+                        centreX, centreY, centreX + dx, centreY + dy);
+            }
+        }
+        FluidBrushAccess.apply(dimension, centreX - radius, centreY - radius,
+                diameter, diameter, nativeStrengths, inverse, waterHeight);
+        return true;
+    }
+
+    private void ensureNativeBuffers(int area) {
+        if (nativeStrengths == null || nativeStrengths.length != area) {
+            nativeStrengths = new float[area];
+        }
+    }
+
     private static final JPanel OPTIONS_PANEL = new StandardOptionsPanel("Sponge", "<ul><li>Left-click to remove water and lava<li>Right-click to reset to the default fluid type and height</ul>");
+    private float[] nativeStrengths;
 }

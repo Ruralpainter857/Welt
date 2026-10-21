@@ -1,0 +1,53 @@
+# golden Welt v1 — exemple de référence (G7, docs/welt/golden-tools/example-golden.txt)
+# Format : kind seed coords... value — value = bits bruts hexadécimaux
+# (Float.floatToRawIntBits / Double.doubleToRawDoubleBits / Integer.toHexString)
+# Protocole : welt-native/golden/README.md — tolérance AUCUNE (charte §5)
+# Contenu : PerlinNoise 2D seed 0, grille 5x5 (x,y dans {0.0, 0.5, 1.0, 1.5, 2.0})
+#           + java.util.Random seed 0, 20 x nextInt()
+# Classes de vérité : org.pepsoft.util.PerlinNoise (Utils-2.2.0.jar), java.util.Random (JDK)
+# Revérifier : java -Xint -cp "<build>;docs/welt/reference/Utils-2.2.0.jar" VerifyGolden <ce-fichier>
+perlin2d 0 0.0 0.0 00000000
+perlin2d 0 0.5 0.0 be000000
+perlin2d 0 1.0 0.0 00000000
+perlin2d 0 1.5 0.0 3e800000
+perlin2d 0 2.0 0.0 00000000
+perlin2d 0 0.0 0.5 00000000
+perlin2d 0 0.5 0.5 be400000
+perlin2d 0 1.0 0.5 be800000
+perlin2d 0 1.5 0.5 3e400000
+perlin2d 0 2.0 0.5 3e800000
+perlin2d 0 0.0 1.0 00000000
+perlin2d 0 0.5 1.0 00000000
+perlin2d 0 1.0 1.0 00000000
+perlin2d 0 1.5 1.0 3e000000
+perlin2d 0 2.0 1.0 00000000
+perlin2d 0 0.0 1.5 be800000
+perlin2d 0 0.5 1.5 3d800000
+perlin2d 0 1.0 1.5 3e800000
+perlin2d 0 1.5 1.5 3e400000
+perlin2d 0 2.0 1.5 00000000
+perlin2d 0 0.0 2.0 00000000
+perlin2d 0 0.5 2.0 3e000000
+perlin2d 0 1.0 2.0 00000000
+perlin2d 0 1.5 2.0 00000000
+perlin2d 0 2.0 2.0 00000000
+rand_next_int 0 0 bb20b460
+rand_next_int 0 1 d4d95138
+rand_next_int 0 2 3d93cb7a
+rand_next_int 0 3 9b3970be
+rand_next_int 0 4 a32dc9f6
+rand_next_int 0 5 4f1df03a
+rand_next_int 0 6 8ce970b7
+rand_next_int 0 7 1df42503
+rand_next_int 0 8 98f8ba3e
+rand_next_int 0 9 c812a76d
+rand_next_int 0 10 554dcd2b
+rand_next_int 0 11 40b5f04b
+rand_next_int 0 12 629bc223
+rand_next_int 0 13 9cefe94d
+rand_next_int 0 14 fc1e932f
+rand_next_int 0 15 fb9a0f58
+rand_next_int 0 16 e1121b08
+rand_next_int 0 17 05e8b107
+rand_next_int 0 18 f0f5b4f2
+rand_next_int 0 19 2d0cd0f1

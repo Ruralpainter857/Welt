@@ -18,6 +18,12 @@ public abstract class RadialBrush extends SymmetricBrush {
         super(name, brushShape, rotationallySymmetric);
     }
     
+    /** Built-in radial functions depend on radius and coordinates only. */
+    protected RadialBrush(String name, BrushShape brushShape, boolean rotationallySymmetric,
+                          boolean stableShape) {
+        super(name, brushShape, rotationallySymmetric, stableShape);
+    }
+
     @Override
     protected final float calcStrength(int dx, int dy) {
         int radius = getRadius();

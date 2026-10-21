@@ -1,0 +1,6 @@
+[package]
+name = "welt-objects"
+description = "Grouped custom-object format processing for Welt"
+license = "GPL-3.0"
+version.workspace = true
+edition.workspace = true

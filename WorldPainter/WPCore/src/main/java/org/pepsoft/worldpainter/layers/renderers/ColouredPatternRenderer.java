@@ -39,6 +39,16 @@ public class ColouredPatternRenderer implements NibbleLayerRenderer {
             return underlyingColour;
         }
     }
+
+    public final int getColour() { return colour; }
+
+    /** Current pattern in world-coordinate order, including its offsets. */
+    public final long getPatternMask() {
+        long mask = 0L;
+        for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++)
+            if (pattern[(y + dy) & 7][(x + dx) & 7]) mask |= 1L << (x + y * 8);
+        return mask;
+    }
     
     private final int colour, dx, dy;
     private final boolean[][]pattern;

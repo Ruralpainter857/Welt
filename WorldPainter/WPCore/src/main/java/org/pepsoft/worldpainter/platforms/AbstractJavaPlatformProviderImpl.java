@@ -20,6 +20,7 @@ abstract class AbstractJavaPlatformProviderImpl {
      * Create an existing chunk from map data.
      */
     abstract NBTChunk createChunk(Map<DataType, Tag> tags, int minHeight, int maxHeight, boolean readOnly);
+    NBTChunk createChunk(Map<DataType,Tag> tags,int minHeight,int maxHeight,boolean readOnly,boolean packedImport){return createChunk(tags,minHeight,maxHeight,readOnly);}
 
     /**
      * Create a new, empty chunk.

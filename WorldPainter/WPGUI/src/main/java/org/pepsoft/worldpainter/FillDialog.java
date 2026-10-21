@@ -307,6 +307,10 @@ public class FillDialog extends WPDialogWithPaintSelection implements Listener, 
 
     private void fillWithTerrain(ProgressReceiver progressReceiver) throws OperationCancelled {
         final Terrain terrain = (Terrain) comboBoxTerrain.getSelectedItem();
+        if (filter == null) {
+            dimension.visitTilesForEditing().andDo(tile -> tile.fillTerrain(terrain), progressReceiver);
+            return;
+        }
         dimension.visitTilesForEditing().forFilter(filter).andDo(tile -> {
             final int worldTileX = tile.getX() << TILE_SIZE_BITS;
             final int worldTileY = tile.getY() << TILE_SIZE_BITS;
@@ -329,6 +333,12 @@ public class FillDialog extends WPDialogWithPaintSelection implements Listener, 
 
     private void fillWithLayer(ProgressReceiver progressReceiver) throws UnsupportedOperationException, OperationCancelled {
         Layer layer = (Layer) comboBoxSetLayer.getSelectedItem();
+        if (filter == null && (layer.dataSize == Layer.DataSize.NIBBLE || layer.dataSize == Layer.DataSize.BIT
+                || layer.dataSize == Layer.DataSize.BIT_PER_CHUNK)) {
+            int minimum = layer.dataSize == Layer.DataSize.NIBBLE ? Math.round((sliderLayerValue.getValue() + 2) / 6.667f) : 1;
+            dimension.visitTilesForEditing().andDo(tile -> tile.raiseLayerTo(layer, minimum), progressReceiver);
+            return;
+        }
         if (layer.getDataSize() == Layer.DataSize.NIBBLE) {
             int baseLayerValue = Math.round((sliderLayerValue.getValue() + 2) / 6.667f);
             dimension.visitTilesForEditing().forFilter(filter).andDo(tile -> {
@@ -461,6 +471,11 @@ public class FillDialog extends WPDialogWithPaintSelection implements Listener, 
 
     private void invertLayer(ProgressReceiver progressReceiver) throws UnsupportedOperationException, OperationCancelled {
         Layer layer = (Layer) comboBoxInvertLayer.getSelectedItem();
+        if (filter == null && (layer.dataSize == Layer.DataSize.NIBBLE || layer.dataSize == Layer.DataSize.BIT
+                || layer.dataSize == Layer.DataSize.BIT_PER_CHUNK)) {
+            dimension.visitTilesForEditing().andDo(tile -> tile.invertLayer(layer), progressReceiver);
+            return;
+        }
         if (layer.getDataSize() == Layer.DataSize.NIBBLE) {
             dimension.visitTilesForEditing().forFilter(filter).andDo(tile -> {
                 final int worldTileX = tile.getX() << TILE_SIZE_BITS;
@@ -525,6 +540,10 @@ public class FillDialog extends WPDialogWithPaintSelection implements Listener, 
 
     private void fillWithBiome(ProgressReceiver progressReceiver) throws OperationCancelled {
         int biome = (Integer) comboBoxBiome.getSelectedItem();
+        if (filter == null) {
+            dimension.visitTilesForEditing().andDo(tile -> tile.assignLayerValue(Biome.INSTANCE, biome), progressReceiver);
+            return;
+        }
         dimension.visitTilesForEditing().forFilter(filter).andDo(tile -> {
             final int worldTileX = tile.getX() << TILE_SIZE_BITS;
             final int worldTileY = tile.getY() << TILE_SIZE_BITS;
@@ -567,13 +586,7 @@ public class FillDialog extends WPDialogWithPaintSelection implements Listener, 
     private void makeAutoBiomesPermanent(ProgressReceiver progressReceiver) throws OperationCancelled {
         dimension.visitTilesForEditing().forFilter(filter).andDo(tile -> {
             if (filter == null) {
-                for (int x = 0; x < TILE_SIZE; x++) {
-                    for (int y = 0; y < TILE_SIZE; y++) {
-                        if (tile.getLayerValue(Biome.INSTANCE, x, y) == 255) {
-                            tile.setLayerValue(Biome.INSTANCE, x, y, dimension.getAutoBiome(tile, x, y, BIOME_PLAINS));
-                        }
-                    }
-                }
+                dimension.makeAutoBiomesPermanent(tile);
             } else {
                 final int worldTileX = tile.getX() << TILE_SIZE_BITS;
                 final int worldTileY = tile.getY() << TILE_SIZE_BITS;
@@ -594,6 +607,10 @@ public class FillDialog extends WPDialogWithPaintSelection implements Listener, 
         if (tileFactory instanceof HeightMapTileFactory) {
             int waterLevel = ((HeightMapTileFactory) tileFactory).getWaterHeight();
             boolean floodWithLava = ((HeightMapTileFactory) tileFactory).isFloodWithLava();
+            if (filter == null) {
+                dimension.visitTilesForEditing().andDo(tile -> tile.resetFluids(waterLevel, floodWithLava), progressReceiver);
+                return;
+            }
             dimension.visitTilesForEditing().forFilter(filter).andDo(tile -> {
                 final int worldTileX = tile.getX() << TILE_SIZE_BITS;
                 final int worldTileY = tile.getY() << TILE_SIZE_BITS;
@@ -643,6 +660,9 @@ public class FillDialog extends WPDialogWithPaintSelection implements Listener, 
 
     private void resetTerrain(ProgressReceiver progressReceiver) throws OperationCancelled {
         dimension.visitTilesForEditing().forFilter(filter).andDo(tile -> {
+            if (filter == null && dimension.getClass() == Dimension.class
+                    && dimension.getTileFactory() instanceof HeightMapTileFactory
+                    && ((HeightMapTileFactory) dimension.getTileFactory()).tryApplyTheme(tile)) return;
             final int worldTileX = tile.getX() << TILE_SIZE_BITS;
             final int worldTileY = tile.getY() << TILE_SIZE_BITS;
             for (int x = 0; x < TILE_SIZE; x++) {
@@ -819,6 +839,19 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
     }
 
     private void changeTerrainHeight(ProgressReceiver progressReceiver) throws OperationCancelled {
+        if (filter == null) {
+            TerrainHeightOperation operation = switch ((String) comboBoxTerrainOperation.getSelectedItem()) {
+                case "raise terrain height to" -> TerrainHeightOperation.RAISE_TO;
+                case "raise terrain height by" -> TerrainHeightOperation.RAISE_BY;
+                case "lower terrain height to" -> TerrainHeightOperation.LOWER_TO;
+                case "lower terrain height by" -> TerrainHeightOperation.LOWER_BY;
+                default -> TerrainHeightOperation.SET;
+            };
+            float value = (Integer) spinnerTerrainHeight.getValue();
+            dimension.visitTilesForEditing().andDo(tile -> tile.editTerrainHeight(operation, value,
+                    dimension.getMinHeight(), dimension.getMaxHeight() - 1), progressReceiver);
+            return;
+        }
         dimension.visitTilesForEditing().forFilter(filter).andDo(tile -> {
             final int worldTileX = tile.getX() << TILE_SIZE_BITS;
             final int worldTileY = tile.getY() << TILE_SIZE_BITS;

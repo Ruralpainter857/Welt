@@ -28,6 +28,8 @@ import org.pepsoft.worldpainter.layers.*;
 import org.pepsoft.worldpainter.layers.exporters.ExporterSettings;
 import org.pepsoft.worldpainter.layers.exporters.ResourcesExporter.ResourcesExporterSettings;
 import org.pepsoft.worldpainter.layers.tunnel.TunnelLayer;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import org.pepsoft.worldpainter.operations.Filter;
 import org.pepsoft.worldpainter.panels.DefaultFilter;
 import org.pepsoft.worldpainter.selection.SelectionBlock;
@@ -80,6 +82,8 @@ import static org.pepsoft.worldpainter.util.ThreadUtils.chooseThreadCount;
  * @author pepijn
  */
 public class Dimension extends InstanceKeeper implements TileProvider, Serializable, Tile.Listener, Cloneable, UndoListener {
+    private static final ThreadLocal<Point> TILE_LOOKUP_POINT = ThreadLocal.withInitial(Point::new);
+
     public Dimension(World2 world, String name, long minecraftSeed, TileFactory tileFactory, Anchor anchor) {
         this(world, name, minecraftSeed, tileFactory, anchor, true);
     }
@@ -247,7 +251,7 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
     public boolean isTilePresent(final int x, final int y) {
         readLock.lock();
         try {
-            return tiles.containsKey(new Point(x, y));
+            return tiles.containsKey(tileLookupPoint(x, y));
         } finally {
             readLock.unlock();
         }
@@ -271,7 +275,7 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
                     || (y > (highestY + borderSize))))) {
                 // Couldn't possibly be a border tile
                 return false;
-            } else if (tiles.containsKey(new Point(x, y))) {
+            } else if (tiles.containsKey(tileLookupPoint(x, y))) {
                 // There's a tile in the dimension at these coordinates, so not a
                 // border tile
                 return false;
@@ -282,10 +286,10 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
             } else {
                 for (int r = 1; r <= borderSize; r++) {
                     for (int i = 0; i <= (r * 2); i++) {
-                        if (tiles.containsKey(new Point(x + i - r, y - r))
-                                || tiles.containsKey(new Point(x + r, y + i - r))
-                                || tiles.containsKey(new Point(x + r - i, y + r))
-                                || tiles.containsKey(new Point(x - r, y - i + r))) {
+                        if (tiles.containsKey(tileLookupPoint(x + i - r, y - r))
+                                || tiles.containsKey(tileLookupPoint(x + r, y + i - r))
+                                || tiles.containsKey(tileLookupPoint(x + r - i, y + r))
+                                || tiles.containsKey(tileLookupPoint(x - r, y - i + r))) {
                             // Found a tile in the dimension <= borderSize tiles
                             // away, so this is a border tile
                             return true;
@@ -312,10 +316,16 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
     public Tile getTile(final int x, final int y) {
         readLock.lock();
         try {
-            return tiles.get(new Point(x, y));
+            return tiles.get(tileLookupPoint(x, y));
         } finally {
             readLock.unlock();
         }
+    }
+
+    private static Point tileLookupPoint(final int x, final int y) {
+        final Point point = TILE_LOOKUP_POINT.get();
+        point.setLocation(x, y);
+        return point;
     }
 
     public Tile getTile(final Point coords) {
@@ -340,7 +350,7 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
     public Tile getTileForEditing(final int x, final int y) {
         readLock.lock();
         try {
-            Tile tile = tiles.get(new Point(x, y));
+            Tile tile = tiles.get(tileLookupPoint(x, y));
             if ((tile != null) && eventsInhibited && (!tile.isEventsInhibited())) {
                 tile.inhibitEvents();
                 dirtyTiles.add(tile);
@@ -1013,8 +1023,18 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
      * @return A {@link HeightMap} returning the distance to the nearest edge for every pixel where the specified layer
      * is set in this dimension.
      */
-    @SuppressWarnings("UnnecessaryLocalVariable") // Clarity
     public HeightMap getDistancesToEdge(final Layer layer, final float maxDistance) {
+        return getDistancesToEdge(layer, maxDistance, false);
+    }
+
+    /** Calculates the tunnel wall-distance cache, allowing the opt-in native render path. */
+    public HeightMap getDistancesToEdgeForRendering(final Layer layer, final float maxDistance) {
+        return getDistancesToEdge(layer, maxDistance, true);
+    }
+
+    @SuppressWarnings("UnnecessaryLocalVariable") // Clarity
+    private HeightMap getDistancesToEdge(final Layer layer, final float maxDistance,
+                                         final boolean forRendering) {
         // Precalculate relative distances
         final float[][] distances = getDistancesToCentre(maxDistance);
 
@@ -1058,13 +1078,31 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
             }
         }
 
-        // Store the tiles in a 2D array for fast access; also create the cache that will hold the distance values
+        // Store the tiles in a 2D array for fast access.
         final int tileX1 = coords[0], tileX2 = coords[1], tileY1 = coords[2], tileY2 = coords[3];
         final Tile[][] tileCache = new Tile[tileX2 - tileX1 + 1][tileY2 - tileY1 + 1];
-        final float[][][][] distanceCache = new float[tileX2 - tileX1 + 1][tileY2 - tileY1 + 1][][];
         final int tileXOffset = tileX1, tileYOffset = tileY1;
         for (Tile tile: tilesToProcess) {
             tileCache[tile.getX() - tileXOffset][tile.getY() - tileYOffset] = tile;
+        }
+
+        if (forRendering) {
+            final float[] nativeDistances = bakeNativeEdgeDistances(tileCache, layer, maxDistance, true);
+            if (nativeDistances != null) {
+                final int tileColumns = tileCache.length, tileRows = tileCache[0].length;
+                final boolean[] tilePresence = new boolean[tileColumns * tileRows];
+                for (int tileX = 0; tileX < tileColumns; tileX++) {
+                    for (int tileY = 0; tileY < tileRows; tileY++) {
+                        tilePresence[tileY * tileColumns + tileX] = tileCache[tileX][tileY] != null;
+                    }
+                }
+                return new TileCacheHeightMap(nativeDistances, tileColumns * TILE_SIZE + 2,
+                        tileColumns, tileRows, tilePresence, tileXOffset, tileYOffset, 0.0f, maxDistance);
+            }
+        }
+
+        final float[][][][] distanceCache = new float[tileCache.length][tileCache[0].length][][];
+        for (Tile tile: tilesToProcess) {
             // Initialise the entire cache to maxDistance. It is the caller's responsibility to consult it only
             // where the layer is actually set
             final float[][] cacheForTile = new float[TILE_SIZE][TILE_SIZE];
@@ -1072,6 +1110,14 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
                 fill(column, maxDistance);
             }
             distanceCache[tile.getX() - tileXOffset][tile.getY() - tileYOffset] = cacheForTile;
+        }
+
+        if (!forRendering) {
+            final float[] nativeDistances = bakeNativeEdgeDistances(tileCache, layer, maxDistance, false);
+            if (nativeDistances != null) {
+                copyNativeEdgeDistancesToTileCache(tileCache, distanceCache, nativeDistances);
+                return new TileCacheHeightMap(distanceCache, tileXOffset, tileYOffset, 0.0f, maxDistance);
+            }
         }
 
         // TODO: don't do this separately for every exported region
@@ -1101,6 +1147,91 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
 
         // Return a HeightMap that will return values from the distance cache
         return new TileCacheHeightMap(distanceCache, tileXOffset, tileYOffset, 0.0f, maxDistance);
+    }
+
+    /** Attempts the same capped edge-distance bake in Rust; null preserves the Java fallback. */
+    private float[] bakeNativeEdgeDistances(Tile[][] tileCache, Layer layer,
+                                            float maxDistance, boolean forRendering) {
+        if (forRendering ? !NativeSlices.isTunnelEdgeRenderingEnabled() : !Native.isExportEnabled()) {
+            return null;
+        }
+        final Layer.DataSize dataSize = layer.getDataSize();
+        if ((dataSize != Layer.DataSize.BIT) && (dataSize != Layer.DataSize.BIT_PER_CHUNK)) {
+            return null;
+        }
+        final int tileColumns = tileCache.length;
+        final int tileRows = tileCache[0].length;
+        final long widthLong = (long) tileColumns * TILE_SIZE + 2L;
+        final long heightLong = (long) tileRows * TILE_SIZE + 2L;
+        if (widthLong > 1_048_576L || heightLong > 1_048_576L
+                || !Float.isFinite(maxDistance)
+                || maxDistance < 0.0f || maxDistance > 512.0f) {
+            return null;
+        }
+        final long area = widthLong * heightLong;
+        if (area > 1_048_576L) {
+            return null;
+        }
+
+        final int width = (int) widthLong;
+        final int height = (int) heightLong;
+        final byte[] mask = new byte[(int) area];
+        for (int tileX = 0; tileX < tileColumns; tileX++) {
+            for (int tileY = 0; tileY < tileRows; tileY++) {
+                final Tile tile = tileCache[tileX][tileY];
+                if (tile == null) {
+                    continue;
+                }
+                synchronized (tile) {
+                    tile.ensureReadable(Tile.TileBuffer.BIT_LAYER_DATA);
+                    final BitSet values = tile.bitLayerData.get(layer);
+                    if (values == null) {
+                        continue;
+                    }
+                    final int baseX = tileX * TILE_SIZE + 1;
+                    final int baseY = tileY * TILE_SIZE + 1;
+                    for (int y = 0; y < TILE_SIZE; y++) {
+                        final int row = (baseY + y) * width + baseX;
+                        final int chunkRow = (y >> 4) * (TILE_SIZE >> 4);
+                        for (int x = 0; x < TILE_SIZE; x++) {
+                            final int bitIndex = (dataSize == Layer.DataSize.BIT)
+                                    ? (x | (y << TILE_SIZE_BITS))
+                                    : ((x >> 4) + chunkRow);
+                            if (values.get(bitIndex)) {
+                                mask[row + x] = 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return forRendering
+                ? NativeSlices.edgeDistancesForRendering(width, height, maxDistance, mask)
+                : NativeSlices.edgeDistances(width, height, maxDistance, mask);
+    }
+
+    private void copyNativeEdgeDistancesToTileCache(Tile[][] tileCache, float[][][][] distanceCache,
+                                                     float[] distances) {
+        final int tileColumns = tileCache.length;
+        final int width = tileColumns * TILE_SIZE + 2;
+        for (int tileX = 0; tileX < tileColumns; tileX++) {
+            for (int tileY = 0; tileY < tileCache[0].length; tileY++) {
+                final Tile tile = tileCache[tileX][tileY];
+                final float[][] tileDistances = distanceCache[tileX][tileY];
+                if ((tile == null) || (tileDistances == null)) {
+                    continue;
+                }
+                final int baseX = tileX * TILE_SIZE + 1;
+                final int baseY = tileY * TILE_SIZE + 1;
+                for (int y = 0; y < TILE_SIZE; y++) {
+                    final int row = (baseY + y) * width + baseX;
+                    for (int x = 0; x < TILE_SIZE; x++) {
+                        tileDistances[x][y] = distances[row + x];
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -1179,6 +1310,10 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
 
         // Now find all edge pixels and adjust the distances in the cache for the pixels around each one
         final Dimension floorDimension = world.getDimension(new Anchor(anchor.dim, (layer.getLayerMode() == CAVE) ? CAVE_FLOOR : FLOATING_FLOOR, anchor.invert, layer.getFloorDimensionId()));
+        if (bakeNativeEdgeHeights(tileCache, heightCache, tileXOffset, tileYOffset,
+                layer, floorDimension, maxDistance)) {
+            return new TileCacheHeightMap(heightCache, tileXOffset, tileYOffset, 0.0f, maxDistance);
+        }
         for (Point tileCoords: tileCoordsToProcess) {
             for (int x = 0; x < TILE_SIZE; x++) {
                 for (int y = 0; y < TILE_SIZE; y++) {
@@ -1201,6 +1336,112 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
 
         // Return a HeightMap that will return values from the height cache
         return new TileCacheHeightMap(heightCache, tileXOffset, tileYOffset, 0.0f, maxDistance);
+    }
+
+    /** Attempts the same edge-height bake in Rust; false preserves the Java fallback. */
+    private boolean bakeNativeEdgeHeights(Tile[][] tileCache, float[][][][] heightCache,
+                                          int tileXOffset, int tileYOffset, TunnelLayer layer,
+                                          Dimension floorDimension, float maxDistance) {
+        if (!Native.isExportEnabled() || floorDimension == null
+                || ((layer.getDataSize() != Layer.DataSize.BIT)
+                && (layer.getDataSize() != Layer.DataSize.BIT_PER_CHUNK))
+                || !Float.isFinite(maxDistance) || maxDistance < 0.0f || maxDistance > 512.0f
+                || !Float.isFinite(minHeight)) {
+            return false;
+        }
+        final int tileColumns = tileCache.length;
+        final int tileRows = tileCache[0].length;
+        final long widthLong = (long) tileColumns * TILE_SIZE + 2L;
+        final long heightLong = (long) tileRows * TILE_SIZE + 2L;
+        final long area = widthLong * heightLong;
+        if (widthLong > Integer.MAX_VALUE || heightLong > Integer.MAX_VALUE
+                || area > 1_048_576L) {
+            return false;
+        }
+
+        final int width = (int) widthLong;
+        final int height = (int) heightLong;
+        final byte[] mask = new byte[(int) area];
+        final Layer.DataSize dataSize = layer.getDataSize();
+        for (int tileX = 0; tileX < tileColumns; tileX++) {
+            for (int tileY = 0; tileY < tileRows; tileY++) {
+                final Tile tile = tileCache[tileX][tileY];
+                if (tile == null) {
+                    continue;
+                }
+                synchronized (tile) {
+                    tile.ensureReadable(Tile.TileBuffer.BIT_LAYER_DATA);
+                    final BitSet values = tile.bitLayerData.get(layer);
+                    if (values == null) {
+                        continue;
+                    }
+                    final int baseX = tileX * TILE_SIZE + 1;
+                    final int baseY = tileY * TILE_SIZE + 1;
+                    final int chunkStride = TILE_SIZE >> 4;
+                    for (int y = 0; y < TILE_SIZE; y++) {
+                        final int row = (baseY + y) * width + baseX;
+                        final int chunkRow = (y >> 4) * chunkStride;
+                        for (int x = 0; x < TILE_SIZE; x++) {
+                            final int bitIndex = (dataSize == Layer.DataSize.BIT)
+                                    ? (x | (y << TILE_SIZE_BITS))
+                                    : ((x >> 4) + chunkRow);
+                            if (values.get(bitIndex)) {
+                                mask[row + x] = 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        final byte[] sources = new byte[(int) area];
+        final float[] sourceHeights = new float[(int) area];
+        for (int tileX = 0; tileX < tileColumns; tileX++) {
+            for (int tileY = 0; tileY < tileRows; tileY++) {
+                if (tileCache[tileX][tileY] == null) {
+                    continue;
+                }
+                final int baseX = tileX * TILE_SIZE + 1;
+                final int baseY = tileY * TILE_SIZE + 1;
+                final int worldTileX = (tileX + tileXOffset) << TILE_SIZE_BITS;
+                final int worldTileY = (tileY + tileYOffset) << TILE_SIZE_BITS;
+                for (int y = 0; y < TILE_SIZE; y++) {
+                    final int row = (baseY + y) * width + baseX;
+                    for (int x = 0; x < TILE_SIZE; x++) {
+                        final int index = row + x;
+                        if ((mask[index] != 0)
+                                && ((mask[index - 1] == 0) || (mask[index - width] == 0)
+                                || (mask[index + 1] == 0) || (mask[index + width] == 0))) {
+                            sources[index] = 1;
+                            sourceHeights[index] = floorDimension.getHeightAt(worldTileX + x, worldTileY + y);
+                        }
+                    }
+                }
+            }
+        }
+
+        final float[] heights = NativeSlices.edgeHeights(width, height, (int) ceil(maxDistance),
+                minHeight, sources, sourceHeights);
+        if (heights == null) {
+            return false;
+        }
+        for (int tileX = 0; tileX < tileColumns; tileX++) {
+            for (int tileY = 0; tileY < tileRows; tileY++) {
+                final float[][] tileHeights = heightCache[tileX][tileY];
+                if (tileHeights == null) {
+                    continue;
+                }
+                final int baseX = tileX * TILE_SIZE + 1;
+                final int baseY = tileY * TILE_SIZE + 1;
+                for (int y = 0; y < TILE_SIZE; y++) {
+                    final int row = (baseY + y) * width + baseX;
+                    for (int x = 0; x < TILE_SIZE; x++) {
+                        tileHeights[x][y] = heights[row + x];
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     protected final float doGetDistanceToEdge(final Layer layer, final int x, final int y, final float maxDistance) {
@@ -1852,6 +2093,15 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
         return getAutoBiome(x, y, -1);
     }
 
+    public final void makeAutoBiomesPermanent(Tile tile) {
+        int constantBiome = anchor.dim == DIM_NETHER ? BIOME_HELL : anchor.dim == DIM_END ? BIOME_SKY : -1;
+        if (tile.bakeAutoBiomes(constantBiome, BIOME_PLAINS)) return;
+        for (int x = 0; x < TILE_SIZE; x++) for (int y = 0; y < TILE_SIZE; y++) {
+            if (tile.getLayerValue(Biome.INSTANCE, x, y) == 255)
+                tile.setLayerValue(Biome.INSTANCE, x, y, getAutoBiome(tile, x, y, BIOME_PLAINS));
+        }
+    }
+
     public final int getAutoBiome(int x, int y, int defaultBiome) {
         switch (anchor.dim) {
             case DIM_NETHER:
@@ -2353,7 +2603,8 @@ public class Dimension extends InstanceKeeper implements TileProvider, Serializa
                         final List<Tile> tileList = new ArrayList<>();
                         for (int tileX = 0; tileX < 4; tileX++) {
                             for (int tileY = 0; tileY < 4; tileY++) {
-                                final Tile tile = tiles.get(new Point((regionX << 2) | tileX, (regionY << 2) | tileY));
+                                final Tile tile = tiles.get(
+                                        tileLookupPoint((regionX << 2) | tileX, (regionY << 2) | tileY));
                                 if (tile != null) {
                                     tile.prepareForSaving();
                                     tileList.add(tile);

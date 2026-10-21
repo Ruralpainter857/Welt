@@ -5,13 +5,38 @@
 
 package org.pepsoft.worldpainter;
 
+import org.pepsoft.worldpainter.heightMaps.NoiseHeightMap;
+import org.pepsoft.worldpainter.heightMaps.FastNoiseLiteHeightMap;
+import org.pepsoft.worldpainter.heightMaps.ConstantHeightMap;
+import org.pepsoft.worldpainter.heightMaps.CombiningHeightMap;
+import org.pepsoft.worldpainter.heightMaps.DifferenceHeightMap;
+import org.pepsoft.worldpainter.heightMaps.DisplacementHeightMap;
+import org.pepsoft.worldpainter.heightMaps.ProductHeightMap;
+import org.pepsoft.worldpainter.heightMaps.MinimisingHeightMap;
+import org.pepsoft.worldpainter.heightMaps.MaximisingHeightMap;
+import org.pepsoft.worldpainter.heightMaps.MandelbrotHeightMap;
+import org.pepsoft.worldpainter.heightMaps.BandedHeightMap;
+import org.pepsoft.worldpainter.heightMaps.NinePatchHeightMap;
+import org.pepsoft.worldpainter.heightMaps.SlopeHeightMap;
+import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
+import org.pepsoft.worldpainter.heightMaps.ShelvingHeightMap;
+import org.pepsoft.worldpainter.heightMaps.BitmapHeightMap;
+import org.pepsoft.worldpainter.heightMaps.BicubicHeightMap;
+import org.pepsoft.worldpainter.heightMaps.SumHeightMap;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import org.pepsoft.worldpainter.themes.SimpleTheme;
+import org.pepsoft.worldpainter.themes.impl.fancy.FancyTheme;
 import org.pepsoft.worldpainter.themes.Theme;
 
 import java.awt.*;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.Point2D;
 import java.io.IOException;
 import java.io.ObjectInputStream;
+import java.util.Map;
 import java.util.SortedMap;
 
 import static org.pepsoft.util.MathUtils.clamp;
@@ -108,6 +133,92 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         return (extent == null) || extent.contains(x, y);
     }
 
+    /** Successful factory-only native transactions on the calling worker. */
+    public static long completedNativeBitmapTiles() { return NativeTileGenerationAccess.completedBitmap(); }
+    public static long completedNativeFancyTiles() { return NativeFancyGenerationAccess.completed(); }
+    public static long completedNativeGeneratedTiles() { return NativeTileGenerationAccess.completed(); }
+
+    /** Worker totals: successful tiles, preparation, native transaction and application nanoseconds. */
+    public static long[] nativeGenerationProfile() { return NativeTileGenerationAccess.profile(); }
+
+    static ProceduralTileSource prepareProceduralSource(HeightMap map, int x, int y) {
+        return prepareProceduralSource(map, x, y, 128, 128);
+    }
+
+    static ProceduralTileSource prepareProceduralSource(HeightMap map, int x, int y, int width, int height) {
+        if (map == null || width < 1 || height < 1 || width > 256 || height > 256) return null;
+        GenerationBuffers b = GENERATION_BUFFERS.get();
+        int mode = 0, third = 0, order = 0, composition = 0;
+        float scaling = 0;
+        double[] matrix = null;
+        // Compile the complete transformed displacement chain before creating any tile planes.
+        if (map.getClass() == TransformingHeightMap.class
+                && ((TransformingHeightMap) map).getBaseHeightMap().getClass() == DisplacementHeightMap.class) {
+            TransformingHeightMap transform = (TransformingHeightMap) map;
+            DisplacementHeightMap displacement = (DisplacementHeightMap) transform.getBaseHeightMap();
+            if (!b.prepareHeightMapProgramPair(displacement.getAngleMap(), displacement.getDistanceMap())
+                    || !b.appendHeightMapNode(displacement.getBaseHeightMap())) return null;
+            if (transform.getScaleX() == 1 && transform.getScaleY() == 1 && transform.getRotation() == 0) {
+                long px = (long) x - transform.getOffsetX(), py = (long) y - transform.getOffsetY();
+                if (px < -16777216 || py < -16777216 || px + width - 1L > 16777216 || py + height - 1L > 16777216) return null;
+                x = (int) px; y = (int) py;
+                mode = 3;
+            } else {
+                mode = 5;
+                matrix = b.previewAffineMatrix;
+                createTransformingHeightMapTransform(transform).getMatrix(matrix);
+            }
+        } else if ((map.getClass() == MaximisingHeightMap.class || map.getClass() == MinimisingHeightMap.class
+                || map.getClass() == SumHeightMap.class || map.getClass() == DifferenceHeightMap.class || map.getClass() == ProductHeightMap.class)
+                && ((((CombiningHeightMap)map).getHeightMap1().getClass() == DisplacementHeightMap.class)
+                != (((CombiningHeightMap)map).getHeightMap2().getClass() == DisplacementHeightMap.class))) {
+            CombiningHeightMap compositionMap = (CombiningHeightMap) map;
+            boolean displacedFirst = compositionMap.getHeightMap1().getClass() == DisplacementHeightMap.class;
+            DisplacementHeightMap displacement = (DisplacementHeightMap)(displacedFirst ? compositionMap.getHeightMap1() : compositionMap.getHeightMap2());
+            HeightMap other = displacedFirst ? compositionMap.getHeightMap2() : compositionMap.getHeightMap1();
+            if (!b.prepareHeightMapProgramPair(displacement.getAngleMap(), displacement.getDistanceMap())) return null;
+            int before = b.heightMapNodeCount;
+            if (!b.appendHeightMapNode(displacement.getBaseHeightMap())) return null;
+            third = b.heightMapNodeCount - before;
+            if (!b.appendHeightMapNode(other)) return null;
+            order = displacedFirst ? 1 : 0;
+            composition = map.getClass() == MaximisingHeightMap.class ? 0 : map.getClass() == MinimisingHeightMap.class ? 1
+                    : map.getClass() == SumHeightMap.class ? 2 : map.getClass() == DifferenceHeightMap.class ? 3 : 4;
+            mode = 4;
+        } else if (map.getClass() == DisplacementHeightMap.class) {
+            DisplacementHeightMap displacement = (DisplacementHeightMap) map;
+            if (!b.prepareHeightMapProgramPair(displacement.getAngleMap(), displacement.getDistanceMap())
+                    || !b.appendHeightMapNode(displacement.getBaseHeightMap())) return null;
+            mode = 3;
+        } else {
+            if (map.getClass() == TransformingHeightMap.class) {
+                TransformingHeightMap transform = (TransformingHeightMap) map;
+                if (transform.getScaleX() == 1 && transform.getScaleY() == 1 && transform.getRotation() == 0) {
+                    long px = (long) x - transform.getOffsetX(), py = (long) y - transform.getOffsetY();
+                    if (px < -16777216 || py < -16777216 || px + width - 1L > 16777216 || py + height - 1L > 16777216) return null;
+                    x = (int) px; y = (int) py;
+                } else {
+                    mode = 1;
+                    matrix = b.previewAffineMatrix;
+                    createTransformingHeightMapTransform(transform).getMatrix(matrix);
+                }
+                map = transform.getBaseHeightMap();
+            } else if (map.getClass() == SlopeHeightMap.class) {
+                mode = 2;
+                scaling = ((SlopeHeightMap) map).getVerticalScaling();
+                map = ((SlopeHeightMap) map).getBaseHeightMap();
+            }
+            if (!b.prepareHeightMapProgram(map)) return null;
+        }
+        int margin = mode == 2 ? 1 : 0;
+        if ((long) x - margin < -16777216 || (long) y - margin < -16777216
+                || (long) x + width - 1L + margin > 16777216 || (long) y + height - 1L + margin > 16777216
+                || b.heightMapNodeCount > 64 || (b.heightMapNinePatchCount != 0 && !Native.isNinePatchGenEnabled())) return null;
+        return new ProceduralTileSource(mode, x, y, width, height, scaling, matrix, b.heightMapFirstNodeCount,
+                b.heightMapSecondNodeCount, third, order, composition, b.heightMapNodeCount, b.heightMapOpcodes, b.heightMapValues,
+                b.heightMapScales, b.heightMapOctaves, b.heightMapSeeds);
+    }
+
     @Override
     public Tile createTile(int tileX, int tileY) {
         final int maxZ = maxHeight - 1, myWaterHeight = getWaterHeight();
@@ -115,22 +226,999 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         tile.inhibitEvents();
         final int worldTileX = tileX * TILE_SIZE, worldTileY = tileY * TILE_SIZE;
         try {
+            if (NativeTileGenerationAccess.fill(this, tile, tileX, tileY)) return tile;
+            final TransformingHeightMap translatedHeightMap = getBatchSafeTranslation(heightMap);
+            final HeightMap batchHeightMap = (translatedHeightMap != null)
+                    ? translatedHeightMap.getBaseHeightMap() : heightMap;
+            final int heightMapOriginX = (translatedHeightMap != null)
+                    ? worldTileX - translatedHeightMap.getOffsetX() : worldTileX;
+            final int heightMapOriginY = (translatedHeightMap != null)
+                    ? worldTileY - translatedHeightMap.getOffsetY() : worldTileY;
+            NoiseHeightMap nativeNoiseMap = null;
+            double nativeConstant = 0.0;
+            boolean nativeConstantFirst = false;
+            if (heightMap.getClass() == NoiseHeightMap.class) {
+                nativeNoiseMap = (NoiseHeightMap) heightMap;
+            } else if (heightMap.getClass() == SumHeightMap.class) {
+                final SumHeightMap sum = (SumHeightMap) heightMap;
+                if ((sum.getHeightMap1() instanceof ConstantHeightMap) && (sum.getHeightMap2() instanceof NoiseHeightMap)) {
+                    nativeNoiseMap = (NoiseHeightMap) sum.getHeightMap2();
+                    nativeConstant = ((ConstantHeightMap) sum.getHeightMap1()).getHeight();
+                    nativeConstantFirst = true;
+                } else if ((sum.getHeightMap1() instanceof NoiseHeightMap) && (sum.getHeightMap2() instanceof ConstantHeightMap)) {
+                    nativeNoiseMap = (NoiseHeightMap) sum.getHeightMap1();
+                    nativeConstant = ((ConstantHeightMap) sum.getHeightMap2()).getHeight();
+                }
+            }
+            final boolean isSimpleTheme = theme.getClass() == SimpleTheme.class;
+            final FancyTheme freshFancyTheme = (theme.getClass() == FancyTheme.class)
+                    && !floodWithLava && ((FancyTheme) theme).supportsFreshTileBatch()
+                    ? (FancyTheme) theme : null;
+            final boolean freshSimpleTheme = isSimpleTheme && !floodWithLava;
+            final Map<?, ?> simpleThemeLayerMap = isSimpleTheme
+                    ? ((SimpleTheme) theme).getLayerMap() : null;
+            final boolean themeConfiguresFloodWithLava = (simpleThemeLayerMap != null)
+                    && simpleThemeLayerMap.containsValue(FloodWithLava.INSTANCE);
+            final boolean batchFreshSimpleTheme = isSimpleTheme
+                    && (!floodWithLava || !themeConfiguresFloodWithLava)
+                    && (isBatchSafeHeightMap(heightMap) || isNativeBandedHeightMap(heightMap)
+                    || isNativeSlopeHeightMap(heightMap)
+                    || isNativeDisplacementHeightMap(heightMap)
+                    || isNativeTransformingHeightMap(heightMap)
+                    || (translatedHeightMap != null)
+                    || isBulkReadableBitmapHeightMap(heightMap)
+                    || isNativeShelvingHeightMap(heightMap, worldTileX, worldTileY));
+            final GenerationBuffers buffers = batchFreshSimpleTheme ? GENERATION_BUFFERS.get() : null;
+            if ((freshFancyTheme != null) && (freshFancyTheme.getHeightMap() == heightMap)
+                    && Native.isNinePatchGenEnabled()) {
+                final GenerationBuffers fancyBuffers = GENERATION_BUFFERS.get();
+                if (fillNativeFancyThemeNeighborhood(heightMap, worldTileX, worldTileY,
+                        fancyBuffers)) {
+                    freshFancyTheme.applyFreshTile(tile, worldTileX, worldTileY,
+                            minHeight, maxHeight, myWaterHeight,
+                            fancyBuffers.freshFancyHeightNeighborhood());
+                    return tile;
+                }
+            }
+            double[] nativeHeights = null;
+            boolean completeHeightMapValuesAvailable = false;
+            if (batchFreshSimpleTheme && Native.isGenEnabled()
+                    && buffers.prepareHeightMapProgram(batchHeightMap)
+                    && (buffers.heightMapNoiseCount > 0 || buffers.heightMapMandelbrotCount > 0
+                    || buffers.heightMapBandedCount > 0 || buffers.heightMapNinePatchCount > 0
+                    || buffers.heightMapFastNoiseCount > 0)) {
+                final double[] output = buffers.nativeHeights();
+                if (NativeSlices.fillHeightMapTree(heightMapOriginX, heightMapOriginY,
+                        TILE_SIZE, TILE_SIZE, buffers.heightMapNodeCount,
+                        buffers.heightMapOpcodes, buffers.heightMapValues,
+                        buffers.heightMapScales, buffers.heightMapOctaves,
+                        buffers.heightMapSeeds, output)) {
+                    nativeHeights = output;
+                    completeHeightMapValuesAvailable = true;
+                }
+            }
+            if (nativeHeights == null && batchFreshSimpleTheme && Native.isGenEnabled()
+                    && (heightMap.getClass() == SlopeHeightMap.class)) {
+                final SlopeHeightMap slopeHeightMap = (SlopeHeightMap) heightMap;
+                final HeightMap baseHeightMap = slopeHeightMap.getBaseHeightMap();
+                if (!baseHeightMap.isConstant()
+                        && areSlopeCoordinatesExactlyRepresentableAsFloats(worldTileX, worldTileY)
+                        && buffers.prepareHeightMapProgram(baseHeightMap)
+                        && (buffers.heightMapNoiseCount > 0 || buffers.heightMapMandelbrotCount > 0
+                        || buffers.heightMapBandedCount > 0 || buffers.heightMapNinePatchCount > 0
+                        || buffers.heightMapFastNoiseCount > 0)) {
+                    final double[] baseSamples = buffers.nativeSlopeBaseHeights();
+                    if (NativeSlices.fillHeightMapTree(worldTileX - 1, worldTileY - 1,
+                            TILE_SIZE + 2, TILE_SIZE + 2, buffers.heightMapNodeCount,
+                            buffers.heightMapOpcodes, buffers.heightMapValues,
+                            buffers.heightMapScales, buffers.heightMapOctaves,
+                            buffers.heightMapSeeds, baseSamples)) {
+                        final double[] output = buffers.nativeHeights();
+                        if (slopeHeightMap.fillSamples(baseSamples, TILE_SIZE + 2,
+                                TILE_SIZE + 2, output)) {
+                            nativeHeights = output;
+                            completeHeightMapValuesAvailable = true;
+                        }
+                    }
+                }
+            }
+            if (nativeHeights == null && batchFreshSimpleTheme && Native.isGenEnabled()
+                    && isNativeTransformingHeightMap(heightMap)) {
+                final TransformingHeightMap transforming = (TransformingHeightMap) heightMap;
+                final HeightMap baseHeightMap = transforming.getBaseHeightMap();
+                if (buffers.prepareHeightMapProgram(baseHeightMap)
+                        && (buffers.heightMapNoiseCount > 0 || buffers.heightMapMandelbrotCount > 0
+                        || buffers.heightMapBandedCount > 0 || buffers.heightMapNinePatchCount > 0
+                        || buffers.heightMapFastNoiseCount > 0)) {
+                    final AffineTransform transform = createTransformingHeightMapTransform(transforming);
+                    final Point2D.Float coordinates = new Point2D.Float();
+                    final float[] xCoordinates = buffers.displacementXCoordinates();
+                    final float[] yCoordinates = buffers.displacementYCoordinates();
+                    boolean coordinatesValid = true;
+                    for (int y = 0; y < TILE_SIZE && coordinatesValid; y++) {
+                        final int row = y * TILE_SIZE;
+                        final int worldY = worldTileY + y;
+                        for (int x = 0; x < TILE_SIZE; x++) {
+                            final int index = row + x;
+                            coordinates.setLocation((float) (worldTileX + x), (float) worldY);
+                            transform.transform(coordinates, coordinates);
+                            if (!Float.isFinite(coordinates.x) || !Float.isFinite(coordinates.y)) {
+                                coordinatesValid = false;
+                                break;
+                            }
+                            xCoordinates[index] = coordinates.x;
+                            yCoordinates[index] = coordinates.y;
+                        }
+                    }
+                    if (coordinatesValid) {
+                        final double[] output = buffers.nativeHeights();
+                        if (NativeSlices.fillHeightMapTreePoints(buffers.heightMapNodeCount,
+                                buffers.heightMapOpcodes, buffers.heightMapValues,
+                                buffers.heightMapScales, buffers.heightMapOctaves,
+                                buffers.heightMapSeeds, xCoordinates, yCoordinates, output)) {
+                            nativeHeights = output;
+                            completeHeightMapValuesAvailable = true;
+                        }
+                    }
+                }
+            }
+            if (nativeHeights == null && batchFreshSimpleTheme && Native.isGenEnabled()
+                    && isNativeDisplacementHeightMap(heightMap)
+                    && areTileCoordinatesExactlyRepresentableAsFloats(worldTileX, worldTileY)) {
+                final DisplacementHeightMap displacement = (DisplacementHeightMap) heightMap;
+                final double[] angleValues = buffers.nativeDisplacementAngleHeights();
+                final double[] distanceValues = buffers.nativeDisplacementDistanceHeights();
+                if (buffers.prepareHeightMapProgramPair(displacement.getAngleMap(), displacement.getDistanceMap())
+                        && NativeSlices.fillHeightMapTreePair(worldTileX, worldTileY,
+                        TILE_SIZE, TILE_SIZE, buffers.heightMapFirstNodeCount,
+                        buffers.heightMapSecondNodeCount, buffers.heightMapOpcodes,
+                        buffers.heightMapValues, buffers.heightMapScales,
+                        buffers.heightMapOctaves, buffers.heightMapSeeds,
+                        angleValues, distanceValues)) {
+                    final float[] xCoordinates = buffers.displacementXCoordinates();
+                    final float[] yCoordinates = buffers.displacementYCoordinates();
+                    boolean coordinatesValid = true;
+                    for (int y = 0; y < TILE_SIZE && coordinatesValid; y++) {
+                        final int row = y * TILE_SIZE;
+                        final float worldY = worldTileY + y;
+                        for (int x = 0; x < TILE_SIZE; x++) {
+                            final int index = row + x;
+                            final float worldX = worldTileX + x;
+                            final double angle = angleValues[index];
+                            final double distance = distanceValues[index];
+                            final float actualX = (float) (worldX + Math.sin(angle) * distance);
+                            final float actualY = (float) (worldY + Math.cos(angle) * distance);
+                            if (!Float.isFinite(actualX) || !Float.isFinite(actualY)) {
+                                coordinatesValid = false;
+                                break;
+                            }
+                            xCoordinates[index] = actualX;
+                            yCoordinates[index] = actualY;
+                        }
+                    }
+                    if (coordinatesValid && buffers.prepareHeightMapProgram(displacement.getBaseHeightMap())) {
+                        final double[] output = buffers.nativeHeights();
+                        if (NativeSlices.fillHeightMapTreePoints(buffers.heightMapNodeCount,
+                                buffers.heightMapOpcodes, buffers.heightMapValues,
+                                buffers.heightMapScales, buffers.heightMapOctaves,
+                                buffers.heightMapSeeds, xCoordinates, yCoordinates, output)) {
+                            nativeHeights = output;
+                            completeHeightMapValuesAvailable = true;
+                        }
+                    }
+                }
+            }
+            final BitmapHeightMap bitmapHeightMap = getBulkReadableBitmapBase(heightMap);
+            if (nativeHeights == null && batchFreshSimpleTheme && (bitmapHeightMap != null)) {
+                final double[] output = buffers.nativeHeights();
+                final boolean filled = isRepeatingBicubicHeightMap(heightMap)
+                        ? bitmapHeightMap.fillRepeatedSamples(worldTileX, worldTileY,
+                                TILE_SIZE, TILE_SIZE, output, buffers.bitmapRowSamples)
+                        : bitmapHeightMap.fillSamples(worldTileX, worldTileY,
+                                TILE_SIZE, TILE_SIZE, output, buffers.bitmapRowSamples);
+                if (filled) {
+                    nativeHeights = output;
+                    completeHeightMapValuesAvailable = true;
+                }
+            }
+            if (nativeNoiseMap != null) {
+                if (nativeHeights != null) {
+                    // The whole pure Sum/Noise expression has already been evaluated natively.
+                } else if (batchFreshSimpleTheme) {
+                    if (Native.isGenEnabled()) {
+                        final double[] output = buffers.nativeHeights();
+                        if (nativeNoiseMap.fillNativeHeights(worldTileX, worldTileY,
+                                TILE_SIZE, TILE_SIZE, output)) {
+                            nativeHeights = output;
+                        }
+                    }
+                } else {
+                    nativeHeights = nativeNoiseMap.getNativeHeights(
+                            worldTileX, worldTileY, TILE_SIZE, TILE_SIZE);
+                }
+            }
+            if (freshFancyTheme != null) {
+                for (int x = 0; x < TILE_SIZE; x++) {
+                    for (int y = 0; y < TILE_SIZE; y++) {
+                        final int blockX = worldTileX + x, blockY = worldTileY + y;
+                        final double rawHeight;
+                        if (nativeHeights != null) {
+                            final double noise = nativeHeights[y * TILE_SIZE + x];
+                            rawHeight = completeHeightMapValuesAvailable || (nativeNoiseMap == heightMap) ? noise
+                                    : (nativeConstantFirst ? nativeConstant + noise : noise + nativeConstant);
+                        } else {
+                            rawHeight = heightMap.getHeight(blockX, blockY);
+                        }
+                        tile.setHeight(x, y, clamp(minHeight, (float) rawHeight, maxZ));
+                        tile.setWaterLevel(x, y, myWaterHeight);
+                    }
+                }
+                freshFancyTheme.applyFreshTile(tile, worldTileX, worldTileY);
+                return tile;
+            }
+            if (batchFreshSimpleTheme) {
+                final float[] heights = buffers.generationHeights();
+                for (int x = 0; x < TILE_SIZE; x++) {
+                    for (int y = 0; y < TILE_SIZE; y++) {
+                        final int blockX = worldTileX + x, blockY = worldTileY + y;
+                        final double rawHeight;
+                        if (nativeHeights != null) {
+                            final double noise = nativeHeights[y * TILE_SIZE + x];
+                            rawHeight = completeHeightMapValuesAvailable || (nativeNoiseMap == heightMap) ? noise
+                                    : (nativeConstantFirst ? nativeConstant + noise : noise + nativeConstant);
+                        } else {
+                            rawHeight = heightMap.getHeight(blockX, blockY);
+                        }
+                        heights[x | (y << TILE_SIZE_BITS)] = clamp(minHeight, (float) rawHeight, maxZ);
+                    }
+                }
+                final int[] intHeights = tile.initializeHeightAndWaterLevels(
+                        heights, myWaterHeight, buffers.generationIntHeights());
+                final SimpleTheme simpleTheme = (SimpleTheme) theme;
+                final byte[] terrainOrdinals = buffers.generationTerrainOrdinals();
+                int lowestThemeHeight = Integer.MAX_VALUE;
+                int highestThemeHeight = Integer.MIN_VALUE;
+                for (int quantisedHeight : intHeights) {
+                    lowestThemeHeight = Math.min(lowestThemeHeight, quantisedHeight);
+                    highestThemeHeight = Math.max(highestThemeHeight, quantisedHeight);
+                }
+                boolean nativeTerrainComputed = false;
+                if (Native.isGenEnabled() && NativeLoader.areSlicesAvailable()) {
+                    final int[] terrainRangeOrdinals = buffers.terrainRangeOrdinals(maxHeight - minHeight);
+                    simpleTheme.copyTerrainRangeOrdinals(terrainRangeOrdinals);
+                    nativeTerrainComputed = NativeSlices.fillSimpleThemeTerrainOrdinalsCompact(
+                            0, 0, TILE_SIZE, TILE_SIZE, minHeight, maxHeight,
+                            simpleTheme.getWaterHeight(), simpleTheme.isRandomise(),
+                            simpleTheme.isBeaches(), Terrain.BEACHES.ordinal(), simpleTheme.getSeed(),
+                            intHeights, terrainRangeOrdinals, terrainOrdinals);
+                }
+                if (!nativeTerrainComputed) {
+                    for (int x = 0; x < TILE_SIZE; x++) {
+                        for (int y = 0; y < TILE_SIZE; y++) {
+                            final int index = x | (y << TILE_SIZE_BITS);
+                            terrainOrdinals[index] = (byte) simpleTheme
+                                    .getTerrainForFreshTile(tile, x, y, intHeights[index]).ordinal();
+                        }
+                    }
+                }
+                tile.initializeTerrainOrdinals(terrainOrdinals);
+                final byte[] nativeLayerValues = (Native.isGenEnabled() && NativeLoader.areSlicesAvailable())
+                        ? buffers.nativeThemeLayerValues(simpleTheme.getFreshTileLayerCount()) : null;
+                if (!simpleTheme.applyDeterministicLayersToFreshTile(tile, intHeights,
+                        lowestThemeHeight, highestThemeHeight, terrainOrdinals, nativeLayerValues)) {
+                    if (simpleTheme.applyDeterministicValueLayersToFreshTile(tile, intHeights,
+                            lowestThemeHeight, highestThemeHeight, terrainOrdinals, nativeLayerValues)) {
+                        final byte[] bitLayerValues = (nativeLayerValues != null)
+                                ? nativeLayerValues
+                                : buffers.randomBitLayerValues(simpleTheme.getFreshTileBitLayerCount());
+                        if (!simpleTheme.applyRandomBitLayersToFreshTile(tile, intHeights, bitLayerValues)) {
+                            for (int x = 0; x < TILE_SIZE; x++) {
+                                for (int y = 0; y < TILE_SIZE; y++) {
+                                    simpleTheme.applyBitLayersToFreshTile(tile, x, y,
+                                            intHeights[x | (y << TILE_SIZE_BITS)]);
+                                }
+                            }
+                        }
+                    } else {
+                        for (int x = 0; x < TILE_SIZE; x++) {
+                            for (int y = 0; y < TILE_SIZE; y++) {
+                                simpleTheme.applyLayersToFreshTile(tile, x, y,
+                                        intHeights[x | (y << TILE_SIZE_BITS)]);
+                            }
+                        }
+                    }
+                }
+                if (floodWithLava) {
+                    tile.setBitLayerValue(FloodWithLava.INSTANCE);
+                }
+                return tile;
+            }
             for (int x = 0; x < TILE_SIZE; x++) {
                 for (int y = 0; y < TILE_SIZE; y++) {
                     final int blockX = worldTileX + x, blockY = worldTileY + y;
-                    final float height = clamp(minHeight, (float) heightMap.getHeight(blockX, blockY), maxZ);
+                    final double rawHeight;
+                    if (nativeHeights != null) {
+                        final double noise = nativeHeights[y * TILE_SIZE + x];
+                        rawHeight = completeHeightMapValuesAvailable || (nativeNoiseMap == heightMap) ? noise
+                                : (nativeConstantFirst ? nativeConstant + noise : noise + nativeConstant);
+                    } else {
+                        rawHeight = heightMap.getHeight(blockX, blockY);
+                    }
+                    final float height = clamp(minHeight, (float) rawHeight, maxZ);
                     tile.setHeight(x, y, height);
                     tile.setWaterLevel(x, y, myWaterHeight);
                     if (floodWithLava) {
                         tile.setBitLayerValue(FloodWithLava.INSTANCE, x, y, true);
                     }
-                    theme.apply(tile, x, y);
+                    if (freshSimpleTheme) {
+                        ((SimpleTheme) theme).applyToFreshTile(tile, x, y);
+                    } else {
+                        theme.apply(tile, x, y);
+                    }
                 }
             }
             return tile;
         } finally {
             tile.releaseEvents();
         }
+    }
+
+    /** Only batch pure built-in heightmaps; custom implementations may depend on interleaved tile writes. */
+    private static boolean isBatchSafeHeightMap(HeightMap heightMap) {
+        if ((heightMap.getClass() == ConstantHeightMap.class)
+                || (heightMap.getClass() == NoiseHeightMap.class)
+                || (heightMap.getClass() == FastNoiseLiteHeightMap.class)
+                || (heightMap.getClass() == MandelbrotHeightMap.class)
+                || (heightMap.getClass() == NinePatchHeightMap.class)) {
+            return true;
+        }
+        if ((heightMap.getClass() == SumHeightMap.class)
+                || (heightMap.getClass() == DifferenceHeightMap.class)
+                || (heightMap.getClass() == ProductHeightMap.class)
+                || (heightMap.getClass() == MinimisingHeightMap.class)
+                || (heightMap.getClass() == MaximisingHeightMap.class)) {
+            final CombiningHeightMap combining = (CombiningHeightMap) heightMap;
+            return isBatchSafeHeightMap(combining.getHeightMap1())
+                    && isBatchSafeHeightMap(combining.getHeightMap2());
+        }
+        return false;
+    }
+
+    private static boolean isNativeSlopeHeightMap(HeightMap heightMap) {
+        if (heightMap.getClass() != SlopeHeightMap.class) {
+            return false;
+        }
+        final HeightMap base = ((SlopeHeightMap) heightMap).getBaseHeightMap();
+        return isBatchSafeHeightMap(base) || isNativeBandedHeightMap(base);
+    }
+
+    private static boolean isNativeDisplacementHeightMap(HeightMap heightMap) {
+        if (heightMap.getClass() != DisplacementHeightMap.class) {
+            return false;
+        }
+        final DisplacementHeightMap displacement = (DisplacementHeightMap) heightMap;
+        return !displacement.getBaseHeightMap().isConstant()
+                && isSerializableHeightMapTree(displacement.getBaseHeightMap())
+                && isSerializableHeightMapTree(displacement.getAngleMap())
+                && isSerializableHeightMapTree(displacement.getDistanceMap());
+    }
+
+    /** Evaluates the default FancyTheme max(continent, displaced mountains) map in one reusable region. */
+    private static boolean fillNativeFancyThemeNeighborhood(HeightMap heightMap,
+                                                             int worldTileX, int worldTileY,
+                                                             GenerationBuffers buffers) {
+        if (heightMap.getClass() != MaximisingHeightMap.class) {
+            return false;
+        }
+        final int radius = FancyTheme.HEIGHT_NEIGHBORHOOD_RADIUS;
+        final int size = TILE_SIZE + radius * 2;
+        final long originXLong = (long) worldTileX - radius;
+        final long originYLong = (long) worldTileY - radius;
+        final long lastX = originXLong + size - 1;
+        final long lastY = originYLong + size - 1;
+        final long exactFloatLimit = 1L << 24;
+        if ((originXLong < -exactFloatLimit) || (originYLong < -exactFloatLimit)
+                || (lastX > exactFloatLimit) || (lastY > exactFloatLimit)) {
+            return false;
+        }
+        final int originX = (int) originXLong;
+        final int originY = (int) originYLong;
+        final CombiningHeightMap maximum = (CombiningHeightMap) heightMap;
+        final HeightMap first = maximum.getHeightMap1();
+        final HeightMap second = maximum.getHeightMap2();
+        final boolean firstIsDisplacement = first.getClass() == DisplacementHeightMap.class;
+        final boolean secondIsDisplacement = second.getClass() == DisplacementHeightMap.class;
+        if (firstIsDisplacement == secondIsDisplacement) {
+            if (!isSerializableHeightMapTree(heightMap)) {
+                return false;
+            }
+            return buffers.fillNativeHeightMapTree(heightMap, originX, originY,
+                    size, size, buffers.freshFancyHeightNeighborhood());
+        }
+
+        final HeightMap other = firstIsDisplacement ? second : first;
+        if (!isSerializableHeightMapTree(other)) {
+            return false;
+        }
+        final DisplacementHeightMap displacement = (DisplacementHeightMap)
+                (firstIsDisplacement ? first : second);
+        if (!isSerializableHeightMapTree(displacement.getBaseHeightMap())
+                || !isSerializableHeightMapTree(displacement.getAngleMap())
+                || !isSerializableHeightMapTree(displacement.getDistanceMap())) {
+            return false;
+        }
+        final double[] output = buffers.freshFancyHeightNeighborhood();
+        if (!buffers.fillNativeHeightMapTree(other, originX, originY, size, size, output)) {
+            return false;
+        }
+
+        final double[] angleValues = buffers.freshFancyDisplacementAngleHeights();
+        final double[] distanceValues = buffers.freshFancyDisplacementDistanceHeights();
+        if (!buffers.prepareHeightMapProgramPair(displacement.getAngleMap(), displacement.getDistanceMap())
+                || !NativeSlices.fillHeightMapTreePair(originX, originY, size, size,
+                buffers.heightMapFirstNodeCount, buffers.heightMapSecondNodeCount,
+                buffers.heightMapOpcodes, buffers.heightMapValues, buffers.heightMapScales,
+                buffers.heightMapOctaves, buffers.heightMapSeeds, angleValues, distanceValues)) {
+            return false;
+        }
+
+        final float[] xCoordinates = buffers.freshFancyDisplacementXCoordinates();
+        final float[] yCoordinates = buffers.freshFancyDisplacementYCoordinates();
+        for (int y = 0; y < size; y++) {
+            final int row = y * size;
+            final float worldY = originY + y;
+            for (int x = 0; x < size; x++) {
+                final int index = row + x;
+                final float worldX = originX + x;
+                final double angle = angleValues[index];
+                final double distance = distanceValues[index];
+                final float actualX = (float) (worldX + Math.sin(angle) * distance);
+                final float actualY = (float) (worldY + Math.cos(angle) * distance);
+                if (!Float.isFinite(actualX) || !Float.isFinite(actualY)) {
+                    return false;
+                }
+                xCoordinates[index] = actualX;
+                yCoordinates[index] = actualY;
+            }
+        }
+
+        if (!buffers.fillNativeHeightMapTreePoints(displacement.getBaseHeightMap(),
+                xCoordinates, yCoordinates, angleValues)) {
+            return false;
+        }
+        final boolean displacementFirst = firstIsDisplacement;
+        for (int i = 0; i < output.length; i++) {
+            final double displacedHeight = angleValues[i];
+            output[i] = displacementFirst
+                    ? Math.max(displacedHeight, output[i])
+                    : Math.max(output[i], displacedHeight);
+        }
+        return true;
+    }
+
+    private static boolean isNativeTransformingHeightMap(HeightMap heightMap) {
+        if (heightMap.getClass() != TransformingHeightMap.class) {
+            return false;
+        }
+        final TransformingHeightMap transforming = (TransformingHeightMap) heightMap;
+        return ((transforming.getScaleX() != 1.0f) || (transforming.getScaleY() != 1.0f)
+                || (transforming.getRotation() != 0.0f))
+                && isSerializableHeightMapTree(transforming.getBaseHeightMap());
+    }
+
+    /** Rebuilds the exact affine operation order used by TransformingHeightMap. */
+    private static AffineTransform createTransformingHeightMapTransform(TransformingHeightMap heightMap) {
+        final AffineTransform transform = new AffineTransform();
+        if ((heightMap.getScaleX() != 1.0f) || (heightMap.getScaleY() != 1.0f)) {
+            transform.scale(1 / heightMap.getScaleX(), 1 / heightMap.getScaleY());
+        }
+        if ((heightMap.getOffsetX() != 0) || (heightMap.getOffsetY() != 0)) {
+            transform.translate(-heightMap.getOffsetX(), -heightMap.getOffsetY());
+        }
+        if (heightMap.getRotation() != 0.0f) {
+            transform.rotate(-heightMap.getRotation());
+        }
+        return transform;
+    }
+
+    private static boolean isSerializableHeightMapTree(HeightMap heightMap) {
+        if ((heightMap.getClass() == ConstantHeightMap.class)
+                || (heightMap.getClass() == NoiseHeightMap.class)
+                || (heightMap.getClass() == FastNoiseLiteHeightMap.class)
+                || (heightMap.getClass() == MandelbrotHeightMap.class)
+                || (heightMap.getClass() == BandedHeightMap.class)) {
+            return true;
+        }
+        if (heightMap.getClass() == NinePatchHeightMap.class) {
+            final NinePatchHeightMap ninePatch = (NinePatchHeightMap) heightMap;
+            return ninePatch.getInnerSizeX() == ninePatch.getInnerSizeY();
+        }
+        if ((heightMap.getClass() == SumHeightMap.class)
+                || (heightMap.getClass() == DifferenceHeightMap.class)
+                || (heightMap.getClass() == ProductHeightMap.class)
+                || (heightMap.getClass() == MinimisingHeightMap.class)
+                || (heightMap.getClass() == MaximisingHeightMap.class)) {
+            final CombiningHeightMap combining = (CombiningHeightMap) heightMap;
+            return isSerializableHeightMapTree(combining.getHeightMap1())
+                    && isSerializableHeightMapTree(combining.getHeightMap2());
+        }
+        if (heightMap.getClass() == ShelvingHeightMap.class) {
+            return isSerializableHeightMapTree(((ShelvingHeightMap) heightMap).getHeightMap(0));
+        }
+        return false;
+    }
+
+    private static boolean areSlopeCoordinatesExactlyRepresentableAsFloats(int originX, int originY) {
+        final long limit = 1L << 24;
+        return ((long) originX - 1 >= -limit) && ((long) originX + TILE_SIZE <= limit)
+                && ((long) originY - 1 >= -limit) && ((long) originY + TILE_SIZE <= limit);
+    }
+
+    /** The Rust height-map tree evaluator supports the measured smooth map and valid linear bands. */
+    private static boolean isNativeBandedHeightMap(HeightMap heightMap) {
+        if (heightMap.getClass() != BandedHeightMap.class) {
+            return false;
+        }
+        final BandedHeightMap banded = (BandedHeightMap) heightMap;
+        if (banded.isSmooth()) {
+            return true;
+        }
+        final long totalLength = (long) banded.getSegment1Length() + banded.getSegment2Length();
+        return (banded.getSegment1Length() > 0) && (banded.getSegment2Length() > 0)
+                && (totalLength <= Integer.MAX_VALUE)
+                && Double.isFinite(banded.getSegment1EndHeight())
+                && Double.isFinite(banded.getSegment2EndHeight());
+    }
+
+    /** BitmapHeightMap supplies a bulk reader that preserves clipping and repeat semantics. */
+    private static boolean isBulkReadableBitmapHeightMap(HeightMap heightMap) {
+        return getBulkReadableBitmapBase(heightMap) != null;
+    }
+
+    /** Integer sampling of BicubicHeightMap delegates directly to its bitmap child, with optional wrapping. */
+    private static BitmapHeightMap getBulkReadableBitmapBase(HeightMap heightMap) {
+        if (heightMap.getClass() == BitmapHeightMap.class) {
+            return (BitmapHeightMap) heightMap;
+        }
+        if (heightMap.getClass() == BicubicHeightMap.class) {
+            final HeightMap base = ((BicubicHeightMap) heightMap).getHeightMap(0);
+            if (base.getClass() == BitmapHeightMap.class) {
+                return (BitmapHeightMap) base;
+            }
+        }
+        return null;
+    }
+
+    private static boolean isRepeatingBicubicHeightMap(HeightMap heightMap) {
+        return (heightMap.getClass() == BicubicHeightMap.class)
+                && ((BicubicHeightMap) heightMap).isRepeat();
+    }
+
+    /** Returns only exact, translation-only wrappers with a batch-safe child. */
+    private static TransformingHeightMap getBatchSafeTranslation(HeightMap heightMap) {
+        if ((heightMap.getClass() == TransformingHeightMap.class)) {
+            final TransformingHeightMap transforming = (TransformingHeightMap) heightMap;
+            final HeightMap base = transforming.getBaseHeightMap();
+            if ((transforming.getScaleX() == 1.0f) && (transforming.getScaleY() == 1.0f)
+                    && (transforming.getRotation() == 0.0f)
+                    && (isBatchSafeHeightMap(base) || isNativeBandedHeightMap(base))) {
+                return transforming;
+            }
+        }
+        return null;
+    }
+
+    /** Requires integral coordinates to survive ShelvingHeightMap's float delegation exactly. */
+    private static boolean isNativeShelvingHeightMap(HeightMap heightMap, int originX, int originY) {
+        if (heightMap.getClass() != ShelvingHeightMap.class) {
+            return false;
+        }
+        final HeightMap base = ((ShelvingHeightMap) heightMap).getHeightMap(0);
+        return (isBatchSafeHeightMap(base) || isNativeBandedHeightMap(base))
+                && areTileCoordinatesExactlyRepresentableAsFloats(originX, originY);
+    }
+
+    private static boolean areTileCoordinatesExactlyRepresentableAsFloats(int originX, int originY) {
+        final int exactFloatLimit = 1 << 24;
+        return (originX >= -exactFloatLimit) && (originX <= exactFloatLimit - TILE_SIZE + 1)
+                && (originY >= -exactFloatLimit) && (originY <= exactFloatLimit - TILE_SIZE + 1);
+    }
+
+    private static final class GenerationBuffers {
+        private float[] heights;
+        private int[] intHeights;
+        private byte[] terrainOrdinals;
+        private final int[] heightMapOpcodes = new int[128];
+        private final double[] heightMapValues = new double[128];
+        private final double[] heightMapScales = new double[128];
+        private final int[] heightMapOctaves = new int[128];
+        private final long[] heightMapSeeds = new long[128];
+        private final double[] bitmapRowSamples = new double[TILE_SIZE];
+        private int heightMapNodeCount;
+        private int heightMapFirstNodeCount;
+        private int heightMapSecondNodeCount;
+        private int heightMapNoiseCount;
+        private int heightMapFastNoiseCount;
+        private int heightMapMandelbrotCount;
+        private int heightMapBandedCount;
+        private int heightMapNinePatchCount;
+        private double[] nativeHeightValues;
+        private double[] nativeSlopeBaseValues;
+        private double[] nativeDisplacementAngleValues;
+        private double[] nativeDisplacementDistanceValues;
+        private float[] displacementXCoordinateValues;
+        private final double[] previewAffineMatrix = new double[6];
+        private float[] displacementYCoordinateValues;
+        private double[] freshFancyHeightNeighborhoodValues;
+        private double[] freshFancyDisplacementAngleValues;
+        private double[] freshFancyDisplacementDistanceValues;
+        private float[] freshFancyDisplacementXCoordinateValues;
+        private float[] freshFancyDisplacementYCoordinateValues;
+        private int[] terrainRangeOrdinals;
+        private byte[] nativeThemeLayerValues;
+        private byte[] randomBitLayerValues;
+
+        private float[] generationHeights() {
+            if (heights == null) {
+                heights = new float[TILE_SIZE * TILE_SIZE];
+            }
+            return heights;
+        }
+
+        private int[] generationIntHeights() {
+            if (intHeights == null) {
+                intHeights = new int[TILE_SIZE * TILE_SIZE];
+            }
+            return intHeights;
+        }
+
+        private byte[] generationTerrainOrdinals() {
+            if (terrainOrdinals == null) {
+                terrainOrdinals = new byte[TILE_SIZE * TILE_SIZE];
+            }
+            return terrainOrdinals;
+        }
+
+        private int[] terrainRangeOrdinals(final int length) {
+            if ((terrainRangeOrdinals == null) || (terrainRangeOrdinals.length != length)) {
+                terrainRangeOrdinals = new int[length];
+            }
+            return terrainRangeOrdinals;
+        }
+
+        private byte[] nativeThemeLayerValues(final int layerCount) {
+            final long requestedLength = (long) TILE_SIZE * TILE_SIZE * layerCount;
+            if ((requestedLength <= 0) || (requestedLength > 128 * 1024)) {
+                return null;
+            }
+            if ((nativeThemeLayerValues == null) || (nativeThemeLayerValues.length < requestedLength)) {
+                nativeThemeLayerValues = new byte[(int) requestedLength];
+            }
+            return nativeThemeLayerValues;
+        }
+
+        private byte[] randomBitLayerValues(final int layerCount) {
+            final long requestedLength = (long) TILE_SIZE * TILE_SIZE * layerCount;
+            if ((layerCount <= 0) || (layerCount > 64) || (requestedLength > 1_048_576L)) {
+                return null;
+            }
+            if ((randomBitLayerValues == null) || (randomBitLayerValues.length < requestedLength)) {
+                randomBitLayerValues = new byte[(int) requestedLength];
+            }
+            return randomBitLayerValues;
+        }
+
+        private boolean prepareHeightMapProgram(HeightMap heightMap) {
+            heightMapNodeCount = 0;
+            heightMapFirstNodeCount = 0;
+            heightMapSecondNodeCount = 0;
+            heightMapNoiseCount = 0;
+            heightMapFastNoiseCount = 0;
+            heightMapMandelbrotCount = 0;
+            heightMapBandedCount = 0;
+            heightMapNinePatchCount = 0;
+            return appendHeightMapNode(heightMap) && (heightMapNodeCount <= 64)
+                    && ((heightMapNinePatchCount == 0) || Native.isNinePatchGenEnabled());
+        }
+
+        private boolean prepareHeightMapProgramPair(HeightMap first, HeightMap second) {
+            heightMapNodeCount = 0;
+            heightMapFirstNodeCount = 0;
+            heightMapSecondNodeCount = 0;
+            heightMapNoiseCount = 0;
+            heightMapFastNoiseCount = 0;
+            heightMapMandelbrotCount = 0;
+            heightMapBandedCount = 0;
+            heightMapNinePatchCount = 0;
+            if (!appendHeightMapNode(first) || (heightMapNodeCount > 64)) {
+                return false;
+            }
+            heightMapFirstNodeCount = heightMapNodeCount;
+            if (!appendHeightMapNode(second)) {
+                return false;
+            }
+            heightMapSecondNodeCount = heightMapNodeCount - heightMapFirstNodeCount;
+            return (heightMapSecondNodeCount > 0) && (heightMapSecondNodeCount <= 64)
+                    && ((heightMapNinePatchCount == 0) || Native.isNinePatchGenEnabled());
+        }
+
+        private boolean appendHeightMapNode(HeightMap heightMap) {
+            if (heightMapNodeCount >= heightMapOpcodes.length) {
+                return false;
+            }
+            final int index = heightMapNodeCount;
+            if (heightMap.getClass() == ConstantHeightMap.class) {
+                heightMapOpcodes[index] = 0;
+                heightMapValues[index] = ((ConstantHeightMap) heightMap).getHeight();
+                heightMapNodeCount++;
+                return true;
+            }
+            if (heightMap.getClass() == NoiseHeightMap.class) {
+                final NoiseHeightMap noise = (NoiseHeightMap) heightMap;
+                heightMapOpcodes[index] = 1;
+                heightMapValues[index] = noise.getHeight();
+                heightMapScales[index] = noise.getScale();
+                heightMapOctaves[index] = noise.getOctaves();
+                heightMapSeeds[index] = noise.getSeed() + noise.getSeedOffset();
+                heightMapNoiseCount++;
+                heightMapNodeCount++;
+                return true;
+            }
+            if (heightMap.getClass() == FastNoiseLiteHeightMap.class) {
+                final FastNoiseLiteHeightMap noise = (FastNoiseLiteHeightMap) heightMap;
+                heightMapOpcodes[index] = 13;
+                heightMapValues[index] = noise.getHeight();
+                heightMapScales[index] = 1.0 / (Constants.LARGE_BLOBS * noise.getScale());
+                heightMapOctaves[index] = 0x4000_0000
+                        | noise.getOctaves()
+                        | (noise.getNoiseType().ordinal() << 8)
+                        | (noise.getFractalType().ordinal() << 16);
+                heightMapSeeds[index] = noise.getSeed() + noise.getSeedOffset();
+                heightMapFastNoiseCount++;
+                heightMapNodeCount++;
+                return true;
+            }
+            if (heightMap.getClass() == MandelbrotHeightMap.class) {
+                heightMapOpcodes[index] = 8;
+                heightMapNodeCount++;
+                heightMapMandelbrotCount++;
+                return true;
+            }
+            if (heightMap.getClass() == BandedHeightMap.class) {
+                final BandedHeightMap banded = (BandedHeightMap) heightMap;
+                heightMapOpcodes[index] = banded.isSmooth() ? 10 : 9;
+                heightMapValues[index] = banded.getSegment1EndHeight();
+                heightMapScales[index] = banded.getSegment2EndHeight();
+                heightMapOctaves[index] = banded.getSegment1Length();
+                heightMapSeeds[index] = banded.getSegment2Length();
+                heightMapNodeCount++;
+                heightMapBandedCount++;
+                return true;
+            }
+            if (heightMap.getClass() == NinePatchHeightMap.class) {
+                final NinePatchHeightMap ninePatch = (NinePatchHeightMap) heightMap;
+                if (ninePatch.getInnerSizeX() != ninePatch.getInnerSizeY()) {
+                    return false;
+                }
+                heightMapOpcodes[index] = 12;
+                heightMapValues[index] = ninePatch.getHeight();
+                heightMapScales[index] = ninePatch.getCoastSize();
+                heightMapOctaves[index] = ninePatch.getInnerSizeX();
+                heightMapSeeds[index] = ninePatch.getBorderSize();
+                heightMapNodeCount++;
+                heightMapNinePatchCount++;
+                return true;
+            }
+            if (heightMap.getClass() == ShelvingHeightMap.class) {
+                final ShelvingHeightMap shelving = (ShelvingHeightMap) heightMap;
+                if (!appendHeightMapNode(shelving.getHeightMap(0))
+                        || heightMapNodeCount >= heightMapOpcodes.length) {
+                    return false;
+                }
+                final int operatorIndex = heightMapNodeCount++;
+                heightMapOpcodes[operatorIndex] = 11;
+                heightMapOctaves[operatorIndex] = shelving.getShelveHeight();
+                heightMapSeeds[operatorIndex] = shelving.getShelveStrength();
+                return true;
+            }
+            final int operator;
+            if (heightMap.getClass() == SumHeightMap.class) {
+                operator = 2;
+            } else if (heightMap.getClass() == DifferenceHeightMap.class) {
+                operator = 3;
+            } else if (heightMap.getClass() == ProductHeightMap.class) {
+                operator = 4;
+            } else if (heightMap.getClass() == MinimisingHeightMap.class) {
+                operator = 5;
+            } else if (heightMap.getClass() == MaximisingHeightMap.class) {
+                operator = 6;
+            } else {
+                return false;
+            }
+            if (heightMap instanceof CombiningHeightMap) {
+                final CombiningHeightMap combining = (CombiningHeightMap) heightMap;
+                if (!appendHeightMapNode(combining.getHeightMap1())
+                        || !appendHeightMapNode(combining.getHeightMap2())
+                        || heightMapNodeCount >= heightMapOpcodes.length) {
+                    return false;
+                }
+                heightMapOpcodes[heightMapNodeCount++] = operator;
+                return true;
+            }
+            return false;
+        }
+
+        private double[] nativeHeights() {
+            if (nativeHeightValues == null) {
+                nativeHeightValues = new double[TILE_SIZE * TILE_SIZE];
+            }
+            return nativeHeightValues;
+        }
+
+        private double[] nativeSlopeBaseHeights() {
+            if (nativeSlopeBaseValues == null) {
+                nativeSlopeBaseValues = new double[(TILE_SIZE + 2) * (TILE_SIZE + 2)];
+            }
+            return nativeSlopeBaseValues;
+        }
+
+        private double[] nativeDisplacementAngleHeights() {
+            if (nativeDisplacementAngleValues == null) {
+                nativeDisplacementAngleValues = new double[TILE_SIZE * TILE_SIZE];
+            }
+            return nativeDisplacementAngleValues;
+        }
+
+        private double[] nativeDisplacementDistanceHeights() {
+            if (nativeDisplacementDistanceValues == null) {
+                nativeDisplacementDistanceValues = new double[TILE_SIZE * TILE_SIZE];
+            }
+            return nativeDisplacementDistanceValues;
+        }
+
+        private float[] displacementXCoordinates() {
+            if (displacementXCoordinateValues == null) {
+                displacementXCoordinateValues = new float[TILE_SIZE * TILE_SIZE];
+            }
+            return displacementXCoordinateValues;
+        }
+
+        private float[] displacementYCoordinates() {
+            if (displacementYCoordinateValues == null) {
+                displacementYCoordinateValues = new float[TILE_SIZE * TILE_SIZE];
+            }
+            return displacementYCoordinateValues;
+        }
+
+        private double[] freshFancyHeightNeighborhood() {
+            final int length = freshFancyHeightNeighborhoodLength();
+            if (freshFancyHeightNeighborhoodValues == null) {
+                freshFancyHeightNeighborhoodValues = new double[length];
+            }
+            return freshFancyHeightNeighborhoodValues;
+        }
+
+        private double[] freshFancyDisplacementAngleHeights() {
+            final int length = freshFancyHeightNeighborhoodLength();
+            if (freshFancyDisplacementAngleValues == null) {
+                freshFancyDisplacementAngleValues = new double[length];
+            }
+            return freshFancyDisplacementAngleValues;
+        }
+
+        private double[] freshFancyDisplacementDistanceHeights() {
+            final int length = freshFancyHeightNeighborhoodLength();
+            if (freshFancyDisplacementDistanceValues == null) {
+                freshFancyDisplacementDistanceValues = new double[length];
+            }
+            return freshFancyDisplacementDistanceValues;
+        }
+
+        private float[] freshFancyDisplacementXCoordinates() {
+            final int length = freshFancyHeightNeighborhoodLength();
+            if (freshFancyDisplacementXCoordinateValues == null) {
+                freshFancyDisplacementXCoordinateValues = new float[length];
+            }
+            return freshFancyDisplacementXCoordinateValues;
+        }
+
+        private float[] freshFancyDisplacementYCoordinates() {
+            final int length = freshFancyHeightNeighborhoodLength();
+            if (freshFancyDisplacementYCoordinateValues == null) {
+                freshFancyDisplacementYCoordinateValues = new float[length];
+            }
+            return freshFancyDisplacementYCoordinateValues;
+        }
+
+        private static int freshFancyHeightNeighborhoodLength() {
+            final int size = TILE_SIZE + FancyTheme.HEIGHT_NEIGHBORHOOD_RADIUS * 2;
+            return size * size;
+        }
+
+        private boolean fillNativeHeightMapTree(HeightMap map, int originX, int originY,
+                                                int width, int height, double[] output) {
+            return prepareHeightMapProgram(map)
+                    && NativeSlices.fillHeightMapTree(originX, originY, width, height,
+                    heightMapNodeCount, heightMapOpcodes, heightMapValues,
+                    heightMapScales, heightMapOctaves, heightMapSeeds, output);
+        }
+
+        private boolean fillNativeHeightMapTreePoints(HeightMap map,
+                                                      float[] xCoordinates, float[] yCoordinates,
+                                                      double[] output) {
+            return prepareHeightMapProgram(map)
+                    && NativeSlices.fillHeightMapTreePoints(heightMapNodeCount,
+                    heightMapOpcodes, heightMapValues, heightMapScales,
+                    heightMapOctaves, heightMapSeeds, xCoordinates, yCoordinates, output);
+        }
+    }
+
+    private static final ThreadLocal<GenerationBuffers> GENERATION_BUFFERS =
+            ThreadLocal.withInitial(GenerationBuffers::new);
+
+    private static final ThreadLocal<org.pepsoft.worldpainter.heightMaps.BitmapPreviewAccess> BITMAP_PREVIEW =
+            ThreadLocal.withInitial(org.pepsoft.worldpainter.heightMaps.BitmapPreviewAccess::new);
+
+    /** Reuses the generation program compiler for one complete preview tile. */
+    public static boolean tryFillPreviewHeights(HeightMap map, int originX, int originY, int shift,
+                                                float[] xCoordinates, float[] yCoordinates, double[] output) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || map == null
+                || shift < 0 || shift > 31 || output == null || output.length != TILE_SIZE * TILE_SIZE
+                || !Boolean.getBoolean("welt.native.heightMapPreview")) return false;
+        // Tree children use float coordinates while a standalone noise map also
+        // has an integer overload. Only batch coordinates exact in both domains.
+        for (int i = 0; i < TILE_SIZE; i++) {
+            int x = originX + (i << shift), y = originY + (i << shift);
+            if (x < -(1 << 24) || x > (1 << 24) || y < -(1 << 24) || y > (1 << 24)) return false;
+        }
+        GenerationBuffers buffers = GENERATION_BUFFERS.get();
+        if (BITMAP_PREVIEW.get().fill(map, originX, originY, shift, output)) return true;
+        if (map.getClass() == DisplacementHeightMap.class) {
+            DisplacementHeightMap displacement = (DisplacementHeightMap) map;
+            if (!buffers.prepareHeightMapProgramPair(displacement.getAngleMap(), displacement.getDistanceMap())
+                    || !buffers.appendHeightMapNode(displacement.getBaseHeightMap()) || buffers.heightMapNodeCount > 64
+                    || (buffers.heightMapNinePatchCount != 0 && !Native.isNinePatchGenEnabled())) return false;
+            return NativeSlices.fillDisplacementHeightMapTree(originX, originY, TILE_SIZE, TILE_SIZE, shift,
+                    buffers.heightMapFirstNodeCount, buffers.heightMapSecondNodeCount, buffers.heightMapNodeCount,
+                    buffers.heightMapOpcodes, buffers.heightMapValues, buffers.heightMapScales,
+                    buffers.heightMapOctaves, buffers.heightMapSeeds, output);
+        }
+        if (map.getClass() == TransformingHeightMap.class) {
+            TransformingHeightMap transforming = (TransformingHeightMap) map;
+            if (transforming.getScaleX() == 1.0f && transforming.getScaleY() == 1.0f && transforming.getRotation() == 0) {
+                // Pure translation uses integer subtraction in the original map.
+                for (int i = 0; i < TILE_SIZE; i++) {
+                    long x = (long) (originX + (i << shift)) - transforming.getOffsetX();
+                    long y = (long) (originY + (i << shift)) - transforming.getOffsetY();
+                    if (x < -(1 << 24) || x > (1 << 24) || y < -(1 << 24) || y > (1 << 24)) return false;
+                }
+            }
+            if (!buffers.prepareHeightMapProgram(transforming.getBaseHeightMap())) return false;
+            createTransformingHeightMapTransform(transforming).getMatrix(buffers.previewAffineMatrix);
+            return NativeSlices.fillAffineHeightMapTree(originX, originY, TILE_SIZE, TILE_SIZE, shift,
+                    buffers.previewAffineMatrix, buffers.heightMapNodeCount, buffers.heightMapOpcodes, buffers.heightMapValues,
+                    buffers.heightMapScales, buffers.heightMapOctaves, buffers.heightMapSeeds, output);
+        }
+        if (map.getClass() == SlopeHeightMap.class) {
+            if (shift != 0 && !Boolean.getBoolean("welt.native.slopePreviewZoom")) return false;
+            SlopeHeightMap slope = (SlopeHeightMap) map;
+            for (int i = 0; i < TILE_SIZE; i++) {
+                int x = originX + (i << shift), y = originY + (i << shift);
+                if (x <= -(1 << 24) || x >= (1 << 24) || y <= -(1 << 24) || y >= (1 << 24)) return false;
+            }
+            return buffers.prepareHeightMapProgram(slope.getBaseHeightMap())
+                    && NativeSlices.fillSlopeHeightMapTree(originX, originY, TILE_SIZE, TILE_SIZE, shift, slope.getVerticalScaling(),
+                    buffers.heightMapNodeCount, buffers.heightMapOpcodes, buffers.heightMapValues, buffers.heightMapScales,
+                    buffers.heightMapOctaves, buffers.heightMapSeeds, output);
+        }
+        if (shift == 0) return buffers.fillNativeHeightMapTree(map, originX, originY, TILE_SIZE, TILE_SIZE, output);
+        if (xCoordinates == null || yCoordinates == null || xCoordinates.length != output.length
+                || yCoordinates.length != output.length) return false;
+        for (int y = 0; y < TILE_SIZE; y++) for (int x = 0; x < TILE_SIZE; x++) {
+            int cell = x + y * TILE_SIZE;
+            xCoordinates[cell] = originX + (x << shift); yCoordinates[cell] = originY + (y << shift);
+        }
+        return buffers.fillNativeHeightMapTreePoints(map, xCoordinates, yCoordinates, output);
     }
 
     @Override
@@ -145,6 +1233,12 @@ public class HeightMapTileFactory extends AbstractTileFactory {
         } else {
             return null;
         }
+    }
+
+    /** Réapplique le thème groupé quand aucun comportement personnalisé n'intervient. */
+    public final boolean tryApplyTheme(Tile tile) {
+        return getClass() == HeightMapTileFactory.class && theme instanceof SimpleTheme
+                && ((SimpleTheme) theme).applyToExistingTile(tile);
     }
 
     @Override

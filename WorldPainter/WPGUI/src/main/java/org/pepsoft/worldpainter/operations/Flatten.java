@@ -8,7 +8,14 @@ package org.pepsoft.worldpainter.operations;
 import org.pepsoft.util.DesktopUtils;
 import org.pepsoft.util.IconUtils;
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.TerrainHeightAccess;
+import org.pepsoft.worldpainter.HeightBrushAccess;
+import org.pepsoft.worldpainter.FilteredPaintAccess;
+import org.pepsoft.worldpainter.panels.EditorFilterPlan;
 import org.pepsoft.worldpainter.WorldPainter;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
 import javax.swing.*;
 import java.awt.*;
@@ -49,6 +56,10 @@ public class Flatten extends AbstractBrushOperation {
         try {
             int radius = getEffectiveRadius();
             boolean applyTheme = options.isApplyTheme();
+            if (flattenNative(dimension, centreX, centreY, radius,
+                    dynamicLevel, applyTheme)) {
+                return;
+            }
             switch (mode) {
                 case FLATTEN -> {
                     for (int x = centreX - radius; x <= centreX + radius; x++) {
@@ -104,6 +115,111 @@ public class Flatten extends AbstractBrushOperation {
             dimension.setEventsInhibited(false);
         }
     }
+
+    private boolean flattenNative(Dimension dimension, int centreX, int centreY, int radius,
+                                  float dynamicLevel, boolean applyTheme) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) {
+            return false;
+        }
+        long diameterLong = 2L * radius + 1L;
+        long areaLong = diameterLong * diameterLong;
+        if (radius < 0 || diameterLong > 256L || areaLong > MAX_NATIVE_CELLS) {
+            return false;
+        }
+        int area = (int) areaLong;
+        if (nativeStrengths == null || nativeStrengths.length != area) nativeStrengths = new float[area];
+        final int diameter = (int) diameterLong;
+
+        if(getFilter()!=null){
+            if(area<16384)return false;
+            EditorFilterPlan plan=EditorFilterPlan.compile(getFilter(),dimension);if(plan==null)return false;
+            if(applyTheme){
+                if(!HeightBrushAccess.isFilteredThemedEnabled())return false;
+                for(int x=0;x<diameter;x++)for(int y=0;y<diameter;y++)
+                    nativeStrengths[x*diameter+y]=getBrush().getStrength(x-radius,y-radius);
+                return HeightBrushAccess.tryApplyFilteredThemed(dimension,centreX-radius,centreY-radius,
+                        diameter,diameter,nativeStrengths,mode==Mode.FLATTEN?HeightBrushAccess.FLATTEN:mode==Mode.RAISE?HeightBrushAccess.FLATTEN_RAISE:HeightBrushAccess.FLATTEN_LOWER,
+                        targetHeight,dimension.getMinHeight(),dimension.getMaxHeight()-1,plan,dynamicLevel);
+            }
+            for(int y=0;y<diameter;y++)for(int x=0;x<diameter;x++)
+                nativeStrengths[y*diameter+x]=getBrush().getStrength(x-radius,y-radius);
+            int filteredMode=mode==Mode.FLATTEN?HeightBrushAccess.FLATTEN:mode==Mode.RAISE?HeightBrushAccess.FLATTEN_RAISE:HeightBrushAccess.FLATTEN_LOWER;
+            return FilteredPaintAccess.applyHeight(dimension,plan,centreX-radius,centreY-radius,diameter,diameter,
+                    nativeStrengths,filteredMode,targetHeight,dimension.getMinHeight(),dimension.getMaxHeight()-1,dynamicLevel);
+        }
+        int index = 0;
+        for (int x = centreX - radius; x <= centreX + radius; x++) {
+            for (int y = centreY - radius; y <= centreY + radius; y++) {
+                nativeStrengths[index] = dynamicLevel * getStrength(centreX, centreY, x, y);
+                index++;
+            }
+        }
+
+        int nativeMode = mode == Mode.FLATTEN ? 0 : mode == Mode.RAISE ? 1 : 2;
+        if (applyTheme && HeightBrushAccess.tryApplyThemed(dimension, centreX - radius, centreY - radius,
+                diameter, diameter, nativeStrengths, nativeMode + HeightBrushAccess.FLATTEN,
+                targetHeight, dimension.getMinHeight(), dimension.getMaxHeight() - 1)) return true;
+        if (!applyTheme && HeightBrushAccess.tryApply(dimension, centreX - radius, centreY - radius,
+                diameter, diameter, nativeStrengths, nativeMode + HeightBrushAccess.FLATTEN,
+                targetHeight, dimension.getMinHeight(), dimension.getMaxHeight() - 1)) return true;
+        ensureNativeBuffers(radius, area);
+        TerrainHeightAccess.copy(dimension, centreX - radius, centreY - radius, diameter, diameter, nativeHeights);
+        if (!NativeSlices.applyFlattenBrush(nativeMode, targetHeight,
+                nativeHeights, nativeStrengths, nativeModified)) {
+            flattenHeightBufferInJava(nativeMode, targetHeight,
+                    nativeHeights, nativeStrengths, nativeModified);
+        }
+
+        if (!applyTheme) {
+            TerrainHeightAccess.apply(dimension, centreX - radius, centreY - radius,
+                    diameter, diameter, nativeHeights, nativeModified);
+            return true;
+        }
+        index = 0;
+        for (int x = centreX - radius; x <= centreX + radius; x++) {
+            for (int y = centreY - radius; y <= centreY + radius; y++) {
+                if (nativeModified[index] != 0) {
+                    dimension.setHeightAt(x, y, nativeHeights[index]);
+                    if (applyTheme) {
+                        dimension.applyTheme(x, y);
+                    }
+                }
+                index++;
+            }
+        }
+        return true;
+    }
+
+    private void ensureNativeBuffers(int radius, int area) {
+        if (nativeRadius != radius) {
+            nativeRadius = radius;
+            nativeHeights = new float[area];
+            nativeModified = new byte[area];
+        }
+    }
+
+    private static void flattenHeightBufferInJava(int mode, float targetHeight,
+                                                  float[] heights, float[] strengths,
+                                                  byte[] modified) {
+        for (int index = 0; index < heights.length; index++) {
+            float currentHeight = heights[index];
+            float strength = strengths[index];
+            if (strength > 0.0f) {
+                float newHeight = strength * targetHeight + (1f - strength) * currentHeight;
+                boolean shouldWrite = (mode == 0)
+                        || ((mode == 1) && (newHeight > currentHeight))
+                        || ((mode == 2) && (newHeight < currentHeight));
+                if (shouldWrite) {
+                    heights[index] = newHeight;
+                    modified[index] = 1;
+                } else {
+                    modified[index] = 0;
+                }
+            } else {
+                modified[index] = 0;
+            }
+        }
+    }
     
     private final TerrainShapingOptions<Flatten> options = new TerrainShapingOptions<>();
     private final TerrainShapingOptionsPanel optionsPanel = new TerrainShapingOptionsPanel("Flatten", "<p>Click to flatten the surrounding terrain to the level at that location", options) {
@@ -143,10 +259,14 @@ public class Flatten extends AbstractBrushOperation {
     };
     private float targetHeight = -Float.MAX_VALUE;
     private Mode mode = Mode.FLATTEN;
+    private int nativeRadius = -1;
+    private float[] nativeHeights, nativeStrengths;
+    private byte[] nativeModified;
 
     private static final Icon FLATTEN_ICON = IconUtils.loadScaledIcon("org/pepsoft/worldpainter/icons/flatten.png");
     private static final Icon RAISE_ICON = IconUtils.loadScaledIcon("org/pepsoft/worldpainter/icons/raise.png");
     private static final Icon LOWER_ICON = IconUtils.loadScaledIcon("org/pepsoft/worldpainter/icons/lower.png");
 
     enum Mode { FLATTEN, RAISE, LOWER}
+    private static final int MAX_NATIVE_CELLS = 65_536;
 }

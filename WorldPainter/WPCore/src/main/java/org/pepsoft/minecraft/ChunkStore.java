@@ -94,6 +94,8 @@ public interface ChunkStore extends ChunkProvider {
          * @return {@code true} if more chunks should be visited, or {@code false} if no more chunks need to be visited.
          */
         boolean visitChunk(Chunk chunk) throws Exception;
+        /** Opt-in for read-only, packed section views; editing visits always use ordinary chunks. */
+        default boolean prefersPackedSections(){return false;}
 
         /**
          * This is called when a chunk is skipped due to a loading error, to

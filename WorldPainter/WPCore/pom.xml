@@ -106,6 +106,17 @@
         </resources>
         <plugins>
             <plugin>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>${maven-jar-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>core-test-fixtures</id>
+                        <phase>process-test-classes</phase>
+                        <goals><goal>test-jar</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>buildnumber-maven-plugin</artifactId>
                 <version>${buildnumber-maven-plugin.version}</version>

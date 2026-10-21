@@ -1,0 +1,244 @@
+name: Welt Phase 0
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_export_campaign:
+        description: Run the alternating full-world export and memory campaign
+        required: true
+        type: boolean
+        default: false
+      baseline_ref:
+        description: Revision before the Resources candidate cache
+        required: true
+        type: string
+        default: 12dd94ce7b69ccc7cff63aa5a9e247c83a8c7c18
+      candidate_ref:
+        description: Revision to measure
+        required: true
+        type: string
+        default: dev-oesphy
+      profile_only:
+        description: Stop after warmups and diagnostic profiles without timed campaign trials
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        id: rustfmt
+        run: cargo fmt --all --manifest-path welt-native/Cargo.toml -- --check
+      - name: Publish Rust formatting diff
+        if: always() && steps.rustfmt.outcome == 'failure'
+        shell: pwsh
+        run: |
+          $diagnostics = (cargo fmt --all --manifest-path welt-native/Cargo.toml -- --check 2>&1 | Out-String).Trim()
+          $escaped = $diagnostics.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Rust formatting diff`n`n````text`n$diagnostics`n````"
+          Write-Output "::error title=Rust formatting diff::$escaped"
+      - name: Unit and golden parity tests
+        run: cargo test --workspace --manifest-path welt-native/Cargo.toml
+      - name: Lint all crates and benchmarks
+        run: cargo clippy --workspace --all-targets --manifest-path welt-native/Cargo.toml -- -D warnings
+      - name: Compile benchmark targets
+        run: cargo check --workspace --benches --manifest-path welt-native/Cargo.toml
+
+  java:
+    name: Java 17, Maven tests, Java golden verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Configure the Maven JDK 17 toolchain
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.m2"
+          printf '<toolchains><toolchain><type>jdk</type><provides><version>17</version></provides><configuration><jdkHome>%s</jdkHome></configuration></toolchain></toolchains>\n' "$JAVA_HOME" > "$HOME/.m2/toolchains.xml"
+      - name: Build and test WPCore
+        working-directory: WorldPainter
+        run: mvn --batch-mode --no-transfer-progress -pl WPCore -am test
+      - name: Verify checked-in Java goldens
+        shell: bash
+        run: |
+          build_dir="$RUNNER_TEMP/welt-golden-classes"
+          mkdir -p "$build_dir"
+          javac -encoding UTF-8 --release 17 \
+            -cp docs/welt/reference/Utils-2.2.0.jar \
+            -d "$build_dir" docs/welt/golden-tools/VerifyGolden.java
+          java -cp "$build_dir:docs/welt/reference/Utils-2.2.0.jar" \
+            VerifyGolden \
+            welt-native/golden/perlin-golden.txt \
+            welt-native/golden/java-random-golden.txt \
+            welt-native/golden/java-random-edge.txt \
+            docs/welt/golden-tools/example-golden.txt
+
+  java-native:
+    name: Java 17 ↔ Rust JNI integration / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Configure the Maven JDK 17 toolchain
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.m2"
+          printf '<toolchains><toolchain><type>jdk</type><provides><version>17</version></provides><configuration><jdkHome>%s</jdkHome></configuration></toolchain></toolchains>\n' "$JAVA_HOME" > "$HOME/.m2/toolchains.xml"
+      - name: Build native libraries and run WPCore JNI parity tests
+        working-directory: WorldPainter
+        run: mvn --batch-mode --no-transfer-progress -Pnative -pl WPCore -am test
+      - name: Upload NinePatch benchmark result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ninepatch-heightmap-benchmark-${{ matrix.os }}
+          path: WorldPainter/WPCore/target/ninepatch-heightmap-benchmark.txt
+          if-no-files-found: ignore
+      - name: Upload slope benchmark result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slope-heightmap-benchmark-${{ matrix.os }}
+          path: WorldPainter/WPCore/target/slope-heightmap-benchmark.txt
+          if-no-files-found: ignore
+      - name: Publish slope benchmark summary
+        if: always()
+        shell: pwsh
+        run: |
+          $resultPath = 'WorldPainter/WPCore/target/slope-heightmap-benchmark.txt'
+          if (Test-Path $resultPath) {
+            $result = (Get-Content -Raw $resultPath).Trim()
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "Slope benchmark (${{ matrix.os }}): ``$result``"
+            Write-Output "::notice title=Slope benchmark (${{ matrix.os }})::$result"
+          }
+      - name: Upload displacement benchmark result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: displacement-heightmap-benchmark-${{ matrix.os }}
+          path: WorldPainter/WPCore/target/displacement-heightmap-benchmark.txt
+          if-no-files-found: ignore
+      - name: Publish displacement benchmark summary
+        if: always()
+        shell: pwsh
+        run: |
+          $resultPath = 'WorldPainter/WPCore/target/displacement-heightmap-benchmark.txt'
+          if (Test-Path $resultPath) {
+            $result = (Get-Content -Raw $resultPath).Trim()
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "Displacement benchmark (${{ matrix.os }}): ``$result``"
+            Write-Output "::notice title=Displacement benchmark (${{ matrix.os }})::$result"
+          }
+
+  export-campaign:
+    name: Full export campaign / Windows
+    if: github.event_name == 'workflow_dispatch' && inputs.run_export_campaign
+    runs-on: windows-latest
+    steps:
+      - name: Set up Java 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check out baseline
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.baseline_ref }}
+          path: baseline
+
+      - name: Configure the Maven JDK 17 toolchain
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path (Join-Path $HOME '.m2') | Out-Null
+          $toolchains = '<toolchains><toolchain><type>jdk</type><provides><version>17</version></provides><configuration><jdkHome>' + $env:JAVA_HOME + '</jdkHome></configuration></toolchain></toolchains>'
+          Set-Content -Path (Join-Path $HOME '.m2/toolchains.xml') -Value $toolchains -Encoding utf8
+
+      - name: Measure baseline full-world exports
+        working-directory: baseline/WorldPainter
+        shell: bash
+        env:
+          JAVA_TOOL_OPTIONS: -Djava.io.tmpdir=${{ runner.temp }}
+        run: |
+          mvn --batch-mode --no-transfer-progress -Pnative -pl WPCore -am \
+            '-Dtest=ExportFullWorldCampaignTest' \
+            '-Dsurefire.failIfNoSpecifiedTests=false' \
+            '-Dwelt.export.campaign=true' \
+            '-Dwelt.export.modernChunkCampaign=true' \
+            '-Dwelt.export.profileOnly=${{ inputs.profile_only }}' \
+            test
+
+      - name: Upload baseline measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: welt-export-campaign-baseline
+          path: baseline/WorldPainter/WPCore/target/surefire-reports/*ExportFullWorldCampaignTest*
+          if-no-files-found: warn
+
+      - name: Check out candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_ref }}
+          path: candidate
+
+      - name: Measure candidate full-world exports
+        working-directory: candidate/WorldPainter
+        shell: bash
+        env:
+          JAVA_TOOL_OPTIONS: -Djava.io.tmpdir=${{ runner.temp }}
+        run: |
+          mvn --batch-mode --no-transfer-progress -Pnative -pl WPCore -am \
+            '-Dtest=ExportFullWorldCampaignTest' \
+            '-Dsurefire.failIfNoSpecifiedTests=false' \
+            '-Dwelt.export.campaign=true' \
+            '-Dwelt.export.modernChunkCampaign=true' \
+            '-Dwelt.export.profileOnly=${{ inputs.profile_only }}' \
+            test
+
+      - name: Upload candidate measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: welt-export-campaign-candidate
+          path: candidate/WorldPainter/WPCore/target/surefire-reports/*ExportFullWorldCampaignTest*
+          if-no-files-found: warn
+
+      - name: Upload JFR recordings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: welt-export-campaign-jfr
+          path: ${{ runner.temp }}/welt-full-export-campaign-*/*.jfr
+          if-no-files-found: warn

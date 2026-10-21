@@ -11,6 +11,9 @@ import org.pepsoft.util.Box;
 import org.pepsoft.worldpainter.Platform;
 
 import java.util.Arrays;
+import java.util.BitSet;
+import java.util.IdentityHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static java.lang.Math.max;
 import static org.pepsoft.minecraft.Constants.MC_DISTANCE;
@@ -47,6 +50,27 @@ import static org.pepsoft.worldpainter.exporting.WorldExportSettings.Step.LIGHTI
  * @author pepijn
  */
 public class BlockPropertiesCalculator {
+    private static final String FRONTIER_PROPERTY = "welt.export.blockPropertiesFrontier";
+    private static final String FRONTIER_PROFILE_PROPERTY = "welt.export.profileBlockPropertiesFrontier";
+    private static final String DISABLE_INITIAL_HEIGHT_CACHE_PROPERTY = "welt.export.disableInitialHeightCache";
+    private static final AtomicLong FRONTIER_PROFILE_PASSES = new AtomicLong();
+    private static final AtomicLong FRONTIER_PROFILE_RECTANGLE_CELLS = new AtomicLong();
+    private static final AtomicLong FRONTIER_PROFILE_PROCESSED_CELLS = new AtomicLong();
+    private static final AtomicLong FRONTIER_PROFILE_CHANGED_CELLS = new AtomicLong();
+
+    public static void resetFrontierProfile() {
+        FRONTIER_PROFILE_PASSES.set(0);
+        FRONTIER_PROFILE_RECTANGLE_CELLS.set(0);
+        FRONTIER_PROFILE_PROCESSED_CELLS.set(0);
+        FRONTIER_PROFILE_CHANGED_CELLS.set(0);
+    }
+
+    /** Returns pass count, equivalent rectangle cells, visited cells, and changed cells. */
+    public static long[] frontierProfileSnapshot() {
+        return new long[]{FRONTIER_PROFILE_PASSES.get(), FRONTIER_PROFILE_RECTANGLE_CELLS.get(),
+                FRONTIER_PROFILE_PROCESSED_CELLS.get(), FRONTIER_PROFILE_CHANGED_CELLS.get()};
+    }
+
     public BlockPropertiesCalculator(MinecraftWorld world, Platform platform, WorldExportSettings worldExportSettings, BlockBasedExportSettings exportSettings) {
         this.world = world;
         skyLight = isSkyLightNeeded(platform, worldExportSettings, exportSettings);
@@ -91,7 +115,11 @@ public class BlockPropertiesCalculator {
         for (int chunkZ = z1InChunks; chunkZ <= z2InChunks; chunkZ++) {
             for (int chunkX = x1InChunks; chunkX <= x2InChunks; chunkX++) {
                 final Chunk chunk = world.getChunk(chunkX, chunkZ);
-                final int highestPossibleAffectedBlock = (chunk != null) ? Math.min(chunk.getHighestNonAirBlock() + 15, maxHeight - 1) : Integer.MIN_VALUE;
+                final Integer cachedHighestNonAirBlock = (chunk != null && initialChunkHeightCache != null)
+                        ? initialChunkHeightCache.remove(chunk) : null;
+                final int highestPossibleAffectedBlock = (chunk != null)
+                        ? Math.min(((cachedHighestNonAirBlock != null) ? cachedHighestNonAirBlock : chunk.getHighestNonAirBlock()) + 15, maxHeight - 1)
+                        : Integer.MIN_VALUE;
                 // Make sure the surrounding chunks are also at least as high, since blocks from this chunk could affect
                 // the block lighting in them
                 for (int dz = -1; dz <= 1; dz++) {
@@ -105,79 +133,154 @@ public class BlockPropertiesCalculator {
                 }
             }
         }
+        // The cache only bridges the initial per-chunk pass and this area setup. Do not retain chunks
+        // outside the dirty area, or keep references alive for later propagation passes.
+        if (initialChunkHeightCache != null) {
+            initialChunkHeightCache.clear();
+            initialChunkHeightCache = null;
+        }
+        useChangedBlockFrontier = Boolean.parseBoolean(System.getProperty(FRONTIER_PROPERTY, "true"));
+        if (useChangedBlockFrontier) {
+            initialiseChangedBlockFrontier(x1InChunks, x2InChunks, z1InChunks, z2InChunks);
+        } else {
+            activeFrontier = null;
+            nextFrontier = null;
+            frontierChunkPresent = null;
+            frontierInitialScan = false;
+        }
+    }
+
+    private void initialiseChangedBlockFrontier(int x1InChunks, int x2InChunks,
+                                                int z1InChunks, int z2InChunks) {
+        frontierChunkXOffset = x1InChunks;
+        frontierChunkZOffset = z1InChunks;
+        frontierChunksZ = z2InChunks - z1InChunks + 1;
+        final int chunkCount = (x2InChunks - x1InChunks + 1) * frontierChunksZ;
+        activeFrontier = new BitSet[chunkCount];
+        nextFrontier = new BitSet[chunkCount];
+        frontierChunkPresent = new boolean[chunkCount];
+        frontierInitialScan = true;
+        for (int chunkX = x1InChunks; chunkX <= x2InChunks; chunkX++) {
+            for (int chunkZ = z1InChunks; chunkZ <= z2InChunks; chunkZ++) {
+                final int slot = frontierSlot(chunkX, chunkZ);
+                frontierChunkPresent[slot] = world.getChunk(chunkX, chunkZ) != null;
+            }
+        }
+    }
+
+    private int frontierSlot(int chunkX, int chunkZ) {
+        return (chunkX - frontierChunkXOffset) * frontierChunksZ + chunkZ - frontierChunkZOffset;
+    }
+
+    private void addChangedBlockFrontier(int x, int y, int z) {
+        addFrontierCell(x, y, z);
+        addFrontierCell(x - 1, y, z);
+        addFrontierCell(x + 1, y, z);
+        addFrontierCell(x, y - 1, z);
+        addFrontierCell(x, y + 1, z);
+        addFrontierCell(x, y, z - 1);
+        addFrontierCell(x, y, z + 1);
+    }
+
+    private void addFrontierCell(int x, int y, int z) {
+        if ((x < originalDirtyArea.getX1()) || (x >= originalDirtyArea.getX2())
+                || (y < originalDirtyArea.getY1()) || (y >= originalDirtyArea.getY2())
+                || (z < originalDirtyArea.getZ1()) || (z >= originalDirtyArea.getZ2())) {
+            return;
+        }
+        final int chunkX = x >> 4, chunkZ = z >> 4;
+        final int slot = frontierSlot(chunkX, chunkZ);
+        if (!frontierChunkPresent[slot]) {
+            return;
+        }
+        final int maxY = Math.min(originalDirtyArea.getY2() - 1,
+                maxHeights[chunkZ - maxHeightsZOffset][chunkX - maxHeightsXOffset]);
+        if (y > maxY) {
+            return;
+        }
+        final int cell = ((maxHeight - 1 - y) << 8) | ((z & 15) << 4) | (x & 15);
+        BitSet candidates = nextFrontier[slot];
+        if (candidates == null) {
+            candidates = new BitSet();
+            nextFrontier[slot] = candidates;
+        }
+        candidates.set(cell);
     }
 
     /**
-     * For the current dirty area, propagate the selected block properties to surrounding blocks. The dirty area is
-     * constricted to the blocks that were actually changed, and {@code false} is returned if no changes were made at
-     * all (indicating that the process is complete).
+     * Propagates the selected block properties within the current dirty area.
+     * An exact frontier schedules only changed cells and their six face
+     * neighbours on subsequent passes. Set {@code welt.export.blockPropertiesFrontier=false}
+     * to use the historical rectangular scan. Returns {@code false} when no values changed.
      */
     public boolean secondPass() {
         final int x1InChunks = dirtyArea.getX1() >> 4, z1InChunks = dirtyArea.getZ1() >> 4,
                 x2InChunks = (dirtyArea.getX2() - 1) >> 4, z2InChunks = (dirtyArea.getZ2() - 1) >> 4;
-        int lowestY = Integer.MAX_VALUE, highestY = Integer.MIN_VALUE;
-        boolean changed = false;
+        final PassChanges changes = new PassChanges();
+        final boolean profileFrontier = Boolean.getBoolean(FRONTIER_PROFILE_PROPERTY);
+        long rectangleCells = 0, processedCells = 0;
         for (int chunkX = x1InChunks; chunkX <= x2InChunks; chunkX++) {
             for (int chunkZ = z1InChunks; chunkZ <= z2InChunks; chunkZ++) {
                 final Chunk chunk = world.getChunk(chunkX, chunkZ);
                 if (chunk == null) {
                     continue;
                 }
-                final int maxY = Math.min(dirtyArea.getY2() - 1, maxHeights[chunkZ - maxHeightsZOffset][chunkX - maxHeightsXOffset]);
-                for (int xInChunk = 0; xInChunk < 16; xInChunk++) {
-                    for (int zInChunk = 0; zInChunk < 16; zInChunk++) {
+                final int maxY = Math.min(dirtyArea.getY2() - 1,
+                        maxHeights[chunkZ - maxHeightsZOffset][chunkX - maxHeightsXOffset]);
+                if (maxY < dirtyArea.getY1()) {
+                    continue;
+                }
+                final int minXInChunk = Math.max(0, dirtyArea.getX1() - (chunkX << 4));
+                final int maxXInChunk = Math.min(16, dirtyArea.getX2() - (chunkX << 4));
+                final int minZInChunk = Math.max(0, dirtyArea.getZ1() - (chunkZ << 4));
+                final int maxZInChunk = Math.min(16, dirtyArea.getZ2() - (chunkZ << 4));
+                if ((minXInChunk >= maxXInChunk) || (minZInChunk >= maxZInChunk)) {
+                    continue;
+                }
+                final int slot = useChangedBlockFrontier ? frontierSlot(chunkX, chunkZ) : -1;
+                final boolean processFrontier = useChangedBlockFrontier && !frontierInitialScan;
+                final BitSet candidates = processFrontier ? activeFrontier[slot] : null;
+                final int scanCount = (maxY - dirtyArea.getY1() + 1)
+                        * (maxXInChunk - minXInChunk) * (maxZInChunk - minZInChunk);
+                if (profileFrontier) {
+                    rectangleCells += scanCount;
+                }
+                if (processFrontier) {
+                    if (candidates == null) {
+                        continue;
+                    }
+                    for (int cell = candidates.nextSetBit(0); cell >= 0; cell = candidates.nextSetBit(cell + 1)) {
+                        final int y = maxHeight - 1 - (cell >>> 8);
+                        final int zInChunk = (cell >>> 4) & 15, xInChunk = cell & 15;
+                        if ((y < dirtyArea.getY1()) || (y > maxY)
+                                || (xInChunk < minXInChunk) || (xInChunk >= maxXInChunk)
+                                || (zInChunk < minZInChunk) || (zInChunk >= maxZInChunk)) {
+                            continue;
+                        }
+                        if (profileFrontier) {
+                            processedCells++;
+                        }
                         final int x = (chunkX << 4) | xInChunk, z = (chunkZ << 4) | zInChunk;
-                        for (int y = maxY; y >= dirtyArea.getY1() ; y--) {
-                            boolean changedBlock = false;
-                            Material material = chunk.getMaterial(xInChunk, y, zInChunk);
-                            if (leafDistance && material.leafBlock) {
-                                final int currentDistance = material.getProperty(DISTANCE, 8);
-                                final int distance = Math.min(currentDistance, calculateDistance(chunk, x, y, z));
-                                if (distance != currentDistance) {
-                                    material = material.withProperty(DISTANCE, distance);
-                                    chunk.setMaterial(xInChunk, y, zInChunk, material);
-                                    changedBlock = true;
-                                }
-                            }
-                            if (skyLight) {
-                                final int currentSkylightLevel = chunk.getSkyLightLevel(xInChunk, y, zInChunk);
-                                final int newSkyLightLevel;
-                                if (material.opaque) {
-                                    // Opaque block
-                                    newSkyLightLevel = 0;
-                                } else {
-                                    // Transparent block, or unknown block. We err on the side of transparency for
-                                    // unknown blocks to try and cause less visible lighting bugs
-                                    newSkyLightLevel = (currentSkylightLevel < 15) ? calculateSkyLightLevel(chunk, x, y, z, material) : 15;
-                                }
-                                if (newSkyLightLevel != currentSkylightLevel) {
-                                    chunk.setSkyLightLevel(xInChunk, y, zInChunk, newSkyLightLevel);
-                                    changedBlock = true;
-                                }
-                            }
-                            if (blockLight) {
-                                final int currentBlockLightLevel = chunk.getBlockLightLevel(xInChunk, y, zInChunk);
-                                final int newBlockLightLevel;
-                                if (material.opaque) {
-                                    // Opaque block
-                                    newBlockLightLevel = (material.blockLight > 0) ? currentBlockLightLevel : 0;
-                                } else {
-                                    // Transparent block, or unknown block. We err on the side of transparency for
-                                    // unknown blocks to try and cause less visible lighting bugs
-                                    newBlockLightLevel = max(currentBlockLightLevel, calculateBlockLightLevel(chunk, x, y, z));
-                                }
-                                if (newBlockLightLevel != currentBlockLightLevel) {
-                                    chunk.setBlockLightLevel(xInChunk, y, zInChunk, newBlockLightLevel);
-                                    changedBlock = true;
-                                }
-                            }
-                            if (changedBlock) {
-                                changed = true;
-                                if (y - 1 < lowestY) {
-                                    lowestY = y - 1;
-                                }
-                                if (y + 1 > highestY) {
-                                    highestY = y + 1;
+                        if (processSecondPassCell(chunk, xInChunk, y, zInChunk, x, z)) {
+                            changes.record(x, y, z);
+                            addChangedBlockFrontier(x, y, z);
+                        }
+                    }
+                } else {
+                    if (profileFrontier) {
+                        processedCells += scanCount;
+                    }
+                    // Keep the default path's original nested iteration order and
+                    // avoid coordinate division or a per-cell frontier branch.
+                    for (int y = maxY; y >= dirtyArea.getY1(); y--) {
+                        for (int zInChunk = minZInChunk; zInChunk < maxZInChunk; zInChunk++) {
+                            for (int xInChunk = minXInChunk; xInChunk < maxXInChunk; xInChunk++) {
+                                final int x = (chunkX << 4) | xInChunk, z = (chunkZ << 4) | zInChunk;
+                                if (processSecondPassCell(chunk, xInChunk, y, zInChunk, x, z)) {
+                                    changes.record(x, y, z);
+                                    if (useChangedBlockFrontier) {
+                                        addChangedBlockFrontier(x, y, z);
+                                    }
                                 }
                             }
                         }
@@ -185,26 +288,93 @@ public class BlockPropertiesCalculator {
                 }
             }
         }
-        if (changed) {
-            dirtyArea.setY1(max(lowestY, minHeight));
-            dirtyArea.setY2(Math.min(highestY + 1, maxHeight));
+        if (profileFrontier) {
+            FRONTIER_PROFILE_PASSES.incrementAndGet();
+            FRONTIER_PROFILE_RECTANGLE_CELLS.addAndGet(rectangleCells);
+            FRONTIER_PROFILE_PROCESSED_CELLS.addAndGet(processedCells);
+            FRONTIER_PROFILE_CHANGED_CELLS.addAndGet(changes.changedCells);
         }
-        return changed;
+        if (changes.changed) {
+            dirtyArea.setX1(Math.max(changes.lowestX - 1, originalDirtyArea.getX1()));
+            dirtyArea.setX2(Math.min(changes.highestX + 2, originalDirtyArea.getX2()));
+            dirtyArea.setZ1(Math.max(changes.lowestZ - 1, originalDirtyArea.getZ1()));
+            dirtyArea.setZ2(Math.min(changes.highestZ + 2, originalDirtyArea.getZ2()));
+            dirtyArea.setY1(max(changes.lowestY, minHeight));
+            dirtyArea.setY2(Math.min(changes.highestY + 1, maxHeight));
+            if (useChangedBlockFrontier) {
+                final BitSet[] previousFrontier = activeFrontier;
+                activeFrontier = nextFrontier;
+                nextFrontier = previousFrontier;
+                for (BitSet candidates : nextFrontier) {
+                    if (candidates != null) {
+                        candidates.clear();
+                    }
+                }
+                frontierInitialScan = false;
+            }
+        }
+        return changes.changed;
     }
 
+    private boolean processSecondPassCell(Chunk chunk, int xInChunk, int y, int zInChunk, int x, int z) {
+        boolean changedBlock = false;
+        Material material = chunk.getMaterial(xInChunk, y, zInChunk);
+        if (leafDistance && material.leafBlock) {
+            final int currentDistance = material.getProperty(DISTANCE, 8);
+            final int distance = Math.min(currentDistance, calculateDistance(chunk, x, y, z));
+            if (distance != currentDistance) {
+                material = material.withProperty(DISTANCE, distance);
+                chunk.setMaterial(xInChunk, y, zInChunk, material);
+                changedBlock = true;
+            }
+        }
+        final int opacity = ((skyLight || blockLight) && !material.opaque) ? getOpacity(material) : 0;
+        if (skyLight) {
+            final int currentSkylightLevel = chunk.getSkyLightLevel(xInChunk, y, zInChunk);
+            final int newSkylightLevel;
+            if (material.opaque) {
+                newSkylightLevel = 0;
+            } else {
+                newSkylightLevel = (currentSkylightLevel < 15)
+                        ? calculateSkyLightLevel(chunk, x, y, z, material, opacity) : 15;
+            }
+            if (newSkylightLevel != currentSkylightLevel) {
+                chunk.setSkyLightLevel(xInChunk, y, zInChunk, newSkylightLevel);
+                changedBlock = true;
+            }
+        }
+        if (blockLight) {
+            final int currentBlockLightLevel = chunk.getBlockLightLevel(xInChunk, y, zInChunk);
+            final int newBlockLightLevel = material.opaque
+                    ? (material.blockLight > 0 ? currentBlockLightLevel : 0)
+                    : max(currentBlockLightLevel, calculateBlockLightLevel(chunk, x, y, z, material, opacity));
+            if (newBlockLightLevel != currentBlockLightLevel) {
+                chunk.setBlockLightLevel(xInChunk, y, zInChunk, newBlockLightLevel);
+                changedBlock = true;
+            }
+        }
+        return changedBlock;
+    }
     /**
      * Set the blocks to their initial values for one entire chunk.
      */
     public int[] firstPass(Chunk chunk) {
+        final int highestNonAirBlock = chunk.getHighestNonAirBlock();
+        if (cacheInitialChunkHeights) {
+            if (initialChunkHeightCache == null) {
+                initialChunkHeightCache = new IdentityHashMap<>();
+            }
+            initialChunkHeightCache.put(chunk, highestNonAirBlock);
+        }
         for (int x = 0; x < 16; x++) {
             Arrays.fill(DAYLIGHT[x], true);
-            Arrays.fill(HEIGHT[x], clamp(minHeight, chunk.getHighestNonAirBlock(), maxHeight - 1));
+            Arrays.fill(HEIGHT[x], clamp(minHeight, highestNonAirBlock, maxHeight - 1));
         }
         // The point above which there are only transparent, non light source and non-leaf blocks
         int dirtyVolumeHighMark = minHeight;
         // The point below which there are only non-transparent, non light source and non-leaf blocks
         int dirtyVolumeLowMark = maxHeight - 1;
-        int maxY = clamp(minHeight - 1, chunk.getHighestNonAirBlock(), maxHeight - 1);
+        int maxY = clamp(minHeight - 1, highestNonAirBlock, maxHeight - 1);
         // Round to top of section:
         maxY = (((maxY >> 4) + 1) << 4) - 1;
         for (int y = maxY; y >= minHeight; y--) {
@@ -376,7 +546,7 @@ public class BlockPropertiesCalculator {
                                 chunk.setMaterial(xInChunk, y, zInChunk, material);
                                 if (skyLight) {
                                     final int currentSkylightLevel = chunk.getSkyLightLevel(xInChunk, y, zInChunk);
-                                    final int newSkyLightLevel = (currentSkylightLevel < 15) ? calculateSkyLightLevel(chunk, x, y, z, material) : 15;
+                                    final int newSkyLightLevel = (currentSkylightLevel < 15) ? calculateSkyLightLevel(chunk, x, y, z, material, getOpacity(material)) : 15;
                                     if (newSkyLightLevel != currentSkylightLevel) {
                                         chunk.setSkyLightLevel(xInChunk, y, zInChunk, newSkyLightLevel);
                                         // As a quick hack to avoid the worst lighting bugs, propagate new daylight down
@@ -394,7 +564,7 @@ public class BlockPropertiesCalculator {
                                 }
                                 if (blockLight) {
                                     final int currentBlockLightLevel = chunk.getBlockLightLevel(xInChunk, y, zInChunk);
-                                    final int newBlockLightLevel = calculateBlockLightLevel(chunk, x, y, z);
+                                    final int newBlockLightLevel = calculateBlockLightLevel(chunk, x, y, z, material, getOpacity(material));
                                     if (newBlockLightLevel != currentBlockLightLevel) {
                                         chunk.setBlockLightLevel(xInChunk, y, zInChunk, newBlockLightLevel);
                                     }
@@ -451,7 +621,7 @@ public class BlockPropertiesCalculator {
     }
 
     // MC coordinate system
-    private int calculateSkyLightLevel(Chunk chunk, int x, int y, int z, Material material) {
+    private int calculateSkyLightLevel(Chunk chunk, int x, int y, int z, Material material, int opacity) {
         int skyLightLevel = getSkyLightLevelAt(chunk, x, y + 1, z);
         if ((skyLightLevel == 15)
                 && (waterOpacity == 1)
@@ -491,12 +661,12 @@ public class BlockPropertiesCalculator {
                 }
             }
         }
-        return max(highestSurroundingSkyLight - max(getOpacity(material), 1), 0);
+        return max(highestSurroundingSkyLight - max(opacity, 1), 0);
     }
 
     // MC coordinate system
-    private int calculateBlockLightLevel(Chunk chunk, int x, int y, int z) {
-        Material material = chunk.getMaterial(x & 0xf, y, z & 0xf);
+    private int calculateBlockLightLevel(Chunk chunk, int x, int y, int z,
+                                         Material material, int opacity) {
         int blockLightLevel = getBlockLightLevelAt(chunk, x, y + 1, z);
         int highestSurroundingBlockLight = blockLightLevel;
         if (highestSurroundingBlockLight < 15) {
@@ -529,7 +699,7 @@ public class BlockPropertiesCalculator {
                 }
             }
         }
-        return max(highestSurroundingBlockLight - max(getOpacity(material), 1), 0);
+        return max(highestSurroundingBlockLight - max(opacity, 1), 0);
     }
 
     // MC coordinate system
@@ -603,10 +773,36 @@ public class BlockPropertiesCalculator {
     private final MinecraftWorld world;
     private final boolean skyLight, blockLight, leafDistance, removeFloatingLeaves;
     private final int minHeight, maxHeight, waterOpacity;
+    private final boolean cacheInitialChunkHeights = !Boolean.getBoolean(DISABLE_INITIAL_HEIGHT_CACHE_PROPERTY);
+    private IdentityHashMap<Chunk, Integer> initialChunkHeightCache;
     private Box originalDirtyArea, dirtyArea;
     private int[][] maxHeights;
     private int maxHeightsXOffset, maxHeightsZOffset;
+    private boolean useChangedBlockFrontier;
+    private int frontierChunkXOffset, frontierChunkZOffset, frontierChunksZ;
+    private BitSet[] activeFrontier, nextFrontier;
+    private boolean[] frontierChunkPresent;
+    private boolean frontierInitialScan;
 
     private final boolean[][] DAYLIGHT = new boolean[16][16];
     private final int[][] HEIGHT = new int[16][16];
+
+    private static final class PassChanges {
+        private boolean changed;
+        private int lowestX = Integer.MAX_VALUE, highestX = Integer.MIN_VALUE;
+        private int lowestZ = Integer.MAX_VALUE, highestZ = Integer.MIN_VALUE;
+        private int lowestY = Integer.MAX_VALUE, highestY = Integer.MIN_VALUE;
+        private long changedCells;
+
+        private void record(int x, int y, int z) {
+            changed = true;
+            changedCells++;
+            lowestX = Math.min(lowestX, x);
+            highestX = Math.max(highestX, x);
+            lowestZ = Math.min(lowestZ, z);
+            highestZ = Math.max(highestZ, z);
+            lowestY = Math.min(lowestY, y - 1);
+            highestY = Math.max(highestY, y + 1);
+        }
+    }
 }

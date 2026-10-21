@@ -1,7 +1,6 @@
 package org.pepsoft.worldpainter.exporting;
 
 import com.google.common.collect.ImmutableSet;
-import org.jnbt.NBTInputStream;
 import org.jnbt.NBTOutputStream;
 import org.jnbt.Tag;
 import org.pepsoft.minecraft.*;
@@ -16,7 +15,6 @@ import org.slf4j.LoggerFactory;
 import java.awt.*;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadFactory;
@@ -256,12 +254,8 @@ public class JavaChunkStore implements ChunkStore {
                 if (regionFile == null) {
                     continue;
                 }
-                final InputStream chunkIn = regionFile.getChunkDataInputStream(x & 31, z & 31);
-                if (chunkIn != null) {
-                    try (NBTInputStream in = new NBTInputStream(chunkIn)) {
-                        tags.put(type, in.readTag());
-                    }
-                }
+                final Tag tag = ChunkTagReader.read(regionFile, x & 31, z & 31);
+                if (tag != null) { tags.put(type, tag); }
             }
             if (! tags.containsKey(REGION)) {
                 return null;
@@ -402,7 +396,19 @@ public class JavaChunkStore implements ChunkStore {
         }
     }
 
+    /** Optional decoding totals across region workers; neither time nor bytes denote retained memory. */
+    public record DecodeProfile(long chunks,long nbtNanos,long constructionNanos,long allocatedBytes) { }
+    public static void resetDecodeProfile(){PROFILE_DECODE_CHUNKS.reset();PROFILE_NBT.reset();PROFILE_CONSTRUCTION.reset();PROFILE_DECODE_BYTES.reset();}
+    public static DecodeProfile decodeProfile(){return new DecodeProfile(PROFILE_DECODE_CHUNKS.sum(),PROFILE_NBT.sum(),PROFILE_CONSTRUCTION.sum(),PROFILE_DECODE_BYTES.sum());}
+    private static final java.util.concurrent.atomic.LongAdder PROFILE_DECODE_CHUNKS=new java.util.concurrent.atomic.LongAdder(),
+            PROFILE_NBT=new java.util.concurrent.atomic.LongAdder(),PROFILE_CONSTRUCTION=new java.util.concurrent.atomic.LongAdder(),
+            PROFILE_DECODE_BYTES=new java.util.concurrent.atomic.LongAdder();
+    private static long allocatedBytes(){
+        var meter=java.lang.management.ManagementFactory.getThreadMXBean();
+        return meter instanceof com.sun.management.ThreadMXBean threads?threads.getThreadAllocatedBytes(Thread.currentThread().getId()):-1;
+    }
     private boolean visitChunks(ChunkVisitor visitor, boolean readOnly, String operation, Set<DataType> dataTypes) {
+        final boolean profileImport=Boolean.getBoolean("welt.profile.mapImport");
         try {
             return visitRegions(regions -> {
                 for (int x = 0; x < 32; x++) {
@@ -410,16 +416,20 @@ public class JavaChunkStore implements ChunkStore {
                         boolean exceptionFromChunkVisitor = false;
                         try {
                             if (regions.get(REGION).containsChunk(x, z)) {
+                                final long decodeBytes=profileImport?allocatedBytes():-1;
+                                final long nbtStart=profileImport?System.nanoTime():0;
                                 final Map<DataType, Tag> tags = new HashMap<>();
                                 for (Map.Entry<DataType, RegionFile> entry: regions.entrySet()) {
-                                    final InputStream chunkIn = entry.getValue().getChunkDataInputStream(x & 31, z & 31);
-                                    if (chunkIn != null) {
-                                        try (NBTInputStream in = new NBTInputStream(chunkIn)) {
-                                            tags.put(entry.getKey(), in.readTag());
-                                        }
-                                    }
+                                    final Tag tag = ChunkTagReader.read(entry.getValue(), x & 31, z & 31);
+                                    if (tag != null) { tags.put(entry.getKey(), tag); }
                                 }
-                                Chunk chunk = platformProvider.createChunk(platform, tags, minHeight, maxHeight, readOnly);
+                                final long constructionStart=profileImport?System.nanoTime():0;
+                                if(profileImport)PROFILE_NBT.add(constructionStart-nbtStart);
+                                Chunk chunk = platformProvider.createChunk(platform, tags, minHeight, maxHeight, readOnly,readOnly && visitor.prefersPackedSections());
+                                if(profileImport){
+                                    PROFILE_CONSTRUCTION.add(System.nanoTime()-constructionStart);PROFILE_DECODE_CHUNKS.increment();
+                                    long after=allocatedBytes();if(decodeBytes>=0 && after>=decodeBytes)PROFILE_DECODE_BYTES.add(after-decodeBytes);
+                                }
                                 exceptionFromChunkVisitor = true;
                                 if (visitor.visitChunk(chunk)) {
                                     if (! readOnly) {

@@ -37,6 +37,7 @@ public class ScalingHelper {
      */
     public ScalingHelper(Map<Point, Tile> tiles, TileFactory tileFactory, float scale) {
         unscaledTiles = tiles;
+        unscaledTileFactory = tileFactory;
         if (tileFactory instanceof HeightMapTileFactory heightMapTileFactory) {
             scaledTileFactory = new HeightMapTileFactory(tileFactory.getSeed(), heightMapTileFactory.getHeightMap().scaled(scale), tileFactory.getMinHeight(), tileFactory.getMaxHeight(), heightMapTileFactory.isFloodWithLava(), heightMapTileFactory.getTheme());
         } else {
@@ -72,7 +73,6 @@ public class ScalingHelper {
                 throw new NotSerializableException();
             }
 
-            private final Map<Point, Tile> additionalTiles = new ConcurrentHashMap<>();
         }.smoothed().scaled(scale).clamped(minHeight, maxHeight);
         final Set<Layer> allLayers = new HashSet<>();
         for (Tile tile: tiles.values()) {
@@ -118,6 +118,9 @@ public class ScalingHelper {
                     private final Layer.DataSize dataSize = layer.dataSize;
                 }.smoothed().scaled(scale).clamped(0, layer.dataSize.maxValue)));
         discreteLayers = allLayers.stream().filter(layer -> layer.discrete).collect(toSet());
+        final java.util.List<Layer> planes = new java.util.ArrayList<>(layerHeightMaps.keySet());
+        planes.addAll(discreteLayers);
+        nativeLayers = java.util.List.copyOf(planes);
         tileCoords = new HashSet<>();
         int lowestTileX = Integer.MAX_VALUE, lowestTileY = Integer.MAX_VALUE, highestTileX = Integer.MIN_VALUE, highestTileY = Integer.MIN_VALUE;
         for (Tile tile: tiles.values()) {
@@ -155,6 +158,8 @@ public class ScalingHelper {
             return null;
         }
         final Tile scaledTile = scaledTileFactory.createTile(tileX, tileY);
+        if (ScalingTileAccess.scale(scaledTile, unscaledTiles, additionalTiles,
+                unscaledTileFactory, scale, nativeLayers)) return scaledTile;
         final int[] notPresentBlocksPerChunk = new int[64];
         Tile cachedUnscaledTile = null;
         int cachedTileX = Integer.MIN_VALUE, cachedTileY = Integer.MIN_VALUE;
@@ -298,6 +303,9 @@ public class ScalingHelper {
     }
 
     private final Map<Point, Tile> unscaledTiles;
+    private final Map<Point, Tile> additionalTiles = new ConcurrentHashMap<>();
+    private final TileFactory unscaledTileFactory;
+    private final java.util.List<Layer> nativeLayers;
     private final TileFactory scaledTileFactory;
     private final float scale;
     private final int minHeight, maxHeight, lowestTileX, lowestTileY, highestTileX, highestTileY;

@@ -26,7 +26,7 @@ public class Bo3BlockSpec extends Bo2BlockSpec {
     }
 
     public Bo3BlockSpec(Point3i coords, RandomBlock[] randomBlocks) {
-        super(coords, null, null);
+        super(coords);
         tileEntity = null;
         this.randomBlocks = randomBlocks;
         Arrays.stream(randomBlocks)
@@ -85,7 +85,7 @@ public class Bo3BlockSpec extends Bo2BlockSpec {
 
     private static final long serialVersionUID = 1L;
 
-    public static class RandomBlock {
+    public static class RandomBlock implements java.io.Serializable {
         RandomBlock(Material material, TileEntity tileEntity, int chance) {
             this.material = material;
             this.tileEntity = tileEntity;
@@ -95,5 +95,7 @@ public class Bo3BlockSpec extends Bo2BlockSpec {
         final Material material;
         final TileEntity tileEntity;
         final int chance;
+
+        private static final long serialVersionUID = 1L;
     }
 }

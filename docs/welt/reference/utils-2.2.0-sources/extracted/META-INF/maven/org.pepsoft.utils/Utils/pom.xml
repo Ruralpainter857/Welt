@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>org.pepsoft.utils</groupId>
+    <artifactId>Utils</artifactId>
+    <version>2.2.0</version>
+
+    <name>Utils</name>
+    <description>Various utility classes used by pepsoft.org projects.</description>
+    <url>https://github.com/Captain-Chaos/Utils</url>
+    <inceptionYear>2011</inceptionYear>
+
+    <licenses>
+        <license>
+            <name>GNU General Public License, version 3</name>
+            <url>https://www.gnu.org/licenses/gpl-3.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <organization>
+        <name>pepsoft.org</name>
+        <url>https://www.pepsoft.org/</url>
+    </organization>
+
+    <developers>
+        <developer>
+            <name>Pepijn Schmitz</name>
+            <organization>pepsoft.org</organization>
+            <email>Pepijn.Schmitz@pepsoft.org</email>
+            <timezone>Europe/Amsterdam</timezone>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:https://github.com/Captain-Chaos/Utils.git</connection>
+        <url>https://github.com/Captain-Chaos/Utils</url>
+    </scm>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.jetbrains</groupId>
+            <artifactId>annotations</artifactId>
+            <version>24.0.1</version>
+            <scope>provided</scope> <!-- Not really, but these annotations aren't needed at runtime. -->
+        </dependency>
+        <dependency>
+            <groupId>java3d</groupId>
+            <artifactId>vecmath</artifactId>
+            <version>1.3.1</version>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.19.1</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>33.4.8-jre</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>1.7.36</version>
+        </dependency>
+
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.13.2</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>3.0.1</version>
+                <executions>
+                    <execution>
+                        <id>attach-javadocs</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                        <configuration>
+                            <author>false</author>
+                            <use>false</use>
+                            <version>false</version>
+                            <doclint>none</doclint>
+                            <javadocExecutable>${java.home}/bin/javadoc</javadocExecutable>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <artifactId>maven-source-plugin</artifactId>
+                <version>3.0.1</version>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <!-- Make sure we don't try to release snapshots -->
+                    <plugin>
+                        <artifactId>maven-enforcer-plugin</artifactId>
+                        <version>3.3.0</version>
+                        <executions>
+                            <execution>
+                                <phase>validate</phase>
+                                <goals>
+                                    <goal>enforce</goal>
+                                </goals>
+                                <configuration>
+                                    <rules>
+                                        <requireReleaseVersion/>
+                                        <requireReleaseDeps/>
+                                    </rules>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>1.6</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.8.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <waitUntil>uploaded</waitUntil>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

@@ -7,11 +7,24 @@
 package org.pepsoft.worldpainter.painting;
 
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.GlyphPaintAccess;
+import org.pepsoft.worldpainter.LineStrokeAccess;
+import org.pepsoft.worldpainter.brushes.BitmapBrush;
 import org.pepsoft.worldpainter.Terrain;
+import org.pepsoft.worldpainter.PaintFloodAccess;
+import org.pepsoft.worldpainter.PaintFloodSession;
+import org.pepsoft.worldpainter.HeightFloodSession;
+import org.pepsoft.util.ProgressReceiver;
+import org.pepsoft.util.swing.ProgressDialog;
+import org.pepsoft.util.swing.ProgressTask;
 import org.pepsoft.worldpainter.brushes.Brush;
 import org.pepsoft.worldpainter.brushes.LineBrush;
 import org.pepsoft.worldpainter.brushes.SymmetricBrush;
+import org.pepsoft.worldpainter.brushes.RotatedBrush;
 import org.pepsoft.worldpainter.layers.Layer;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 
 import java.awt.*;
 import java.awt.font.FontRenderContext;
@@ -144,6 +157,10 @@ public final class DimensionPainter {
             // so fall back to slow mode
             fast = false;
         }
+        if (!fast && drawNativeStroke(dimension, x1, y1, x2, y2, dynamicLevel)) return;
+        if (!fast && drawNativeLineCenters(dimension, x1, y1, x2, y2, dynamicLevel)) {
+            return;
+        }
         if (dx < dy) {
             // Mostly vertical; go from top to bottom
             // Normalise the endpoints
@@ -215,6 +232,7 @@ public final class DimensionPainter {
      */
     @SuppressWarnings("SuspiciousNameCombination")
     public void drawText(Dimension dimension, int x, int y, String text) {
+        lastNativeTextCalls = 0;
         final String[] lines = text.split("\\n");
         for (String line: lines) {
             final int lineHeight = drawTextLine(dimension, x, y, line);
@@ -361,6 +379,7 @@ public final class DimensionPainter {
             throw new IllegalArgumentException("Don't know how to fill with paint " + paint);
         }
         if (! fillMethod.isFilled(x, y)) {
+            if (tryNativePaintFill(dimension, x, y, parent, description)) return true;
             final GeneralQueueLinearFloodFiller filler = new GeneralQueueLinearFloodFiller(fillMethod);
             filler.floodFill(x, y, parent);
             return ! filler.isBoundsHit();
@@ -436,6 +455,7 @@ public final class DimensionPainter {
             };
         };
         if (! fillMethod.isFilled(x, y)) {
+            if (tryNativeHeightFill(dimension, x, y, parent, additionalAction, fillMethod.getDescription())) return true;
             GeneralQueueLinearFloodFiller filler = new GeneralQueueLinearFloodFiller(fillMethod);
             filler.floodFill(x, y, parent);
             return ! filler.isBoundsHit();
@@ -574,6 +594,7 @@ public final class DimensionPainter {
         } finally {
             g2.dispose();
         }
+        if (paintNativeGlyph(dimension, image, textWidth, textHeight, x, y)) return (int) bounds.getHeight();
         if (undo) {
             for (int xx = 0; xx < textWidth; xx++) {
                 for (int yy = 0; yy < textHeight; yy++) {
@@ -620,9 +641,117 @@ public final class DimensionPainter {
         return (int) bounds.getHeight();
     }
 
+    /** Number of successful whole-tile JNI transactions in the most recent text drawing. */
+    public int getLastNativeTextCalls() { return lastNativeTextCalls; }
+    private int lastNativeTextCalls;
+
+    private boolean paintNativeGlyph(Dimension dimension, BufferedImage image, int width, int height, int x, int y) {
+        if (paint == null || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) return false;
+        java.util.List<Layer> layers = new java.util.ArrayList<>();
+        java.util.List<Integer> roles = new java.util.ArrayList<>(), operations = new java.util.ArrayList<>(), targets = new java.util.ArrayList<>();
+        if (paint.getClass() == TerrainPaint.class && !undo) {
+            glyphPlane(layers, roles, operations, targets, null, 2, 0, ((TerrainPaint)paint).getTerrain().ordinal());
+        } else if (paint.getClass() == BitLayerPaint.class) {
+            glyphPlane(layers, roles, operations, targets, ((LayerPaint)paint).getLayer(), 3, 0, undo ? 0 : 1);
+        } else if (paint.getClass() == DiscreteLayerPaint.class) {
+            DiscreteLayerPaint p = (DiscreteLayerPaint)paint;
+            glyphPlane(layers, roles, operations, targets, p.getLayer(), 3, 0, undo ? p.getRemovalValue() : p.getValue());
+        } else if (paint.getClass() == NibbleLayerPaint.class || paint.getClass() == CombinedLayerPaint.class) {
+            if (!undo && !hasStableBrushLevel(paint)) return false;
+            glyphPlane(layers, roles, operations, targets, ((LayerPaint)paint).getLayer(), 3, undo ? 0 : 1,
+                    undo ? 0 : 1 + Math.round(paint.getBrush().getLevel() * 14));
+            if (paint.getClass() == CombinedLayerPaint.class) {
+                org.pepsoft.worldpainter.layers.CombinedLayer combined = (org.pepsoft.worldpainter.layers.CombinedLayer)((LayerPaint)paint).getLayer();
+                if (!combined.isApplyTerrainAndBiomeOnExport()) {
+                    if (undo && combined.getTerrain() != null) return false;
+                    if (combined.getTerrain() != null) glyphPlane(layers, roles, operations, targets, null, 2, 0, combined.getTerrain().ordinal());
+                    if (combined.getBiome() != -1) glyphPlane(layers, roles, operations, targets, org.pepsoft.worldpainter.layers.Biome.INSTANCE,
+                            3, 0, undo ? 255 : combined.getBiome());
+                }
+            }
+        } else return false;
+        int calls = GlyphPaintAccess.paint(dimension, image, width, height, x, y, textAngle,
+                layers.toArray(new Layer[0]), roles.stream().mapToInt(Integer::intValue).toArray(),
+                operations.stream().mapToInt(Integer::intValue).toArray(), targets.stream().mapToInt(Integer::intValue).toArray());
+        if (calls < 0) return false;
+        lastNativeTextCalls += calls;return true;
+    }
+    private static void glyphPlane(java.util.List<Layer> layers, java.util.List<Integer> roles,
+                                   java.util.List<Integer> operations, java.util.List<Integer> targets,
+                                   Layer layer, int role, int operation, int target) {
+        layers.add(layer);roles.add(role);operations.add(operation);targets.add(target);
+    }
+
     private Paint paint;
     private int textAngle;
+
+    private float[] nativeStrokeStrengths;
+    private boolean drawNativeStroke(Dimension dimension, int x1, int y1, int x2, int y2, float dynamic) {
+        if (!LineStrokeAccess.isEnabled() || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || paint.getFilter()!=null) return false;
+        boolean nibble=paint.getClass()==NibbleLayerPaint.class,bit=paint.getClass()==BitLayerPaint.class;
+        boolean discrete=paint.getClass()==DiscreteLayerPaint.class;
+        boolean terrain=paint.getClass()==TerrainPaint.class && !undo;
+        if(!nibble && ((!bit && !terrain && !discrete) || !LineStrokeAccess.isSetEnabled()))return false;
+        Brush brush=paint.getBrush();
+        // Stock cached brushes have no per-cell callbacks; arbitrary brushes retain their call order.
+        if (!(brush instanceof SymmetricBrush && brush.getClass().getEnclosingClass()==SymmetricBrush.class)
+                && brush.getClass()!=BitmapBrush.class && brush.getClass()!=RotatedBrush.class) return false;
+        boolean pixel=brush.getRadius()==0;
+        Rectangle box=pixel?new Rectangle(0,0,1,1):brush.getBoundingBox();
+        if(box.width<1 || box.height<1 || box.width>256 || box.height>256) return false;
+        if(!nibble && !LineStrokeAccess.useSetStroke(box.width,box.height,x1,y1,x2,y2))return false;
+        int cells=box.width*box.height;
+        if(nativeStrokeStrengths==null || nativeStrokeStrengths.length!=cells)nativeStrokeStrengths=new float[cells];
+        for(int y=0;y<box.height;y++)for(int x=0;x<box.width;x++)nativeStrokeStrengths[x+y*box.width]=pixel?(nibble?brush.getLevel():1)
+                :undo || !nibble && !paint.isDither()?brush.getFullStrength(box.x+x,box.y+y):brush.getStrength(box.x+x,box.y+y);
+        if (!nibble) {
+            Layer outputLayer=bit || discrete?((LayerPaint)paint).getLayer():null;
+            int target=undo?0:1;
+            if (discrete) {
+                DiscreteLayerPaint discretePaint=(DiscreteLayerPaint)paint;
+                target=undo?discretePaint.getRemovalValue():discretePaint.getValue();
+            }
+            return LineStrokeAccess.paintSet(dimension,terrain?((TerrainPaint)paint).getTerrain():null,
+                    outputLayer,target,x1,y1,x2,y2,box.x,box.y,box.width,box.height,dynamic,pixel,
+                    paint.isDither(),nativeStrokeStrengths)>=0;
+        }
+        return LineStrokeAccess.paint(dimension,((LayerPaint)paint).getLayer(),x1,y1,x2,y2,
+                box.x,box.y,box.width,box.height,dynamic,undo,pixel,nativeStrokeStrengths)>=0;
+    }
+
+    private boolean drawNativeLineCenters(Dimension dimension, int x1, int y1, int x2, int y2,
+                                          float dynamicLevel) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()) {
+            return false;
+        }
+        final long deltaX = Math.abs((long) x2 - x1);
+        final long deltaY = Math.abs((long) y2 - y1);
+        final long pointCount = Math.max(deltaX, deltaY) + 1L;
+        if (pointCount <= 0 || pointCount > 65_536L) {
+            return false;
+        }
+        final int coordinateCount = (int) pointCount * 2;
+        if (nativeLineCoordinates == null || nativeLineCoordinates.length != coordinateCount) {
+            nativeLineCoordinates = new int[coordinateCount];
+        }
+        if (nativeLineCount == null) {
+            nativeLineCount = new int[1];
+        }
+        final int actualCount = NativeSlices.rasterizeLineCenters(x1, y1, x2, y2,
+                nativeLineCoordinates, nativeLineCount);
+        if (actualCount != pointCount) {
+            return false;
+        }
+        for (int i = 0; i < actualCount; i++) {
+            drawPoint(dimension, nativeLineCoordinates[i * 2], nativeLineCoordinates[i * 2 + 1],
+                    dynamicLevel);
+        }
+        return true;
+    }
     private boolean undo;
+    private int[] nativeLineCoordinates;
+    private int[] nativeLineCount;
     private Font font;
 
     public static final int ANGLE_0_DEGREES   = 0;
@@ -632,12 +761,96 @@ public final class DimensionPainter {
 
     private static final Brush MY_CONSTANT_CIRCLE = SymmetricBrush.CONSTANT_CIRCLE.clone();
 
+    /** Le parcours progressif conserve le comportement d'annulation de Fill. */
+    private boolean tryNativeHeightFill(Dimension dimension, int x, int y, Window parent, AdditionalFillAction action, String description) {
+        long started = System.nanoTime();
+        HeightFloodSession session;
+        if (action == NONE) session = HeightFloodSession.tryStart(dimension, x, y);
+        else if (action == AdditionalFillAction.APPLY_THEME) session = HeightFloodSession.tryStartWithTheme(dimension, x, y);
+        else {
+            Layer layer = null; Terrain terrain = null; int target = 0, mode = 0;
+            if (paint.getClass() == TerrainPaint.class) terrain = ((TerrainPaint) paint).getTerrain();
+            else if (paint.getClass() == BitLayerPaint.class) { layer = ((LayerPaint) paint).getLayer(); target = 1; }
+            else if (paint.getClass() == DiscreteLayerPaint.class) {
+                layer = ((LayerPaint) paint).getLayer(); target = ((DiscreteLayerPaint) paint).getValue();
+            } else if (paint.getClass() == NibbleLayerPaint.class && hasStableBrushLevel(paint)) {
+                layer = ((LayerPaint) paint).getLayer(); target = 1 + Math.round(paint.getBrush().getLevel() * 14); mode = 1;
+            } else return false;
+            session = HeightFloodSession.tryStart(dimension, x, y, layer, terrain, target, mode);
+        }
+        if (session == null) return false;
+        while (!session.isComplete()) {
+            session.advance();
+            if (!session.isComplete() && System.nanoTime() - started > 2_000_000_000L) {
+                ProgressDialog.executeTask(parent, new ProgressTask<Boolean>() {
+                    @Override public String getName() { return description; }
+                    @Override public Boolean execute(ProgressReceiver progress) throws ProgressReceiver.OperationCancelled {
+                        while (!session.isComplete()) { progress.checkForCancellation(); session.advance(); }
+                        return true;
+                    }
+                });
+                return true;
+            }
+        }
+        return true;
+    }
+
+    /** Les peintures personnalisées et le thème retiré conservent leur ordre historique. */
+    private boolean tryNativePaintFill(Dimension dimension, int x, int y, Window parent, String description) {
+        Layer layer = null; Terrain terrain = null; int target, mode = PaintFloodAccess.EQUAL;
+        if (paint.getClass() == TerrainPaint.class && !undo) {
+            terrain = ((TerrainPaint) paint).getTerrain(); target = terrain.ordinal();
+        } else if (paint instanceof LayerPaint) {
+            layer = ((LayerPaint) paint).getLayer();
+            if (paint.getClass() == BitLayerPaint.class && layer.dataSize == Layer.DataSize.BIT) target = undo ? 0 : 1;
+            else if (paint.getClass() == DiscreteLayerPaint.class) target = undo ? layer.getDefaultValue() : ((DiscreteLayerPaint) paint).getValue();
+            else if (paint.getClass() == NibbleLayerPaint.class && hasStableBrushLevel(paint)) {
+                target = undo ? 0 : 1 + Math.round(paint.getBrush().getLevel() * 14);
+                mode = undo ? PaintFloodAccess.ERASE : PaintFloodAccess.RAISE;
+            } else return false;
+        } else return false;
+        if (PaintFloodAccess.tryFill(dimension, x, y, layer, terrain, target, mode)) return true;
+        PaintFloodSession session = PaintFloodSession.tryStart(dimension, x, y, layer, terrain, target, mode);
+        if (session == null) return false;
+        long started = System.nanoTime();
+        while (!session.isComplete()) {
+            session.advance();
+            if (!session.isComplete() && System.nanoTime() - started > 2_000_000_000L) {
+                // Le même parcours reprend dans le worker du dialogue, avec annulation entre les tuiles.
+                ProgressDialog.executeTask(parent, new ProgressTask<Boolean>() {
+                    @Override public String getName() { return description; }
+                    @Override public Boolean execute(ProgressReceiver progress) throws ProgressReceiver.OperationCancelled {
+                        while (!session.isComplete()) { progress.checkForCancellation(); session.advance(); }
+                        return true;
+                    }
+                });
+                return true;
+            }
+        }
+        return true;
+    }
+
+    private static boolean hasStableBrushLevel(Paint paint) {
+        return paint.getBrush() != null && (paint.getBrush().getClass() == RotatedBrush.class
+                || paint.getBrush().getClass().getName().startsWith(SymmetricBrush.class.getName() + "$"));
+    }
+
     static abstract class AbstractDimensionPaintFillMethod implements GeneralQueueLinearFloodFiller.FillMethod {
         protected AbstractDimensionPaintFillMethod(String description, Dimension dimension, Paint paint) {
             this.description = description;
             this.dimension = dimension;
             this.paint = paint;
             bounds = new Rectangle(dimension.getLowestX() << TILE_SIZE_BITS, dimension.getLowestY() << TILE_SIZE_BITS, dimension.getWidth() << TILE_SIZE_BITS, dimension.getHeight() << TILE_SIZE_BITS);
+        }
+
+        @Override
+        public final boolean isNativeSnapshotSafe() {
+            // Les thèmes, peintures personnalisées et couches par chunk peuvent modifier les frontières voisines.
+            if (paint == null) return true;
+            if (paint.getClass() == TerrainPaint.class) return !(this instanceof UndoDimensionPaintFillMethod);
+            if (paint.getClass() == DiscreteLayerPaint.class) return true;
+            if (paint.getClass() == BitLayerPaint.class) return ((LayerPaint) paint).getLayer().dataSize == Layer.DataSize.BIT;
+            return paint.getClass() == NibbleLayerPaint.class && hasStableBrushLevel(paint);
         }
 
         @Override

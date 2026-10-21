@@ -19,10 +19,19 @@
 package org.pepsoft.worldpainter.painting;
 
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.MaskedPlaneAccess;
+import org.pepsoft.worldpainter.FilteredPaintAccess;
+import org.pepsoft.worldpainter.panels.EditorFilterPlan;
+import org.pepsoft.worldpainter.brushes.SymmetricBrush;
+import org.pepsoft.worldpainter.brushes.BitmapBrush;
+import org.pepsoft.worldpainter.brushes.RotatedBrush;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.layers.Layer;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 
 import java.awt.*;
+import java.util.function.DoubleSupplier;
 
 import static org.pepsoft.worldpainter.Constants.TILE_SIZE_BITS;
 import static org.pepsoft.worldpainter.Constants.TILE_SIZE_MASK;
@@ -34,17 +43,26 @@ import static org.pepsoft.worldpainter.Constants.TILE_SIZE_MASK;
  */
 public final class DiscreteLayerPaint extends LayerPaint {
     public DiscreteLayerPaint(Layer layer, int value) {
+        this(layer, value, Math::random);
+    }
+    /** Package-owned deterministic seam; production keeps the shared Math.random stream. */
+    DiscreteLayerPaint(Layer layer, int value, DoubleSupplier random) {
         super(layer);
         if ((layer.getDataSize() != Layer.DataSize.NIBBLE) && (layer.getDataSize() != Layer.DataSize.BYTE)) {
             throw new IllegalArgumentException("Layer " + layer + " not a continuous layer");
         }
+        this.random = java.util.Objects.requireNonNull(random);
         this.value = value;
         defaultValue = layer.getDefaultValue();
+        stableDefault = stableDefault(layer);
     }
 
     public int getValue() {
         return value;
     }
+
+    /** The removal target is captured when this paint is constructed. */
+    public int getRemovalValue() { return defaultValue; }
 
     @Override
     public String getId() {
@@ -62,7 +80,13 @@ public final class DiscreteLayerPaint extends LayerPaint {
         final Rectangle boundingBox = brush.getBoundingBox();
         final int x1 = centreX + boundingBox.x, y1 = centreY + boundingBox.y, x2 = x1 + boundingBox.width - 1, y2 = y1 + boundingBox.height - 1;
         final int tileX1 = x1 >> TILE_SIZE_BITS, tileY1 = y1 >> TILE_SIZE_BITS, tileX2 = x2 >> TILE_SIZE_BITS, tileY2 = y2 >> TILE_SIZE_BITS;
-        if ((tileX1 == tileX2) && (tileY1 == tileY2)) {
+        final boolean oneTile = (tileX1 == tileX2) && (tileY1 == tileY2);
+        if (applyNativeDitheredBrush(dimension, centreX, centreY, dynamicLevel, x1, y1, x2, y2, oneTile, value, false)
+                || applyNativeDiscreteLayerBrush(dimension, centreX, centreY, dynamicLevel,
+                x1, y1, x2, y2, oneTile, value)) {
+            return;
+        }
+        if (oneTile) {
             // The bounding box of the brush is entirely on one tile; optimize by painting directly to the tile
             final Tile tile = dimension.getTileForEditing(tileX1, tileY1);
             if (tile == null) {
@@ -74,7 +98,7 @@ public final class DiscreteLayerPaint extends LayerPaint {
                 for (int y = y1InTile; y <= y2InTile; y++) {
                     for (int x = x1InTile; x <= x2InTile; x++) {
                         final float strength = dynamicLevel * getStrength(centreX, centreY, tileXInWorld + x, tileYInWorld + y);
-                        if ((strength > 0.95f) || (Math.random() < strength)) {
+                        if ((strength > 0.95f) || (random.getAsDouble() < strength)) {
                             tile.setLayerValue(layer, x, y, value);
                         }
                     }
@@ -95,7 +119,7 @@ public final class DiscreteLayerPaint extends LayerPaint {
                 for (int y = y1; y <= y2; y++) {
                     for (int x = x1; x <= x2; x++) {
                         final float strength = dynamicLevel * getStrength(centreX, centreY, x, y);
-                        if ((strength > 0.95f) || (Math.random() < strength)) {
+                        if ((strength > 0.95f) || (random.getAsDouble() < strength)) {
                             dimension.setLayerValueAt(layer, x, y, value);
                         }
                     }
@@ -124,7 +148,13 @@ public final class DiscreteLayerPaint extends LayerPaint {
         final Rectangle boundingBox = brush.getBoundingBox();
         final int x1 = centreX + boundingBox.x, y1 = centreY + boundingBox.y, x2 = x1 + boundingBox.width - 1, y2 = y1 + boundingBox.height - 1;
         final int tileX1 = x1 >> TILE_SIZE_BITS, tileY1 = y1 >> TILE_SIZE_BITS, tileX2 = x2 >> TILE_SIZE_BITS, tileY2 = y2 >> TILE_SIZE_BITS;
-        if ((tileX1 == tileX2) && (tileY1 == tileY2)) {
+        final boolean oneTile = (tileX1 == tileX2) && (tileY1 == tileY2);
+        if (applyNativeDitheredBrush(dimension, centreX, centreY, dynamicLevel, x1, y1, x2, y2, oneTile, defaultValue, true)
+                || applyNativeDiscreteLayerBrush(dimension, centreX, centreY, dynamicLevel,
+                x1, y1, x2, y2, oneTile, defaultValue)) {
+            return;
+        }
+        if (oneTile) {
             // The bounding box of the brush is entirely on one tile; optimize by painting directly to the tile
             final Tile tile = dimension.getTileForEditing(tileX1, tileY1);
             if (tile == null) {
@@ -136,7 +166,7 @@ public final class DiscreteLayerPaint extends LayerPaint {
                 for (int y = y1InTile; y <= y2InTile; y++) {
                     for (int x = x1InTile; x <= x2InTile; x++) {
                         final float strength = dynamicLevel * getFullStrength(centreX, centreY, tileXInWorld + x, tileYInWorld + y);
-                        if ((strength > 0.95f) || (Math.random() < strength)) {
+                        if ((strength > 0.95f) || (random.getAsDouble() < strength)) {
                             tile.setLayerValue(layer, x, y, defaultValue);
                         }
                     }
@@ -157,7 +187,7 @@ public final class DiscreteLayerPaint extends LayerPaint {
                 for (int y = y1; y <= y2; y++) {
                     for (int x = x1; x <= x2; x++) {
                         final float strength = dynamicLevel * getFullStrength(centreX, centreY, x, y);
-                        if ((strength > 0.95f) || (Math.random() < strength)) {
+                        if ((strength > 0.95f) || (random.getAsDouble() < strength)) {
                             dimension.setLayerValueAt(layer, x, y, defaultValue);
                         }
                     }
@@ -185,5 +215,67 @@ public final class DiscreteLayerPaint extends LayerPaint {
         dimension.setLayerValueAt(layer, x, y, defaultValue);
     }
 
+    private static boolean stableDefault(Layer layer) {
+        if (layer == org.pepsoft.worldpainter.layers.Biome.INSTANCE) return true;
+        try { return layer.getClass().getMethod("getDefaultValue").getDeclaringClass() == Layer.class; }
+        catch (ReflectiveOperationException | SecurityException e) { return false; }
+    }
+
+    private boolean applyNativeDitheredBrush(Dimension dimension, int centreX, int centreY, float dynamicLevel,
+                                             int x1, int y1, int x2, int y2, boolean oneTile, int target, boolean removing) {
+        if (!dither || filterEnabled || !stableDefault
+                || !Boolean.parseBoolean(System.getProperty("welt.native.ditheredDiscrete", "true"))) return false;
+        if (ditheredBatch == null) ditheredBatch = new DitheredBrushBatch();
+        return ditheredBatch.apply(dimension, brush, random, layer, null, target, centreX, centreY, dynamicLevel,
+                x1, y1, x2, y2, oneTile, removing);
+    }
+    private boolean applyNativeDiscreteLayerBrush(Dimension dimension, int centreX, int centreY,
+                                                  float dynamicLevel, int x1, int y1, int x2, int y2,
+                                                  boolean oneTile, int targetValue) {
+        final long width = (long) x2 - x1 + 1L;
+        final long height = (long) y2 - y1 + 1L;
+        if (dither || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || dimension.getClass() != Dimension.class || !dimension.isEventsInhibited()
+                || width <= 0 || height <= 0 || width > 65_536L || height > 65_536L
+                || width * height > 65_536L) {
+            return false;
+        }
+        final int area = (int) (width * height);
+        if (oneTile && dimension.getTile(x1 >> TILE_SIZE_BITS, y1 >> TILE_SIZE_BITS) == null) return true;
+        if (filterEnabled) {
+            if (!(brush instanceof SymmetricBrush || brush instanceof BitmapBrush || brush instanceof RotatedBrush)
+                    || !Boolean.parseBoolean(System.getProperty("welt.native.filteredLayers", "false"))) return false;
+            EditorFilterPlan plan = EditorFilterPlan.compile(filter, dimension);
+            if (plan == null) return false;
+            if (nativeStrengths == null || nativeStrengths.length != area) nativeStrengths = new float[area];
+            int index = 0;
+            for (int y = y1; y <= y2; y++) for (int x = x1; x <= x2; x++)
+                nativeStrengths[index++] = brush.getFullStrength(x - centreX, y - centreY);
+            return FilteredPaintAccess.applyDiscrete(dimension, layer, targetValue, plan, x1, y1,
+                    (int) width, (int) height, dynamicLevel, nativeStrengths);
+        }
+        ensureNativeBuffers(area);
+
+        int index = 0;
+        for (int y = y1; y <= y2; y++) {
+            for (int x = x1; x <= x2; x++) {
+                nativeModified[index++] = (byte) (dynamicLevel * getFullStrength(centreX, centreY, x, y) > 0.75f ? 1 : 0);
+            }
+        }
+        MaskedPlaneAccess.applyLayer(dimension, layer, targetValue, x1, y1, (int) width, (int) height, nativeModified);
+        return true;
+    }
+
+    private void ensureNativeBuffers(int area) {
+        if (nativeModified == null || nativeModified.length != area) {
+            nativeModified = new byte[area];
+        }
+    }
+
     private final int value, defaultValue;
+    private final DoubleSupplier random;
+    private DitheredBrushBatch ditheredBatch;
+    private final boolean stableDefault;
+    private byte[] nativeModified;
+    private float[] nativeStrengths;
 }

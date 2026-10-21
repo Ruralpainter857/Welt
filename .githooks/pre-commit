@@ -1,0 +1,9 @@
+#!/bin/sh
+
+# Keep local planning documents out of commits on this public fork.
+protected='(^docs/welt/rapports/|^docs/welt/(ajouter-fonction-native|CHARTE-ORCHESTRATION|EXPORT-CHUNK-BUFFER|README)\.md$|^docs/plan-decoupage-java-rust\.md$|^CONTEXTE-REPRISE-2026-09-26\.md$)'
+matches=$(git diff --cached --name-only --diff-filter=ACMR | grep -Ei "$protected" || :)
+if [ -n "$matches" ]; then
+    printf '%s\n' 'Commit blocked: local planning documents are staged:' "$matches" >&2
+    exit 1
+fi

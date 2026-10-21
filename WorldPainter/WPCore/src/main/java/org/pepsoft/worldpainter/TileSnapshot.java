@@ -23,8 +23,10 @@ public final class TileSnapshot extends Tile {
         super(tile.getX(), tile.getY(), tile.getMinHeight(), tile.getMaxHeight());
         this.snapshot = snapshot;
         HEIGHTMAP_BUFFER_KEY      = new TileUndoBufferKey<>(tile, TileBuffer.HEIGHTMAP);
+        TALL_HEIGHTMAP_BUFFER_KEY = new TileUndoBufferKey<>(tile, TileBuffer.TALL_HEIGHTMAP);
         TERRAIN_BUFFER_KEY        = new TileUndoBufferKey<>(tile, TileBuffer.TERRAIN);
         WATERLEVEL_BUFFER_KEY     = new TileUndoBufferKey<>(tile, TileBuffer.WATERLEVEL);
+        TALL_WATERLEVEL_BUFFER_KEY = new TileUndoBufferKey<>(tile, TileBuffer.TALL_WATERLEVEL);
         LAYER_DATA_BUFFER_KEY     = new TileUndoBufferKey<>(tile, TileBuffer.LAYER_DATA);
         BIT_LAYER_DATA_BUFFER_KEY = new TileUndoBufferKey<>(tile, TileBuffer.BIT_LAYER_DATA);
     }
@@ -46,11 +48,17 @@ public final class TileSnapshot extends Tile {
                 case HEIGHTMAP:
                     heightMap = snapshot.getBuffer(HEIGHTMAP_BUFFER_KEY);
                     break;
+                case TALL_HEIGHTMAP:
+                    tallHeightMap = snapshot.getBuffer(TALL_HEIGHTMAP_BUFFER_KEY);
+                    break;
                 case TERRAIN:
                     terrain = snapshot.getBuffer(TERRAIN_BUFFER_KEY);
                     break;
                 case WATERLEVEL:
                     waterLevel = snapshot.getBuffer(WATERLEVEL_BUFFER_KEY);
+                    break;
+                case TALL_WATERLEVEL:
+                    tallWaterLevel = snapshot.getBuffer(TALL_WATERLEVEL_BUFFER_KEY);
                     break;
                 case LAYER_DATA:
                     layerData = snapshot.getBuffer(LAYER_DATA_BUFFER_KEY);
@@ -122,6 +130,8 @@ public final class TileSnapshot extends Tile {
     private final Set<TileBuffer> readableBuffers = EnumSet.noneOf(TileBuffer.class);
 
     private transient BufferKey<short[]>            HEIGHTMAP_BUFFER_KEY;
+    private transient BufferKey<int[]>              TALL_HEIGHTMAP_BUFFER_KEY;
+    private transient BufferKey<short[]>            TALL_WATERLEVEL_BUFFER_KEY;
     private transient BufferKey<byte[]>             TERRAIN_BUFFER_KEY;
     private transient BufferKey<byte[]>             WATERLEVEL_BUFFER_KEY;
     private transient BufferKey<Map<Layer, byte[]>> LAYER_DATA_BUFFER_KEY;

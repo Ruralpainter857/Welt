@@ -9,6 +9,7 @@ import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.WorldPainter;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.painting.GeneralQueueLinearFloodFiller;
+import org.pepsoft.worldpainter.painting.FluidFloodRunner;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -180,7 +181,9 @@ public class Flood extends MouseOrTabletOperation {
                 }
                 final GeneralQueueLinearFloodFiller flooder = new GeneralQueueLinearFloodFiller(fillMethod);
                 try {
-                    if (! flooder.floodFill(centreX, centreY, SwingUtilities.getWindowAncestor(getView()))) {
+                    Boolean nativeResult = FluidFloodRunner.tryFill(dimension, centreX, centreY, inverse, floodWithLava, fillMethod.getDescription(), SwingUtilities.getWindowAncestor(getView()));
+                    if (Boolean.TRUE.equals(nativeResult)) return;
+                    if (Boolean.FALSE.equals(nativeResult) || ! flooder.floodFill(centreX, centreY, SwingUtilities.getWindowAncestor(getView()))) {
                         // Cancelled by user
                         synchronized (dimension) {
                             if (dimension.undoChanges()) {
@@ -229,6 +232,11 @@ public class Flood extends MouseOrTabletOperation {
         protected FloodFillMethod(String description, Rectangle bounds) {
             this.description = description;
             this.bounds = bounds;
+        }
+
+        @Override
+        public final boolean isNativeSnapshotSafe() {
+            return true;
         }
 
         @Override

@@ -13,6 +13,7 @@ import org.pepsoft.util.ProgressReceiver;
 import org.pepsoft.util.swing.TileProvider;
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.*;
+import org.pepsoft.worldpainter.heightMaps.BicubicHeightMap;
 import org.pepsoft.worldpainter.heightMaps.BitmapHeightMap;
 import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
 import org.pepsoft.worldpainter.history.HistoryEntry;
@@ -21,6 +22,7 @@ import org.pepsoft.worldpainter.layers.*;
 import org.pepsoft.worldpainter.layers.exporters.ExporterSettings;
 import org.pepsoft.worldpainter.layers.exporters.FrostExporter;
 import org.pepsoft.worldpainter.layers.exporters.ResourcesExporter;
+import org.pepsoft.worldpainter.themes.SimpleTheme;
 import org.pepsoft.worldpainter.themes.Theme;
 
 import java.awt.*;
@@ -143,13 +145,34 @@ public class HeightMapImporter {
         final int totalTileCount = extentInTiles.width * extentInTiles.height;
         final int floor = Math.max(worldWaterLevel - 20, minHeight);
         final int variation = Math.min(15, (worldWaterLevel - floor) / 2);
+        final BitmapSampler bitmapSampler = getBitmapSampler(heightMap);
+        final double[] tileImageLevels = (bitmapSampler != null) ? new double[TILE_SIZE * TILE_SIZE] : null;
+        final double[] bitmapRowSamples = (bitmapSampler != null) ? new double[TILE_SIZE] : null;
         final PerlinNoise noiseGenerator = new PerlinNoise(0);
         noiseGenerator.setSeed(dimension.getSeed());
+        final boolean batchTileInitialisationEnabled =
+                !Boolean.getBoolean("welt.import.disableBatchTileInitialisation");
+        float[] batchTileHeights = null;
+        int[] batchTileIntHeights = null;
+        final HeightMapImportAccess existingImport = HeightMapImportAccess.prepare(this, dimension, false);
+        final HeightMapImportAccess freshImport = createTiles ? HeightMapImportAccess.prepare(this, dimension, true) : null;
+        lastNativeImportCalls = 0;
         int tileCount = 0;
         for (int tileX = tileX1; tileX <= tileX2; tileX++) {
             for (int tileY = tileY1; tileY <= tileY2; tileY++) {
                 boolean tileIsNew;
                 Tile tile = dimension.getTileForEditing(tileX, tileY);
+                final HeightMapImportAccess nativeImport = tile == null ? freshImport : existingImport;
+                if (nativeImport != null) {
+                    final Tile imported = nativeImport.importTile(tile, tileX, tileY);
+                    if (imported != null) {
+                        if (tile == null) dimension.addTile(imported);
+                        lastNativeImportCalls++;
+                        tileCount++;
+                        if (progressReceiver != null) progressReceiver.setProgress((float) tileCount / totalTileCount);
+                        continue;
+                    }
+                }
                 if (tile == null) {
                     if (createTiles) {
                         tile = tileFactory.createTile(tileX, tileY);
@@ -167,38 +190,83 @@ public class HeightMapImporter {
                 }
                 final int xOffset = tileX << TILE_SIZE_BITS;
                 final int yOffset = tileY << TILE_SIZE_BITS;
-                for (int x = 0; x < TILE_SIZE; x++) {
-                    for (int y = 0; y < TILE_SIZE; y++) {
-                        final int imageX = xOffset + x;
-                        final int imageY = yOffset + y;
-                        if ((imageX >= x1) && (imageX <= x2) && (imageY >= y1) && (imageY <= y2)) {
-                            final double imageLevel = heightMap.getHeight(imageX, imageY);
-                            final float height = calculateHeight(imageLevel);
-                            if (onlyRaise && (! tileIsNew)) {
-                                if (height > tile.getHeight(x, y)) {
+                final boolean imageLevelsAvailable = (bitmapSampler != null)
+                        && (bitmapSampler.repeat
+                        ? bitmapSampler.bitmap.fillRepeatedSamples(
+                                xOffset - bitmapSampler.offsetX, yOffset - bitmapSampler.offsetY,
+                                TILE_SIZE, TILE_SIZE, tileImageLevels, bitmapRowSamples)
+                        : bitmapSampler.bitmap.fillSamples(
+                                xOffset - bitmapSampler.offsetX, yOffset - bitmapSampler.offsetY,
+                                TILE_SIZE, TILE_SIZE, tileImageLevels, bitmapRowSamples));
+                final boolean tileFullyCovered = (xOffset >= x1)
+                        && (xOffset + TILE_SIZE - 1 <= x2)
+                        && (yOffset >= y1)
+                        && (yOffset + TILE_SIZE - 1 <= y2);
+                final boolean batchTileInitialisation = batchTileInitialisationEnabled
+                        && tileIsNew && tileFullyCovered && (tile.getClass() == Tile.class)
+                        && (!tile.isEventsInhibited()) && (!useVoidBelow)
+                        && ((theme == null) || (theme.getClass() == SimpleTheme.class));
+                if (batchTileInitialisation) {
+                    if (batchTileHeights == null) {
+                        batchTileHeights = new float[TILE_SIZE * TILE_SIZE];
+                        batchTileIntHeights = new int[TILE_SIZE * TILE_SIZE];
+                    }
+                    tile.inhibitEvents();
+                }
+                try {
+                    for (int x = 0; x < TILE_SIZE; x++) {
+                        for (int y = 0; y < TILE_SIZE; y++) {
+                            final int imageX = xOffset + x;
+                            final int imageY = yOffset + y;
+                            if ((imageX >= x1) && (imageX <= x2) && (imageY >= y1) && (imageY <= y2)) {
+                                final int index = x + (y << TILE_SIZE_BITS);
+                                final double imageLevel = imageLevelsAvailable
+                                        ? tileImageLevels[index]
+                                        : heightMap.getHeight(imageX, imageY);
+                                final float height = calculateHeight(imageLevel);
+                                if (batchTileInitialisation) {
+                                    batchTileHeights[index] = height;
+                                } else if (onlyRaise && (!tileIsNew)) {
+                                    if (height > tile.getHeight(x, y)) {
+                                        tile.setHeight(x, y, height);
+                                        if (theme != null) {
+                                            theme.apply(tile, x, y);
+                                        }
+                                    }
+                                } else {
                                     tile.setHeight(x, y, height);
+                                    tile.setWaterLevel(x, y, worldWaterLevel);
+                                    if (useVoidBelow && (imageLevel <= voidBelowLevel)) {
+                                        tile.setBitLayerValue(org.pepsoft.worldpainter.layers.Void.INSTANCE, x, y, true);
+                                    }
                                     if (theme != null) {
                                         theme.apply(tile, x, y);
                                     }
                                 }
-                            } else {
-                                tile.setHeight(x, y, height);
+                            } else if (tileIsNew) {
+                                tile.setHeight(x, y, floor + (noiseGenerator.getPerlinNoise(imageX / MEDIUM_BLOBS, imageY / MEDIUM_BLOBS) + 0.5f) * variation);
+                                tile.setTerrain(x, y, Terrain.BEACHES);
                                 tile.setWaterLevel(x, y, worldWaterLevel);
-                                if (useVoidBelow && (imageLevel <= voidBelowLevel)) {
+                                if (useVoidBelow) {
                                     tile.setBitLayerValue(org.pepsoft.worldpainter.layers.Void.INSTANCE, x, y, true);
                                 }
-                                if (theme != null) {
+                            }
+                        }
+                    }
+                    if (batchTileInitialisation) {
+                        tile.initializeHeightAndWaterLevels(batchTileHeights, worldWaterLevel,
+                                batchTileIntHeights);
+                        if (theme != null) {
+                            for (int x = 0; x < TILE_SIZE; x++) {
+                                for (int y = 0; y < TILE_SIZE; y++) {
                                     theme.apply(tile, x, y);
                                 }
                             }
-                        } else if (tileIsNew) {
-                            tile.setHeight(x, y, floor + (noiseGenerator.getPerlinNoise(imageX / MEDIUM_BLOBS, imageY / MEDIUM_BLOBS) + 0.5f) * variation);
-                            tile.setTerrain(x, y, Terrain.BEACHES);
-                            tile.setWaterLevel(x, y, worldWaterLevel);
-                            if (useVoidBelow) {
-                                tile.setBitLayerValue(org.pepsoft.worldpainter.layers.Void.INSTANCE, x, y, true);
-                            }
                         }
+                    }
+                } finally {
+                    if (batchTileInitialisation) {
+                        tile.releaseEvents();
                     }
                 }
                 if (tileIsNew) {
@@ -241,6 +309,10 @@ public class HeightMapImporter {
             return null;
         }
     }
+
+    /** Number of successful whole-tile JNI transactions in the most recent import. */
+    public int getLastNativeImportCalls() { return lastNativeImportCalls; }
+    private int lastNativeImportCalls;
 
     // Properties
 
@@ -406,6 +478,54 @@ public class HeightMapImporter {
         int tileX2 = (extent.x + extent.width - 1) >> TILE_SIZE_BITS;
         int tileY2 = (extent.y + extent.height - 1) >> TILE_SIZE_BITS;
         extentInTiles = new Rectangle(tileX1, tileY1, tileX2 - tileX1 + 1, tileY2 - tileY1 + 1);
+    }
+
+    /** Returns a raster source for image maps whose integer sampling is a pure bitmap lookup. */
+    private static BitmapSampler getBitmapSampler(HeightMap heightMap) {
+        if (heightMap.getClass() == BitmapHeightMap.class) {
+            return new BitmapSampler((BitmapHeightMap) heightMap, 0, 0, false);
+        }
+        if (heightMap.getClass() == BicubicHeightMap.class) {
+            final BicubicHeightMap bicubic = (BicubicHeightMap) heightMap;
+            if (bicubic.getHeightMap(0).getClass() == BitmapHeightMap.class) {
+                return new BitmapSampler((BitmapHeightMap) bicubic.getHeightMap(0),
+                        0, 0, bicubic.isRepeat());
+            }
+            return null;
+        }
+        if (heightMap.getClass() == TransformingHeightMap.class) {
+            final TransformingHeightMap transforming = (TransformingHeightMap) heightMap;
+            if ((transforming.getScaleX() != 1.0f) || (transforming.getScaleY() != 1.0f)
+                    || (transforming.getRotation() != 0.0f)) {
+                return null;
+            }
+            final HeightMap base = transforming.getBaseHeightMap();
+            if (base.getClass() == BitmapHeightMap.class) {
+                return new BitmapSampler((BitmapHeightMap) base,
+                        transforming.getOffsetX(), transforming.getOffsetY(), false);
+            }
+            if (base.getClass() == BicubicHeightMap.class) {
+                final BicubicHeightMap bicubic = (BicubicHeightMap) base;
+                if (bicubic.getHeightMap(0).getClass() == BitmapHeightMap.class) {
+                    return new BitmapSampler((BitmapHeightMap) bicubic.getHeightMap(0),
+                            transforming.getOffsetX(), transforming.getOffsetY(), bicubic.isRepeat());
+                }
+            }
+        }
+        return null;
+    }
+
+    private static final class BitmapSampler {
+        private BitmapSampler(BitmapHeightMap bitmap, int offsetX, int offsetY, boolean repeat) {
+            this.bitmap = bitmap;
+            this.offsetX = offsetX;
+            this.offsetY = offsetY;
+            this.repeat = repeat;
+        }
+
+        private final BitmapHeightMap bitmap;
+        private final int offsetX, offsetY;
+        private final boolean repeat;
     }
 
     private float calculateHeight(final double imageLevel) {

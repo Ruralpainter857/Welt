@@ -22,14 +22,15 @@ import static org.pepsoft.minecraft.Material.AIR;
  * Created by Pepijn on 26-6-2016.
  */
 public class Structure extends AbstractObject implements Bo2ObjectProvider {
-    private Structure(CompoundTag root, String name, Map<Point3i, Material> blocks, List<Entity> entities, List<TileEntity> tileEntities) {
+    private Structure(CompoundTag root, String name, Map<Point3i, Material> blocks, List<Entity> entities, List<TileEntity> tileEntities, StructureCompactBlocks compactBlocks) {
         this.root = root;
         this.name = name;
         this.blocks = blocks;
+        this.compactBlocks = compactBlocks;
         this.entities = entities;
         this.tileEntities = tileEntities;
         // .nbt files don't have offsets, so always guestimate it:
-        final Point3i offset = guestimateOffset();
+        final Point3i offset = compactBlocks != null && compactBlocks.isSparse() ? compactBlocks.sparseOffset() : guestimateOffset();
         if ((offset != null) && ((offset.x != 0) || (offset.y != 0) || (offset.z != 0))) {
             setAttribute(ATTRIBUTE_OFFSET, offset);
         }
@@ -71,11 +72,12 @@ public class Structure extends AbstractObject implements Bo2ObjectProvider {
 
     @Override
     public Material getMaterial(int x, int y, int z) {
-        return blocks.get(new Point3i(x, y, z));
+        return compactBlocks != null ? compactBlocks.material(x, y, z) : blocks.get(new Point3i(x, y, z));
     }
 
     @Override
     public boolean getMask(int x, int y, int z) {
+        if (compactBlocks != null) return compactBlocks.mask(x, y, z, getAttribute(ATTRIBUTE_IGNORE_AIR));
         if (getAttribute(ATTRIBUTE_IGNORE_AIR)) {
             final Material material = blocks.get(new Point3i(x, y, z));
             return (material != null) && (material != AIR);
@@ -142,10 +144,11 @@ public class Structure extends AbstractObject implements Bo2ObjectProvider {
 
     @SuppressWarnings("unchecked") // Guaranteed by Minecraft
     public static Structure load(String objectName, InputStream inputStream) throws IOException {
-        final CompoundTag root;
-        try (NBTInputStream in = new NBTInputStream(new GZIPInputStream(new BufferedInputStream(inputStream)))) {
-            root = (CompoundTag) in.readTag();
+        final StructureCompactBlocks.Root parsed;
+        try (InputStream decompressed = new GZIPInputStream(new BufferedInputStream(inputStream))) {
+            parsed = StructureCompactBlocks.readRoot(decompressed);
         }
+        final CompoundTag root = parsed.tag();
 
         // Load the palette
         final ListTag<CompoundTag> paletteTag = (ListTag<CompoundTag>) root.getTag(TAG_PALETTE_);
@@ -164,7 +167,8 @@ public class Structure extends AbstractObject implements Bo2ObjectProvider {
         }
 
         // Load the blocks and tile entities
-        final Map<Point3i, Material> blocks = new HashMap<>();
+        final StructureCompactBlocks compactBlocks = parsed.frame() == null ? null : new StructureCompactBlocks(parsed.frame(), palette);
+        final Map<Point3i, Material> blocks = compactBlocks == null ? new HashMap<>() : null;
         final ListTag<CompoundTag> blocksTag = (ListTag<CompoundTag>) root.getTag(TAG_BLOCKS_);
         if (blocksTag == null) {
             throw new IllegalArgumentException(TAG_BLOCKS_ + " tag missing from object " + objectName + " (root tag contents: " + root.getValue() + ")");
@@ -175,7 +179,7 @@ public class Structure extends AbstractObject implements Bo2ObjectProvider {
             final int x = posTags.get(0).getValue();
             final int y = posTags.get(2).getValue();
             final int z = posTags.get(1).getValue();
-            blocks.put(new Point3i(x, y, z), palette[((IntTag) blockTag.getTag(TAG_STATE_)).getValue()]);
+            if (blocks != null) blocks.put(new Point3i(x, y, z), palette[((IntTag) blockTag.getTag(TAG_STATE_)).getValue()]);
             final CompoundTag nbtTag = (CompoundTag) blockTag.getTag(TAG_NBT_);
             if (nbtTag != null) {
                 // This block is a tile entity
@@ -208,11 +212,43 @@ public class Structure extends AbstractObject implements Bo2ObjectProvider {
         root.setTag(TAG_BLOCKS_, null);
         root.setTag(TAG_ENTITIES_, null);
 
-        return new Structure(root, objectName, blocks, (! entities.isEmpty()) ? ImmutableList.copyOf(entities) : null, (! tileEntities.isEmpty()) ? ImmutableList.copyOf(tileEntities) : null);
+        Structure result = new Structure(root, objectName, blocks, (! entities.isEmpty()) ? ImmutableList.copyOf(entities) : null, (! tileEntities.isEmpty()) ? ImmutableList.copyOf(tileEntities) : null, compactBlocks);
+        if (compactBlocks != null) compactBlocks.completed();
+        return result;
     }
 
+    /** Compact index bytes, or -1 when the original coordinate map is retained. */
+    public long getBlockIndexStorageBytes() { return compactBlocks == null ? -1 : compactBlocks.storageBytes(); }
+
+    private void writeObject(ObjectOutputStream out) throws IOException {
+        // Keep historical project readers compatible; only saving expands the compact storage.
+        ObjectOutputStream.PutField fields = out.putFields();
+        fields.put("root", root); fields.put("blocks", compactBlocks == null ? blocks : compactBlocks.historicalMap());
+        fields.put("name", name); fields.put("attributes", attributes);
+        fields.put("entities", entities); fields.put("tileEntities", tileEntities);
+        out.writeFields();
+    }
+
+    private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+        in.defaultReadObject();
+        if (getClass() != Structure.class || !org.pepsoft.worldpainter.nativeapi.NativeSlices.isStructureSnapshotAvailable()) return;
+        StructureCompactBlocks restored;
+        try {
+            restored = StructureCompactBlocks.captureProject(blocks, getDimensions());
+        } catch (RuntimeException unsupported) {
+            // Malformed/custom project metadata retains the original deferred Java behavior.
+            return;
+        }
+        if (restored != null) {
+            compactBlocks = restored;
+            blocks = null;
+            restored.completed();
+        }
+    }
+
+    private transient StructureCompactBlocks compactBlocks;
     private final CompoundTag root;
-    private final Map<Point3i, Material> blocks;
+    private Map<Point3i, Material> blocks;
     private String name;
     private Map<String, Serializable> attributes;
     private final List<Entity> entities;

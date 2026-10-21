@@ -28,7 +28,7 @@ import static org.pepsoft.minecraft.Material.MINECRAFT;
  * A Sponge schematic according to the specifications at
  * <a href="https://github.com/SpongePowered/Schematic-Specification/blob/master/versions/">https://github.com/SpongePowered/Schematic-Specification/blob/master/versions/</a>.
  */
-public final class Schem extends AbstractNBTItem implements WPObject {
+public final class Schem extends AbstractNBTItem implements WPObject, org.pepsoft.worldpainter.objects.CompactObjectSource, org.pepsoft.worldpainter.objects.CompactTransformedObjectSource {
     @SuppressWarnings("unchecked") // Guaranteed by Minecraft
     public Schem(CompoundTag tag, String fallBackName) {
         super(getSchematic(tag));
@@ -85,15 +85,21 @@ public final class Schem extends AbstractNBTItem implements WPObject {
             paletteList.set(((IntTag) value).getValue(), material);
         });
         palette = paletteList.toArray(new Material[paletteList.size()]);
+        SchemPackedAccess.Result nativeBlocks = null;
         if (blockDataTag instanceof IntArrayTag) {
             // TODO since this is supposed to be varints; if we get here are these really straight integers?
             blocks = ((IntArrayTag) blockDataTag).getValue();
         } else if (blockDataTag instanceof ByteArrayTag) {
             final byte[] bytes = ((ByteArrayTag) blockDataTag).getValue();
-            blocks = new int[width * height * length];
-            final ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
-            for (int i = 0; i < blocks.length; i++) {
-                blocks[i] = readVarInt(bais);
+            nativeBlocks = SchemPackedAccess.decode(bytes, null, palette, width, length, height);
+            if (nativeBlocks != null) {
+                compactBlocks = nativeBlocks.blocks();
+                compactStride = nativeBlocks.stride();
+                blocks = null;
+            } else {
+                blocks = new int[width * height * length];
+                final ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+                for (int i = 0; i < blocks.length; i++) blocks[i] = readVarInt(bais);
             }
         } else {
             throw new IllegalArgumentException("Unsupported tag type for BlockData or Blocks/Data: " + blockDataTag.getClass().getSimpleName());
@@ -127,7 +133,12 @@ public final class Schem extends AbstractNBTItem implements WPObject {
             // Schematic offset points inside the object; use it as the default
             offset = new Point3i(schemOffset[0], schemOffset[2], schemOffset[1]);
         } else {
-            offset = guestimateOffset();
+            if (nativeBlocks == null) offset = guestimateOffset();
+            else {
+                int[] summary = nativeBlocks.summary();
+                offset = summary[1] < 0 ? null : new Point3i(-(summary[2] + summary[3]) / 2,
+                        -(summary[4] + summary[5]) / 2, -summary[1]);
+            }
         }
         if ((offset != null) && ((offset.x != 0) || (offset.y != 0) || (offset.z != 0))) {
             if (attributes == null) {
@@ -136,7 +147,8 @@ public final class Schem extends AbstractNBTItem implements WPObject {
             attributes.put(ATTRIBUTE_OFFSET.key, offset);
         }
 
-        guessManageWaterlogged();
+        if (nativeBlocks == null) guessManageWaterlogged();
+        else if (nativeBlocks.summary()[6] != 0) setAttribute(ATTRIBUTE_MANAGE_WATERLOGGED, false);
     }
 
     // WPObject
@@ -163,12 +175,12 @@ public final class Schem extends AbstractNBTItem implements WPObject {
 
     @Override
     public Material getMaterial(int x, int y, int z) {
-        return palette[blocks[x + y * width + z * width * length]];
+        return palette[paletteIndex(x + y * width + z * width * length)];
     }
 
     @Override
     public boolean getMask(int x, int y, int z) {
-        final Material material = palette[blocks[x + y * width + z * width * length]];
+        final Material material = palette[paletteIndex(x + y * width + z * width * length)];
         // Schems have been observed in the wild with a null value in the palette, so support that (whether or not that
         // is actually correct):
         return (material != null) && (material != AIR);
@@ -346,9 +358,66 @@ public final class Schem extends AbstractNBTItem implements WPObject {
         }
     }
 
+    @Override
+    public org.pepsoft.worldpainter.objects.CompactMaterialVolume copyCompactVolume() {
+        long count=(long)width*length*height;
+        if(width<1 || length<1 || height<1 || count>16*1024*1024)return null;
+        return org.pepsoft.worldpainter.objects.CompactMaterialVolume.captureSchematic(palette,compactBlocks,blocks,compactStride,(int)count);
+    }
+
+    @Override
+    public org.pepsoft.worldpainter.objects.CompactMaterialVolume copyTransformedCompactVolume(int[] parameters,org.pepsoft.worldpainter.Platform[] platforms) {
+        long count=(long)width*length*height;
+        if(width<1 || length<1 || height<1 || count>16*1024*1024 || parameters==null || parameters.length<4
+                || parameters[0]!=width || parameters[1]!=length || parameters[2]!=height)return null;
+        return org.pepsoft.worldpainter.objects.CompactMaterialVolume.captureTransformedSchematic(palette,compactBlocks,blocks,compactStride,(int)count,parameters,platforms);
+    }
+
+    @Override public boolean forEachClassificationMaterial(java.util.function.Consumer<Material> consumer) {
+        return org.pepsoft.worldpainter.objects.CompactMaterialVolume.forEachIndexedMaterial(
+                palette,compactBlocks,blocks,compactStride,new int[]{width,length,height},consumer);
+    }
+    private int paletteIndex(int index) {
+        if (compactBlocks == null) return blocks[index];
+        if (index < 0 || index >= compactBlocks.length / compactStride) throw new ArrayIndexOutOfBoundsException(index);
+        int offset = index * compactStride;
+        return compactStride == 1 ? compactBlocks[offset] & 255
+                : (compactBlocks[offset] & 255) | (compactBlocks[offset + 1] & 255) << 8;
+    }
+
+    /** Palette index storage only; excludes materials, entities and remaining metadata. */
+    public long getBlockIndexStorageBytes() {
+        return compactBlocks != null ? compactBlocks.length : blocks.length * 4L;
+    }
+
+    private void writeObject(ObjectOutputStream out) throws IOException {
+        // Keep the historical fields and int[] wire representation for older WorldPainter readers.
+        int[] stored = blocks;
+        if (stored == null) {
+            stored = new int[compactBlocks.length / compactStride];
+            for (int i = 0; i < stored.length; i++) stored[i] = paletteIndex(i);
+        }
+        ObjectOutputStream.PutField fields = out.putFields();
+        fields.put("width", width); fields.put("height", height); fields.put("length", length);
+        fields.put("palette", palette); fields.put("blocks", stored);
+        fields.put("tileEntities", tileEntities); fields.put("entities", entities);
+        fields.put("name", name); fields.put("attributes", attributes);
+        out.writeFields();
+    }
+
+    private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+        in.defaultReadObject();
+        SchemPackedAccess.Result result = SchemPackedAccess.decode(null, blocks, palette, width, length, height);
+        if (result != null) {
+            compactBlocks = result.blocks(); compactStride = result.stride(); blocks = null;
+        }
+    }
+
     private final int width, height, length;
     private final Material[] palette;
-    private final int[] blocks;
+    private int[] blocks;
+    private transient byte[] compactBlocks;
+    private transient int compactStride;
     private final List<TileEntity> tileEntities;
     private final List<Entity> entities;
     private String name;

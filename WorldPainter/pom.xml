@@ -311,5 +311,149 @@
                 </repository>
             </repositories>
         </profile>
+        <!-- ================================================================= -->
+        <!-- Welt (fork WorldPainter -> Java + Rust): profil natif -Pnative.    -->
+        <!--                                                                     -->
+        <!-- INERT PAR DEFAUT: ce profil ne modifie RIEN au build 100% Java     -->
+        <!-- tant qu'il n'est pas active explicitement via -Pnative. Il est     -->
+        <!-- declare dans le pom parent uniquement (aucune modification des     -->
+        <!-- pom des modules).                                                  -->
+        <!--                                                                     -->
+        <!-- Usage:      mvn -Pnative -pl WPCore -am compile                    -->
+        <!--             (construire la DLL Rust puis compiler WPCore qui       -->
+        <!--              l'embarque; utilisez -am pour que le parent soit      -->
+        <!--              bien dans le reacteur, sinon le profil ne s'execute  -->
+        <!--              pas - il vit au validate du module parent)           -->
+        <!--                                                                     -->
+        <!-- Etape 1 - exec-maven-plugin, phase validate du module parent       -->
+        <!--   (inherited=false: exactement UNE execution de cargo par build,   -->
+        <!--   avant tout module). Lance cargo build en mode release sur le     -->
+        <!--   manifest ../welt-native/Cargo.toml. Cargo must be on PATH;       -->
+        <!--   RUSTUP_HOME/CARGO_HOME are inherited from the invoking process.  -->
+        <!--   introuvable le build echoue immediatement avec l'erreur          -->
+        <!--   "Cannot run program ... CreateProcess error=2" (message clair,   -->
+        <!--   sans impact sur le build standard sans -Pnative).                -->
+        <!--   Note: exec-maven-plugin 1.3.2 (version existante du projet,      -->
+        <!--   deja utilisee par WPGUI) n'offre pas de parametre de timeout     -->
+        <!--   pour le goal exec; le build attend donc simplement la fin de     -->
+        <!--   cargo (le build Rust du workspace welt-native est rapide).       -->
+        <!--                                                                     -->
+        <!-- Etape 2 - maven-resources-plugin copy-resources, phase validate du  -->
+        <!--   module parent (apres l'etape 1, meme phase, ordre de             -->
+        <!--   declaration): copie                                             -->
+        <!--     welt-native/target/release/welt_core.dll                       -->
+        <!--   vers                                                               -->
+        <!--     WPCore/src/main/resources/natives/windows-x86_64/welt_core.dll  -->
+        <!--   Le dossier <os>-<arch> est derive des profils OS/architecture     -->
+        <!--   ci-dessous. La configuration <resources>                         -->
+        <!--   existante de WPCore embarque natives/ sans filtering (binaire     -->
+        <!--   copie tel quel dans target/classes puis dans le jar WPCore).     -->
+        <!--   Garde-fou: si cargo echoue, le build echoue a l'etape 1 (code     -->
+        <!--   retour non nul remonte par exec:exec) AVANT la copie; si cargo    -->
+        <!--   reussit, target/release existe forcement, donc une DLL perimee   -->
+        <!--   ne peut pas etre embarquee silencieusement par ce profil.         -->
+        <!--                                                                     -->
+        <!-- ATTENTION: la DLL copiee dans src/main/resources persiste apres le  -->
+        <!-- build; le build SANS -Pnative ne la touche jamais mais l'embarque   -->
+        <!-- si elle est deja presente (comportement voulu: une fois le natif    -->
+        <!-- construit, le build Java standard reste reproductible hors ligne).  -->
+        <!-- Packaging final (install4j): le dossier natives/ doit etre          -->
+        <!-- embarque dans le distributeur (a documenter dans la config          -->
+        <!-- install4j, plan paragraphe 3, livrable 0.2).                         -->
+        <!-- ================================================================= -->
+        <profile>
+            <id>native</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>${exec-maven-plugin.version}</version>
+                        <inherited>false</inherited>
+                        <executions>
+                            <execution>
+                                <id>welt-cargo-build</id>
+                                <phase>validate</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>cargo</executable>
+                                    <arguments>
+                                        <argument>build</argument>
+                                        <argument>--release</argument>
+                                        <argument>--manifest-path</argument>
+                                        <argument>${project.basedir}/../welt-native/Cargo.toml</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <artifactId>maven-resources-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <inherited>false</inherited>
+                        <executions>
+                            <execution>
+                                <id>welt-copy-native-dll</id>
+                                <phase>validate</phase>
+                                <goals>
+                                    <goal>copy-resources</goal>
+                                </goals>
+                                <configuration>
+                                    <outputDirectory>${project.basedir}/WPCore/src/main/resources/natives/${welt.native.os}-${welt.native.arch}</outputDirectory>
+                                    <resources>
+                                        <resource>
+                                            <directory>${project.basedir}/../welt-native/target/release</directory>
+                                            <includes>
+                                                <include>${welt.native.binary}</include>
+                                                <include>${welt.native.slices.binary}</include>
+                                            </includes>
+                                        </resource>
+                                    </resources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <!-- Platform properties are activated from the host JDK, so the same
+             -Pnative build works from any clone and drive letter. -->
+        <profile>
+            <id>welt-platform-windows</id>
+            <activation><os><family>Windows</family></os></activation>
+            <properties><welt.native.os>windows</welt.native.os><welt.native.binary>welt_core.dll</welt.native.binary><welt.native.slices.binary>welt_slices.dll</welt.native.slices.binary></properties>
+        </profile>
+        <profile>
+            <id>welt-platform-linux</id>
+            <activation><os><name>Linux</name></os></activation>
+            <properties><welt.native.os>linux</welt.native.os><welt.native.binary>libwelt_core.so</welt.native.binary><welt.native.slices.binary>libwelt_slices.so</welt.native.slices.binary></properties>
+        </profile>
+        <profile>
+            <id>welt-platform-macos</id>
+            <activation><os><family>Mac</family></os></activation>
+            <properties><welt.native.os>macos</welt.native.os><welt.native.binary>libwelt_core.dylib</welt.native.binary><welt.native.slices.binary>libwelt_slices.dylib</welt.native.slices.binary></properties>
+        </profile>
+        <profile>
+            <id>welt-arch-amd64</id>
+            <activation><os><arch>amd64</arch></os></activation>
+            <properties><welt.native.arch>x86_64</welt.native.arch></properties>
+        </profile>
+        <profile>
+            <id>welt-arch-x86_64</id>
+            <activation><os><arch>x86_64</arch></os></activation>
+            <properties><welt.native.arch>x86_64</welt.native.arch></properties>
+        </profile>
+        <profile>
+            <id>welt-arch-aarch64</id>
+            <activation><os><arch>aarch64</arch></os></activation>
+            <properties><welt.native.arch>aarch64</welt.native.arch></properties>
+        </profile>
+        <profile>
+            <id>welt-arch-arm64</id>
+            <activation><os><arch>arm64</arch></os></activation>
+            <properties><welt.native.arch>aarch64</welt.native.arch></properties>
+        </profile>
     </profiles>
 </project>

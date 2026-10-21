@@ -14,11 +14,16 @@ import org.pepsoft.worldpainter.layers.Void;
 import org.pepsoft.worldpainter.layers.renderers.*;
 import org.pepsoft.worldpainter.layers.tunnel.TunnelLayer;
 import org.pepsoft.worldpainter.layers.tunnel.TunnelLayerHelper;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import org.pepsoft.worldpainter.ramps.ColourRamp;
 
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
+import java.awt.image.SinglePixelPackedSampleModel;
+import java.awt.image.WritableRaster;
 import java.util.*;
 import java.util.List;
 
@@ -36,9 +41,92 @@ import static org.pepsoft.worldpainter.layers.tunnel.TunnelLayer.Mode.FIXED_HEIG
  * @author pepijn
  */
 public final class TileRenderer {
+    private static final class TileLayerSnapshot {
+        private Layer[] layers = new Layer[0];
+        private byte[] values = new byte[0];
+        private boolean[] hasStoredValues = new boolean[0];
+        private int[] defaultValues = new int[0];
+        private int voidLayerIndex = -1;
+        private int notPresentLayerIndex = -1;
+        private int notPresentBlockLayerIndex = -1;
+        private int floodWithLavaLayerIndex = -1;
+
+        void prepare(Tile tile, Layer[] visibleLayers, boolean includeVoid,
+                     boolean includeNotPresent, boolean includeFloodWithLava) {
+            int count = visibleLayers.length;
+            voidLayerIndex = -1;
+            notPresentLayerIndex = -1;
+            notPresentBlockLayerIndex = -1;
+            floodWithLavaLayerIndex = -1;
+            if (includeVoid) {
+                voidLayerIndex = count++;
+            }
+            if (includeNotPresent) {
+                notPresentLayerIndex = count++;
+                notPresentBlockLayerIndex = count++;
+            }
+            if (includeFloodWithLava) {
+                floodWithLavaLayerIndex = count++;
+            }
+            ensureCapacity(count);
+            System.arraycopy(visibleLayers, 0, layers, 0, visibleLayers.length);
+            int next = visibleLayers.length;
+            if (voidLayerIndex >= 0) {
+                layers[next++] = org.pepsoft.worldpainter.layers.Void.INSTANCE;
+            }
+            if (notPresentLayerIndex >= 0) {
+                layers[next++] = NotPresent.INSTANCE;
+                layers[next++] = NotPresentBlock.INSTANCE;
+            }
+            if (floodWithLavaLayerIndex >= 0) {
+                layers[next] = FloodWithLava.INSTANCE;
+            }
+
+            final int area = TILE_SIZE * TILE_SIZE;
+            for (int layerIndex = 0; layerIndex < count; layerIndex++) {
+                final Layer layer = layers[layerIndex];
+                final int offset = layerIndex * area;
+                defaultValues[layerIndex] = layer.getDefaultValue();
+                switch (layer.getDataSize()) {
+                    case BIT, BIT_PER_CHUNK -> {
+                        tile.copyBitLayerValues(layer, 0, 0, TILE_SIZE, TILE_SIZE,
+                                values, offset);
+                        hasStoredValues[layerIndex] = true;
+                    }
+                    case NIBBLE, BYTE -> hasStoredValues[layerIndex] = tile.copyLayerValues(
+                            layer, 0, 0, TILE_SIZE, TILE_SIZE, values, offset);
+                    default -> throw new UnsupportedOperationException(
+                            "Don't know how to render " + layer.getClass().getSimpleName());
+                }
+            }
+        }
+
+        boolean bitValue(int layerIndex, int x, int y) {
+            return (layerIndex >= 0)
+                    && (values[layerIndex * TILE_SIZE * TILE_SIZE + x * TILE_SIZE + y] != 0);
+        }
+
+        int numericValue(int layerIndex, int x, int y) {
+            final int index = layerIndex * TILE_SIZE * TILE_SIZE + x * TILE_SIZE + y;
+            return hasStoredValues[layerIndex] ? values[index] & 0xff : defaultValues[layerIndex];
+        }
+
+        private void ensureCapacity(int layerCount) {
+            if (layers.length < layerCount) {
+                layers = Arrays.copyOf(layers, layerCount);
+                hasStoredValues = Arrays.copyOf(hasStoredValues, layerCount);
+                defaultValues = Arrays.copyOf(defaultValues, layerCount);
+            }
+            final int requiredValues = layerCount * TILE_SIZE * TILE_SIZE;
+            if (values.length < requiredValues) {
+                values = Arrays.copyOf(values, requiredValues);
+            }
+        }
+    }
+
     public TileRenderer(TileProvider tileProvider, ColourScheme colourScheme, CustomBiomeManager customBiomeManager, int zoom, boolean transparentVoid, ColourRamp colourRamp) {
-        biomeRenderer = new BiomeRenderer(customBiomeManager, colourScheme);
         this.tileProvider = tileProvider;
+        this.customBiomeManager = customBiomeManager;
         final Dimension dimension = (tileProvider instanceof Dimension) ? (Dimension) tileProvider : null;
         TileProvider relatedTileProvider = null;
         boolean renderCeilingIntersection = false, renderTunnelRoofIntersection = false;
@@ -56,7 +144,7 @@ public final class TileRenderer {
                     if (tunnelLayer.getRoofMode() != FIXED_HEIGHT_ABOVE_FLOOR) {
                         relatedTileProvider = detailDimension;
                         renderTunnelRoofIntersection = true;
-                        tunnelLayerHelper = new TunnelLayerHelper(tunnelLayer, detailDimension);
+                        tunnelLayerHelper = new TunnelLayerHelper(tunnelLayer, detailDimension, true);
                     }
                 }
             }
@@ -141,14 +229,11 @@ public final class TileRenderer {
 //        synchronized (tile) {
 
         final int tileX = tile.getX(), tileY = tile.getY();
-        for (int x = 0; x < TILE_SIZE; x++) {
-            for (int y = 0; y < TILE_SIZE; y++) {
-                final float height = tile.getHeight(x, y);
-                floatHeightCache[x | (y << TILE_SIZE_BITS)] = height;
-                intHeightCache[x | (y << TILE_SIZE_BITS)] = Math.round(height);
-                intFluidHeightCache[x | (y << TILE_SIZE_BITS)] = tile.getWaterLevel(x, y);
-            }
-        }
+        final boolean compactViewport = zoom >= -7 && zoom < 0 && !renderCeilingIntersection && !renderTunnelRoofIntersection
+                && colourScheme == ColourScheme.DEFAULT && !hiddenLayers.contains(TERRAIN_AS_LAYER)
+                && tile.getX() >= -(1 << 24) && tile.getX() < (1 << 24) && tile.getY() >= -(1 << 24) && tile.getY() < (1 << 24)
+                && Native.isRenderEnabled() && Boolean.getBoolean("welt.native.viewport") && NativeLoader.areSlicesAvailable();
+        if (!compactViewport) tile.copyRenderDataTo(floatHeightCache, intHeightCache, intFluidHeightCache, terrainOrdinalCache);
 
         // Determine which coordinates, if any, have heights which would intersect with the opposite tile, if any
         final boolean bottomless, topLayersRelativeToTerrain;
@@ -196,10 +281,9 @@ public final class TileRenderer {
             seed = 0L;
         }
 
-        final List<Layer> layerList = new ArrayList<>(tile.getLayers());
-        if (! layerList.contains(Biome.INSTANCE)) {
-            layerList.add(Biome.INSTANCE);
-        }
+        // Biome defaults to 255 (no overlay); only stored biome data belongs in this per-pixel list.
+        final List<Layer> tileLayers = tile.getLayers();
+        final List<Layer> layerList = new ArrayList<>(tileLayers);
         layerList.removeAll(hiddenLayers);
         final boolean hideTerrain = hiddenLayers.contains(TERRAIN_AS_LAYER);
         final boolean hideFluids = hiddenLayers.contains(FLUIDS_AS_LAYER);
@@ -217,48 +301,120 @@ public final class TileRenderer {
         for (int i = 0; i < layers.length; i++) {
             renderers[i] = getRenderer(layers[i]);
         }
+        if ((zoom == 0 || compactViewport) && !hideTerrain && !renderCeilingIntersection && !renderTunnelRoofIntersection
+                && colourScheme == ColourScheme.DEFAULT && Native.isRenderEnabled()
+                && Boolean.parseBoolean(System.getProperty("welt.native.viewport", "false"))
+                && NativeLoader.areSlicesAvailable()) {
+            if (viewportRenderAccess == null) viewportRenderAccess = new ViewportRenderAccess(platform);
+            if (viewportRenderAccess.render(tile, tileProvider, layers, renderers, intHeightCache, intFluidHeightCache,
+                    terrainOrdinalCache, contourLines, contourSeparation, lightOrigin.ordinal(), hideFluids, bottomless,
+                    _void, notAllBlocksPresent, !hideFluids && tileLayers.contains(FloodWithLava.INSTANCE),
+                    waterColour, lavaColour, bedrockColour, voidColour, notPresentColour, renderBuffer, -zoom)) {
+                if (!copyRenderBufferToArgbImage(image, dx, dy)) {
+                    Graphics2D graphics = (Graphics2D) image.getGraphics();
+                    try {
+                        graphics.setComposite(AlphaComposite.Src);
+                        if (zoom == 0) graphics.drawImage(bufferedImage, dx, dy, null);
+                        else {
+                            int size = 128 >> -zoom;
+                            graphics.drawImage(bufferedImage, dx, dy, dx + size, dy + size, 0, 0, size, size, null);
+                        }
+                    }
+                    finally { graphics.dispose(); }
+                }
+                return;
+            }
+        }
+        if (compactViewport) tile.copyRenderDataTo(floatHeightCache, intHeightCache, intFluidHeightCache, terrainOrdinalCache);
+        layerValueSnapshot.prepare(tile, layers, _void, notAllBlocksPresent,
+                (!hideFluids) && tileLayers.contains(FloodWithLava.INSTANCE));
 
         final int scale = 1 << -zoom;
-        final Graphics2D g2 = (Graphics2D) image.getGraphics();
+        final boolean nativeShading = (zoom == 0) && Native.isRenderEnabled()
+                && NativeLoader.areSlicesAvailable();
+        if (nativeShading && (renderShadeAmounts == null)) {
+            renderShadeAmounts = new int[TILE_SIZE * TILE_SIZE];
+        }
+        Graphics2D g2 = null;
         try {
-            g2.setComposite(AlphaComposite.Src);
             if (zoom == 0) {
                 for (int x = 0; x < TILE_SIZE; x++) {
                     for (int y = 0; y < TILE_SIZE; y++) {
                         final int worldX = (tileX << TILE_SIZE_BITS) | x, worldY = (tileY << TILE_SIZE_BITS) | y;
-                        if (notAllBlocksPresent && (tile.getBitLayerValue(NotPresent.INSTANCE, x, y) || tile.getBitLayerValue(NotPresentBlock.INSTANCE, x, y))) {
-                            renderBuffer[x | (y << TILE_SIZE_BITS)] = notPresentColour;
+                        if (notAllBlocksPresent && (layerValueSnapshot.bitValue(
+                                layerValueSnapshot.notPresentLayerIndex, x, y)
+                                || layerValueSnapshot.bitValue(layerValueSnapshot.notPresentBlockLayerIndex, x, y))) {
+                            final int offset = x | (y << TILE_SIZE_BITS);
+                            renderBuffer[offset] = notPresentColour;
+                            if (nativeShading) storeShadeAmounts(offset, 256, 256);
                         } else if ((! noOpposites) && oppositesOverlap[x | (y << TILE_SIZE_BITS)] && CEILING_PATTERN[x & 0x7][y & 0x7]) {
-                            renderBuffer[x | (y << TILE_SIZE_BITS)] = 0xff000000;
-                        } else if (_void && tile.getBitLayerValue(org.pepsoft.worldpainter.layers.Void.INSTANCE, x, y)) {
-                            renderBuffer[x | (y << TILE_SIZE_BITS)] = voidColour;
+                            final int offset = x | (y << TILE_SIZE_BITS);
+                            renderBuffer[offset] = 0xff000000;
+                            if (nativeShading) storeShadeAmounts(offset, 256, 256);
+                        } else if (_void && layerValueSnapshot.bitValue(
+                                layerValueSnapshot.voidLayerIndex, x, y)) {
+                            final int offset = x | (y << TILE_SIZE_BITS);
+                            renderBuffer[offset] = voidColour;
+                            if (nativeShading) storeShadeAmounts(offset, 256, 256);
                             // TODO still render ReadOnly, and layers which might still be exported over Void
                         } else {
-                            int colour = getPixelColour(tile, worldX, worldY, layers, renderers, contourLines, hideTerrain, hideFluids, bottomless, topLayersRelativeToTerrain, seed);
-                            colour = ColourUtils.multiply(colour, getTerrainBrightenAmount());
+                            int colour = getPixelColour(tile, worldX, worldY, layers, renderers,
+                                    layerValueSnapshot, contourLines, hideTerrain, hideFluids,
+                                    bottomless, topLayersRelativeToTerrain, seed);
                             final int offset = x + y * TILE_SIZE;
-                            if (intFluidHeightCache[offset] > intHeightCache[offset]) {
-                                colour = ColourUtils.multiply(colour, getFluidBrightenAmount());
+                            if (nativeShading) {
+                                final int terrainAmount = getTerrainBrightenAmount();
+                                final int fluidAmount = (intFluidHeightCache[offset] > intHeightCache[offset])
+                                        ? getFluidBrightenAmount() : 256;
+                                storeShadeAmounts(offset, terrainAmount, fluidAmount);
+                                renderBuffer[offset] = 0xff000000 | colour;
+                            } else {
+                                colour = ColourUtils.multiply(colour, getTerrainBrightenAmount());
+                                if (intFluidHeightCache[offset] > intHeightCache[offset]) {
+                                    colour = ColourUtils.multiply(colour, getFluidBrightenAmount());
+                                }
+                                renderBuffer[offset] = 0xff000000 | colour;
                             }
-                            renderBuffer[x | (y << TILE_SIZE_BITS)] = 0xff000000 | colour;
                         }
                     }
                 }
 
-                g2.drawImage(bufferedImage, dx, dy, null);
+                if (nativeShading) {
+                    final boolean shaded = (renderShadeAmountsExact != null)
+                            ? NativeSlices.shadeColours(renderBuffer, renderShadeAmountsExact)
+                            : NativeSlices.shadeColoursCompact(renderBuffer, renderShadeAmounts);
+                    if (!shaded) {
+                        if (renderShadeAmountsExact != null) {
+                            applyJavaShadingExact();
+                        } else {
+                            applyJavaShadingCompact();
+                        }
+                    }
+                }
+
+                if (!copyRenderBufferToArgbImage(image, dx, dy)) {
+                    g2 = (Graphics2D) image.getGraphics();
+                    g2.setComposite(AlphaComposite.Src);
+                    g2.drawImage(bufferedImage, dx, dy, null);
+                }
             } else {
                 final int tileSize = TILE_SIZE / scale;
                 for (int x = 0; x < TILE_SIZE; x += scale) {
                     for (int y = 0; y < TILE_SIZE; y += scale) {
                         final int worldX = (tileX << TILE_SIZE_BITS) | x, worldY = (tileY << TILE_SIZE_BITS) | y;
-                        if (notAllBlocksPresent && (tile.getBitLayerValue(NotPresent.INSTANCE, x, y) || tile.getBitLayerValue(NotPresentBlock.INSTANCE, x, y))) {
+                        if (notAllBlocksPresent && (layerValueSnapshot.bitValue(
+                                layerValueSnapshot.notPresentLayerIndex, x, y)
+                                || layerValueSnapshot.bitValue(layerValueSnapshot.notPresentBlockLayerIndex, x, y))) {
                             renderBuffer[x / scale + y * tileSize] = notPresentColour;
                         } else if ((! noOpposites) && oppositesOverlap[x | (y << TILE_SIZE_BITS)]) {
                             renderBuffer[x / scale + y * tileSize] = 0xff000000;
-                        } else if (_void && tile.getBitLayerValue(org.pepsoft.worldpainter.layers.Void.INSTANCE, x, y)) {
+                        } else if (_void && layerValueSnapshot.bitValue(
+                                layerValueSnapshot.voidLayerIndex, x, y)) {
                             renderBuffer[x / scale + y * tileSize] = voidColour;
                         } else {
-                            int colour = getPixelColour(tile, worldX, worldY, layers, renderers, contourLines, hideTerrain, hideFluids, bottomless, topLayersRelativeToTerrain, seed);
+                            int colour = getPixelColour(tile, worldX, worldY, layers, renderers,
+                                    layerValueSnapshot, contourLines, hideTerrain, hideFluids,
+                                    bottomless, topLayersRelativeToTerrain, seed);
                             colour = ColourUtils.multiply(colour, getTerrainBrightenAmount());
                             final int offset = x + y * TILE_SIZE;
                             if (intFluidHeightCache[offset] > intHeightCache[offset]) {
@@ -269,18 +425,65 @@ public final class TileRenderer {
                     }
                 }
 
+                g2 = (Graphics2D) image.getGraphics();
+                g2.setComposite(AlphaComposite.Src);
                 g2.drawImage(bufferedImage, dx, dy, dx + tileSize, dy + tileSize, 0, 0, tileSize, tileSize, null);
             }
         } finally {
-            g2.dispose();
+            if (g2 != null) {
+                g2.dispose();
+            }
         }
 //        }
+    }
+
+    private boolean copyRenderBufferToArgbImage(Image image, int dx, int dy) {
+        if (!(image instanceof BufferedImage) || (zoom != 0)) {
+            return false;
+        }
+        final BufferedImage destination = (BufferedImage) image;
+        final int imageWidth = destination.getWidth();
+        final int imageHeight = destination.getHeight();
+        if ((destination.getType() != BufferedImage.TYPE_INT_ARGB)
+                || (dx < 0) || (dy < 0)
+                || (dx > imageWidth - TILE_SIZE) || (dy > imageHeight - TILE_SIZE)
+                || !destination.getColorModel().equals(bufferedImage.getColorModel())) {
+            return false;
+        }
+        final WritableRaster raster = destination.getRaster();
+        if ((raster.getMinX() != 0) || (raster.getMinY() != 0)
+                || (raster.getSampleModelTranslateX() != 0)
+                || (raster.getSampleModelTranslateY() != 0)
+                || !(raster.getDataBuffer() instanceof DataBufferInt)
+                || !(raster.getSampleModel() instanceof SinglePixelPackedSampleModel)) {
+            return false;
+        }
+        final DataBufferInt dataBuffer = (DataBufferInt) raster.getDataBuffer();
+        final SinglePixelPackedSampleModel sampleModel = (SinglePixelPackedSampleModel) raster.getSampleModel();
+        final int scanlineStride = sampleModel.getScanlineStride();
+        final SinglePixelPackedSampleModel sourceSampleModel =
+                (SinglePixelPackedSampleModel) bufferedImage.getRaster().getSampleModel();
+        if ((dataBuffer.getNumBanks() != 1) || (scanlineStride != imageWidth)
+                || !Arrays.equals(sampleModel.getBitMasks(), sourceSampleModel.getBitMasks())) {
+            return false;
+        }
+        final int[] pixels = dataBuffer.getData();
+        final long firstPixel = (long) dataBuffer.getOffset() + (long) dy * scanlineStride + dx;
+        final long lastPixel = firstPixel + (long) (TILE_SIZE - 1) * scanlineStride + TILE_SIZE;
+        if ((firstPixel < 0) || (lastPixel > pixels.length)) {
+            return false;
+        }
+        for (int row = 0; row < TILE_SIZE; row++) {
+            System.arraycopy(renderBuffer, row * TILE_SIZE, pixels,
+                    (int) firstPixel + row * scanlineStride, TILE_SIZE);
+        }
+        return true;
     }
 
     /**
      * Determine the brighten amount. This method assumes that the
      * {@link #deltas} array has been filled by a previous call to
-     * {@link #getPixelColour(Tile, int, int, Layer[], LayerRenderer[], boolean, boolean, boolean, boolean, boolean, long)}.
+     * {@link #getPixelColour}.
      * 
      * @return The amount by which to brighten the pixel for the specified
      * block, out of 256; values below 256 darkening the pixel; values above
@@ -293,7 +496,7 @@ public final class TileRenderer {
     /**
      * Determine the brighten amount for fluid. This method assumes that the
      * {@link #deltas} array has been filled by a previous call to
-     * {@link #getPixelColour(Tile, int, int, Layer[], LayerRenderer[], boolean, boolean, boolean, boolean, boolean, long)}.
+     * {@link #getPixelColour}.
      *
      * @return The amount by which to brighten the pixel for the specified
      * block, out of 256; values below 256 darkening the pixel; values above
@@ -320,6 +523,63 @@ public final class TileRenderer {
         }
     }
 
+    private void applyJavaShadingExact() {
+        for (int index = 0; index < renderBuffer.length; index++) {
+            final long packed = renderShadeAmountsExact[index];
+            final int terrainAmount = (int) packed;
+            final int fluidAmount = (int) (packed >>> 32);
+            if (terrainAmount == 256 && fluidAmount == 256) {
+                continue;
+            }
+            final int alpha = renderBuffer[index] & 0xff000000;
+            int colour = ColourUtils.multiply(renderBuffer[index], terrainAmount);
+            colour = ColourUtils.multiply(colour, fluidAmount);
+            renderBuffer[index] = colour | alpha;
+        }
+    }
+
+    private void applyJavaShadingCompact() {
+        for (int index = 0; index < renderBuffer.length; index++) {
+            final int packed = renderShadeAmounts[index];
+            final int terrainAmount = packed & 0xffff;
+            final int fluidAmount = packed >>> 16;
+            if (terrainAmount == 256 && fluidAmount == 256) {
+                continue;
+            }
+            final int alpha = renderBuffer[index] & 0xff000000;
+            int colour = ColourUtils.multiply(renderBuffer[index], terrainAmount);
+            colour = ColourUtils.multiply(colour, fluidAmount);
+            renderBuffer[index] = colour | alpha;
+        }
+    }
+
+    private void storeShadeAmounts(int index, int terrainAmount, int fluidAmount) {
+        if ((terrainAmount < 0 || terrainAmount > 0xffff
+                || fluidAmount < 0 || fluidAmount > 0xffff)
+                && (renderShadeAmountsExact == null)) {
+            final long[] exactAmounts = new long[renderShadeAmounts.length];
+            final int currentX = index & (TILE_SIZE - 1);
+            final int currentY = index >>> TILE_SIZE_BITS;
+            for (int previous = 0; previous < renderShadeAmounts.length; previous++) {
+                final int previousX = previous & (TILE_SIZE - 1);
+                final int previousY = previous >>> TILE_SIZE_BITS;
+                if ((previousX < currentX) || ((previousX == currentX) && (previousY < currentY))) {
+                    final int packed = renderShadeAmounts[previous];
+                    exactAmounts[previous] = packShadeAmounts(packed & 0xffff, packed >>> 16);
+                }
+            }
+            renderShadeAmountsExact = exactAmounts;
+        }
+        renderShadeAmounts[index] = (fluidAmount << 16) | (terrainAmount & 0xffff);
+        if (renderShadeAmountsExact != null) {
+            renderShadeAmountsExact[index] = packShadeAmounts(terrainAmount, fluidAmount);
+        }
+    }
+
+    private static long packShadeAmounts(int terrainAmount, int fluidAmount) {
+        return ((long) fluidAmount << 32) | (terrainAmount & 0xffffffffL);
+    }
+
     public LightOrigin getLightOrigin() {
         return lightOrigin;
     }
@@ -331,7 +591,10 @@ public final class TileRenderer {
         this.lightOrigin = lightOrigin;
     }
 
-    private int getPixelColour(Tile tile, int worldX, int worldY, Layer[] layers, LayerRenderer[] renderers, boolean contourLines, boolean hideTerrain, boolean hideFluids, boolean bottomless, boolean topLayersRelativeToTerrain, long seed) {
+    private int getPixelColour(Tile tile, int worldX, int worldY, Layer[] layers,
+                               LayerRenderer[] renderers, TileLayerSnapshot layerValueSnapshot,
+                               boolean contourLines, boolean hideTerrain, boolean hideFluids,
+                               boolean bottomless, boolean topLayersRelativeToTerrain, long seed) {
         final int x = worldX & TILE_SIZE_MASK, y = worldY & TILE_SIZE_MASK;
         final int offset = x + y * TILE_SIZE;
         final int intHeight = intHeightCache[offset], minHeight = tile.getMinHeight();
@@ -350,18 +613,21 @@ public final class TileRenderer {
                     || (deltas[1][2] < 0))) {
             return BLACK;
         }
-        final int waterLevel = tile.getWaterLevel(x, y);
-        fluidHeights[1][0] = getNeighbourFluidHeight(tile, x, y, 0, -1, waterLevel);
-        fluidDeltas [1][0] = fluidHeights[1][0] - waterLevel;
-        fluidHeights[0][1] = getNeighbourFluidHeight(tile, x, y, -1, 0, waterLevel);
-        fluidDeltas [0][1] = fluidHeights[0][1] - waterLevel;
-        fluidHeights[2][1] = getNeighbourFluidHeight(tile, x, y, 1, 0, waterLevel);
-        fluidDeltas [2][1] = fluidHeights[2][1] - waterLevel;
-        fluidHeights[1][2] = getNeighbourFluidHeight(tile, x, y, 0, 1, waterLevel);
-        fluidDeltas [1][2] = fluidHeights[1][2] - waterLevel;
+        final int waterLevel = intFluidHeightCache[offset];
+        // Fluid deltas are consumed only for pixels with fluid above terrain.
+        if (waterLevel > intHeight) {
+            fluidHeights[1][0] = getNeighbourFluidHeight(tile, x, y, 0, -1, waterLevel);
+            fluidDeltas [1][0] = fluidHeights[1][0] - waterLevel;
+            fluidHeights[0][1] = getNeighbourFluidHeight(tile, x, y, -1, 0, waterLevel);
+            fluidDeltas [0][1] = fluidHeights[0][1] - waterLevel;
+            fluidHeights[2][1] = getNeighbourFluidHeight(tile, x, y, 1, 0, waterLevel);
+            fluidDeltas [2][1] = fluidHeights[2][1] - waterLevel;
+            fluidHeights[1][2] = getNeighbourFluidHeight(tile, x, y, 0, 1, waterLevel);
+            fluidDeltas [1][2] = fluidHeights[1][2] - waterLevel;
+        }
         int colour;
         if ((! hideFluids) && (waterLevel > intHeight)) {
-            if (tile.getBitLayerValue(FloodWithLava.INSTANCE, x, y)) {
+            if (layerValueSnapshot.bitValue(layerValueSnapshot.floodWithLavaLayerIndex, x, y)) {
                 colour = lavaColour;
             } else {
                 colour = waterColour;
@@ -371,7 +637,7 @@ public final class TileRenderer {
             if ((! bottomless) && (intHeight == minHeight)) {
                 colour = bedrockColour;
             } else {
-                Terrain terrain = tile.getTerrain(x, y);
+                Terrain terrain = TERRAIN_VALUES[terrainOrdinalCache[offset] & 0xff];
                 if (topLayersRelativeToTerrain
                         && terrain.isCustom()) {
                     MixedMaterial mixedMaterial = Terrain.getCustomMaterial(terrain.getCustomTerrainIndex());
@@ -395,14 +661,14 @@ public final class TileRenderer {
                     if (hideFluids && (layer instanceof Frost) && (waterLevel > intHeightCache[offset])) {
                         continue;
                     }
-                    boolean bitLayerValue = tile.getBitLayerValue(layer, x, y);
+                    boolean bitLayerValue = layerValueSnapshot.bitValue(i, x, y);
                     if (bitLayerValue) {
                         final BitLayerRenderer renderer = (BitLayerRenderer) renderers[i];
                         colour = renderer.getPixelColour(worldX, worldY, colour, true);
                     }
                     break;
                 case NIBBLE:
-                    int layerValue = tile.getLayerValue(layer, x, y);
+                    int layerValue = layerValueSnapshot.numericValue(i, x, y);
                     if (layerValue > 0) {
                         final NibbleLayerRenderer renderer = (NibbleLayerRenderer) renderers[i];
                         colour = renderer.getPixelColour(worldX, worldY, colour, layerValue);
@@ -410,7 +676,8 @@ public final class TileRenderer {
                     break;
                 case BYTE:
                     final ByteLayerRenderer byteLayerRenderer = (ByteLayerRenderer) renderers[i];
-                    colour = byteLayerRenderer.getPixelColour(worldX, worldY, colour, tile.getLayerValue(layer, x, y));
+                    colour = byteLayerRenderer.getPixelColour(worldX, worldY, colour,
+                            layerValueSnapshot.numericValue(i, x, y));
                     break;
                 default:
                     throw new UnsupportedOperationException("Don't know how to render " + layer.getClass().getSimpleName());
@@ -481,6 +748,9 @@ public final class TileRenderer {
         return rendererCache.computeIfAbsent(layer, k -> {
             final LayerRenderer renderer;
             if (layer instanceof Biome) {
+                if (biomeRenderer == null) {
+                    biomeRenderer = new BiomeRenderer(customBiomeManager, colourScheme);
+                }
                 renderer = biomeRenderer;
             } else {
                 renderer = layer.getRenderer();
@@ -495,11 +765,20 @@ public final class TileRenderer {
         });
     }
 
+    private static final Terrain[] TERRAIN_VALUES = Terrain.values();
+
     private final Set<Layer> hiddenLayers = new HashSet<>(Collections.singletonList(FloodWithLava.INSTANCE));
     private final int[] intHeightCache = new int[TILE_SIZE * TILE_SIZE], intFluidHeightCache = new int[TILE_SIZE * TILE_SIZE];
+    private final byte[] terrainOrdinalCache = new byte[TILE_SIZE * TILE_SIZE];
+    private int[] renderShadeAmounts;
+    private long[] renderShadeAmountsExact;
     private final float[] floatHeightCache = new float[TILE_SIZE * TILE_SIZE];
     private final BufferedImage bufferedImage;
     private final int[] renderBuffer;
+    private final TileLayerSnapshot layerValueSnapshot = new TileLayerSnapshot();
+    private ViewportRenderAccess viewportRenderAccess;
+    /** Diagnostics for complete-render parity and performance measurements. */
+    public long completedNativeViewportTiles() { return viewportRenderAccess == null ? 0L : viewportRenderAccess.completed; }
     private final int[][] heights = new int[3][3], deltas = new int[3][3], fluidHeights = new int[3][3], fluidDeltas = new int[3][3];
     private final boolean[] oppositesOverlap = new boolean[TILE_SIZE * TILE_SIZE];
     private final int zoom, waterColour, lavaColour, bedrockColour, notPresentColour, voidColour;;
@@ -508,7 +787,8 @@ public final class TileRenderer {
     private final boolean renderCeilingIntersection, renderTunnelRoofIntersection;
     private final TunnelLayerHelper tunnelLayerHelper;
     private final ColourRamp colourRamp;
-    private final BiomeRenderer biomeRenderer;
+    private BiomeRenderer biomeRenderer;
+    private final CustomBiomeManager customBiomeManager;
     private final ColourScheme colourScheme;
     private final Map<Layer, LayerRenderer> rendererCache = new HashMap<>();
     private boolean contourLines = true, hideAllLayers;

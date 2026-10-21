@@ -115,9 +115,11 @@ public final class RotatedBrush extends AbstractBrush {
         
         // Create image from original brush
         final byte[] rasterData = new byte[d * d];
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dy = -radius; dy <= radius; dy++) {
-                rasterData[dx + radius + (dy + radius) * d] = (byte) (brush.getFullStrength(dx, dy) * 255);
+        if (!(brush instanceof SymmetricBrush) || !((SymmetricBrush) brush).fillFullStrengthRaster(rasterData)) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                for (int dy = -radius; dy <= radius; dy++) {
+                    rasterData[dx + radius + (dy + radius) * d] = (byte) (brush.getFullStrength(dx, dy) * 255);
+                }
             }
         }
         final DataBuffer imageDataBuffer = new DataBufferByte(rasterData, d * d);

@@ -225,6 +225,12 @@ public class HeightMapEditor extends javax.swing.JFrame implements HeightMapProp
                     replace(parent, heightMap, noiseHeightMap);
                 });
                 replaceMenu.add(menuItem);
+                menuItem = new JMenuItem("FastNoiseLite");
+                menuItem.addActionListener(actionEvent -> {
+                    FastNoiseLiteHeightMap noiseHeightMap = new FastNoiseLiteHeightMap(1.0, 1.0, 3);
+                    replace(parent, heightMap, noiseHeightMap);
+                });
+                replaceMenu.add(menuItem);
                 menuItem = new JMenuItem("Bands");
                 menuItem.addActionListener(actionEvent -> {
                     BandedHeightMap bandedHeightMap = new BandedHeightMap(100, 1.0, 100, 1.0, false);

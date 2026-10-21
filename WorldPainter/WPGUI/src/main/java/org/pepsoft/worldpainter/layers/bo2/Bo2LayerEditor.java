@@ -335,14 +335,13 @@ public class Bo2LayerEditor extends AbstractLayerEditor<Bo2Layer> implements Lis
             WPObject object = CustomObjectManager.getInstance().loadObject(file);
             if (checkForNameOnlyMaterials) {
                 Set<String> materialNamesEncountered = new HashSet<>();
-                object.visitBlocks((o, x, y, z, material) -> {
+                org.pepsoft.worldpainter.objects.CompactObjectMaterials.forEach(object, material -> {
                     if (! materialNamesEncountered.contains(material.name)) {
                         materialNamesEncountered.add(material.name);
                         if (material.blockType == -1) {
                             nameOnlyMaterialsNames.add(material.name);
                         }
                     }
-                    return true;
                 });
             }
             listModel.addElement(object);

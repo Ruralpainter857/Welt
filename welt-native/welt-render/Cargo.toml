@@ -1,0 +1,6 @@
+﻿[package]
+name = "welt-render"
+description = "Welt volet rendu/peinture (wp-render) - squelette Phase 0"
+license = "GPL-3.0"
+version.workspace = true
+edition.workspace = true

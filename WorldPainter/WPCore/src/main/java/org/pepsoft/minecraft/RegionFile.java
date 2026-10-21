@@ -159,10 +159,11 @@ public final class RegionFile implements AutoCloseable {
         }
 
         file.seek(0);
+        final boolean groupedHeader=RegionHeaderAccess.read(file,nSectors,offsets,chunkTimestamps);
         if (sectorFree.size() > 0) {
             sectorFree.set(0, false); // chunk offset table
             for (int i = 0; i < SECTOR_INTS; ++i) {
-                int offset = file.readInt();
+                int offset = groupedHeader?offsets[i]:file.readInt();
                 offsets[i] = offset;
                 if (offset != 0 && (offset >> 8) + (offset & 0xFF) <= sectorFree.size()) {
                     for (int sectorNum = 0; sectorNum < (offset & 0xFF); ++sectorNum) {
@@ -174,7 +175,7 @@ public final class RegionFile implements AutoCloseable {
         if (sectorFree.size() > 1) {
             sectorFree.set(1, false); // for the last modified info
             for (int i = 0; i < SECTOR_INTS; ++i) {
-                int lastModValue = file.readInt();
+                int lastModValue = groupedHeader?chunkTimestamps[i]:file.readInt();
                 chunkTimestamps[i] = lastModValue;
             }
         }

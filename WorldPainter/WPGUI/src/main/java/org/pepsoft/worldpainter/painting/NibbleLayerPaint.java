@@ -19,8 +19,16 @@
 package org.pepsoft.worldpainter.painting;
 
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.NibbleBrushAccess;
+import org.pepsoft.worldpainter.FilteredPaintAccess;
+import org.pepsoft.worldpainter.panels.EditorFilterPlan;
+import org.pepsoft.worldpainter.brushes.SymmetricBrush;
+import org.pepsoft.worldpainter.brushes.BitmapBrush;
+import org.pepsoft.worldpainter.brushes.RotatedBrush;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.layers.Layer;
+import org.pepsoft.worldpainter.nativeapi.Native;
+import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 
 import java.awt.*;
 
@@ -53,7 +61,12 @@ public class NibbleLayerPaint extends LayerPaint {
         final Rectangle boundingBox = brush.getBoundingBox();
         final int x1 = centreX + boundingBox.x, y1 = centreY + boundingBox.y, x2 = x1 + boundingBox.width - 1, y2 = y1 + boundingBox.height - 1;
         final int tileX1 = x1 >> TILE_SIZE_BITS, tileY1 = y1 >> TILE_SIZE_BITS, tileX2 = x2 >> TILE_SIZE_BITS, tileY2 = y2 >> TILE_SIZE_BITS;
-        if ((tileX1 == tileX2) && (tileY1 == tileY2)) {
+        final boolean oneTile = (tileX1 == tileX2) && (tileY1 == tileY2);
+        if (applyNativeNibbleBrush(dimension, centreX, centreY, dynamicLevel,
+                x1, y1, x2, y2, oneTile, 0)) {
+            return;
+        }
+        if (oneTile) {
             // The bounding box of the brush is entirely on one tile; optimize by painting directly to the tile
             final Tile tile = dimension.getTileForEditing(tileX1, tileY1);
             if (tile == null) {
@@ -101,7 +114,12 @@ public class NibbleLayerPaint extends LayerPaint {
         final Rectangle boundingBox = brush.getBoundingBox();
         final int x1 = centreX + boundingBox.x, y1 = centreY + boundingBox.y, x2 = x1 + boundingBox.width - 1, y2 = y1 + boundingBox.height - 1;
         final int tileX1 = x1 >> TILE_SIZE_BITS, tileY1 = y1 >> TILE_SIZE_BITS, tileX2 = x2 >> TILE_SIZE_BITS, tileY2 = y2 >> TILE_SIZE_BITS;
-        if ((tileX1 == tileX2) && (tileY1 == tileY2)) {
+        final boolean oneTile = (tileX1 == tileX2) && (tileY1 == tileY2);
+        if (applyNativeNibbleBrush(dimension, centreX, centreY, dynamicLevel,
+                x1, y1, x2, y2, oneTile, oneTile ? 1 : 2)) {
+            return;
+        }
+        if (oneTile) {
             // The bounding box of the brush is entirely on one tile; optimize by painting directly to the tile
             final Tile tile = dimension.getTileForEditing(tileX1, tileY1);
             if (tile == null) {
@@ -138,6 +156,56 @@ public class NibbleLayerPaint extends LayerPaint {
         }
     }
 
+    private boolean applyNativeNibbleBrush(Dimension dimension, int centreX, int centreY,
+                                           float dynamicLevel, int x1, int y1, int x2, int y2,
+                                           boolean oneTile, int mode) {
+        final long widthLong = (long) x2 - x1 + 1L;
+        final long heightLong = (long) y2 - y1 + 1L;
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
+                || dimension.getClass() != Dimension.class || !dimension.isEventsInhibited()
+                || widthLong <= 0 || heightLong <= 0 || widthLong > 65_536L
+                || heightLong > 65_536L || widthLong * heightLong > 65_536L) {
+            return false;
+        }
+        final int area = (int) (widthLong * heightLong);
+        if (oneTile && dimension.getTile(x1 >> TILE_SIZE_BITS, y1 >> TILE_SIZE_BITS) == null) return true;
+        if (filterEnabled) {
+            if (!(brush instanceof SymmetricBrush || brush instanceof BitmapBrush || brush instanceof RotatedBrush)) return false;
+            if (!Boolean.parseBoolean(System.getProperty("welt.native.filteredLayers", "false"))) return false;
+            EditorFilterPlan plan = EditorFilterPlan.compile(filter, dimension);
+            if (plan == null) return false;
+            ensureNativeBuffers(area);
+            int index = 0;
+            for (int y = y1; y <= y2; y++) for (int x = x1; x <= x2; x++)
+                nativeStrengths[index++] = mode == 0 ? brush.getStrength(x - centreX, y - centreY)
+                        : brush.getFullStrength(x - centreX, y - centreY);
+            return FilteredPaintAccess.applyNibble(dimension, layer, plan, x1, y1,
+                    (int) widthLong, (int) heightLong, dynamicLevel, nativeStrengths, mode);
+        }
+        ensureNativeBuffers(area);
+
+        int index = 0;
+        for (int y = y1; y <= y2; y++) {
+            for (int x = x1; x <= x2; x++) {
+                final float strength = (mode == 0
+                        ? getStrength(centreX, centreY, x, y)
+                        : getFullStrength(centreX, centreY, x, y));
+                nativeStrengths[index] = dynamicLevel * strength;
+                index++;
+            }
+        }
+
+        NibbleBrushAccess.apply(dimension, layer, x1, y1, (int) widthLong,
+                (int) heightLong, nativeStrengths, mode);
+        return true;
+    }
+
+    private void ensureNativeBuffers(int area) {
+        if (nativeStrengths == null || nativeStrengths.length != area) {
+            nativeStrengths = new float[area];
+        }
+    }
+
     @Override
     public void applyPixel(Dimension dimension, int x, int y) {
         final Tile tile = dimension.getTileForEditing(x >> TILE_SIZE_BITS, y >> TILE_SIZE_BITS);
@@ -154,4 +222,6 @@ public class NibbleLayerPaint extends LayerPaint {
     public void removePixel(Dimension dimension, int x, int y) {
         dimension.setLayerValueAt(layer, x, y, 0);
     }
+
+    private float[] nativeStrengths;
 }

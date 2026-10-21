@@ -67,6 +67,13 @@ public class TransformingHeightMap extends DelegatingHeightMap {
         replace(0, baseHeightMap);
     }
 
+    /** Copies the actual stored sampling matrix; false identifies the float/int translation-only path. */
+    public boolean copySamplingMatrix(double[] matrix) {
+        if (matrix == null || matrix.length < 6) throw new IllegalArgumentException("Six coefficients required");
+        if (translateOnly) return false;
+        transform.getMatrix(matrix);
+        return true;
+    }
     public int getOffsetX() {
         return offsetX;
     }

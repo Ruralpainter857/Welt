@@ -5,6 +5,8 @@ import org.pepsoft.util.ProgressReceiver;
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.brushes.Brush;
+import org.pepsoft.worldpainter.brushes.RotatedBrush;
+import org.pepsoft.worldpainter.brushes.SymmetricBrush;
 import org.pepsoft.worldpainter.layers.*;
 import org.pepsoft.worldpainter.operations.Filter;
 
@@ -26,7 +28,12 @@ import static org.pepsoft.worldpainter.Constants.TILE_SIZE_BITS;
  */
 public class SelectionHelper {
     public SelectionHelper(Dimension dimension) {
+        this(dimension, Math::random);
+    }
+
+    SelectionHelper(Dimension dimension, java.util.function.DoubleSupplier selectionRandom) {
         this.dimension = dimension;
+        this.selectionRandom = Objects.requireNonNull(selectionRandom);
     }
 
     public void addToSelection(Shape shape) {
@@ -51,6 +58,7 @@ public class SelectionHelper {
                     }
                 }
             } else {
+                if (!filterSpecified && editBrushSelectionNative(tile, x, y, brush, dynamicLevel, true)) return;
                 int worldTileX = tile.getX() << TILE_SIZE_BITS;
                 int worldTileY = tile.getY() << TILE_SIZE_BITS;
                 boolean tileHasBlockSelection = tile.hasLayer(SelectionBlock.INSTANCE);
@@ -72,7 +80,7 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
                                 if (filterSpecified) {
                                     strength = filter.modifyStrength(worldX, worldY, strength);
                                 }
-                                boolean select = (strength > 0.95f) || (Math.random() < strength);
+                                boolean select = (strength > 0.95f) || (selectionRandom.getAsDouble() < strength);
                                 blocksSet[xInChunk][yInChunk] = select;
                                 if (! select) {
                                     chunkEntirelySelected = false;
@@ -127,6 +135,7 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
             dimension.clearLayerData(SelectionBlock.INSTANCE);
         } else {
             dimension.visitTilesForEditing().forSelection().forFilter(filter).forBrush(brush, x, y).andDo(tile -> {
+                if (!filterSpecified && editBrushSelectionNative(tile, x, y, brush, dynamicLevel, false)) return;
                 boolean tileHasChunkSelection = tile.hasLayer(SelectionChunk.INSTANCE);
                 boolean tileHasBlockSelection = tile.hasLayer(SelectionBlock.INSTANCE);
                 int worldTileX = tile.getX() << TILE_SIZE_BITS;
@@ -144,7 +153,7 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
                                 if (filterSpecified) {
                                     strength = filter.modifyStrength(worldX, worldY, strength);
                                 }
-                                boolean deselect = (strength > 0.95f) || (Math.random() < strength);
+                                boolean deselect = (strength > 0.95f) || (selectionRandom.getAsDouble() < strength);
                                 blocksDeselected[xInChunk][yInChunk] = deselect;
                                 if (! deselect) {
                                     chunkEntirelyDeselected = false;
@@ -208,70 +217,7 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
      * {@code null} if there is no active selection.
      */
     public Rectangle getSelectionBounds() {
-        int[] lowestX = {Integer.MAX_VALUE};
-        int[] highestX = {Integer.MIN_VALUE};
-        int[] lowestY = {Integer.MAX_VALUE};
-        int[] highestY = {Integer.MIN_VALUE};
-        dimension.visitTiles().forSelection().andDo(tile -> {
-                    int tileX = tile.getX(), tileY = tile.getY();
-                    if (((tileX << TILE_SIZE_BITS) >= lowestX[0])
-                            && (((tileX + 1) << TILE_SIZE_BITS) < highestX[0])
-                            && (((tileY) << TILE_SIZE_BITS) >= lowestY[0])
-                            && (((tileY + 1) << TILE_SIZE_BITS) < highestY[0])) {
-                        // Tiles which lie within the already established bounds can be safely skipped
-                        return;
-                    }
-                    boolean tileHasChunkSelection = tile.hasLayer(SelectionChunk.INSTANCE);
-                    boolean tileHasBlockSelection = tile.hasLayer(SelectionBlock.INSTANCE);
-                    for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
-                        for (int chunkY = 0; chunkY < TILE_SIZE; chunkY += 16) {
-                            if (tileHasChunkSelection && tile.getBitLayerValue(SelectionChunk.INSTANCE, chunkX, chunkY)) {
-                                int x1 = (tileX << TILE_SIZE_BITS) | chunkX;
-                                int x2 = x1 + 15;
-                                int y1 = (tileY << TILE_SIZE_BITS) | chunkY;
-                                int y2 = y1 + 15;
-                                if (x1 < lowestX[0]) {
-                                    lowestX[0] = x1;
-                                }
-                                if (x2 > highestX[0]) {
-                                    highestX[0] = x2;
-                                }
-                                if (y1 < lowestY[0]) {
-                                    lowestY[0] = y1;
-                                }
-                                if (y2 > highestY[0]) {
-                                    highestY[0] = y2;
-                                }
-                            } else if (tileHasBlockSelection) {
-                                for (int dx = 0; dx < 16; dx++) {
-                                    for (int dy = 0; dy < 16; dy++) {
-                                        if (tile.getBitLayerValue(SelectionBlock.INSTANCE, chunkX + dx, chunkY + dy)) {
-                                            final int x = ((tileX << TILE_SIZE_BITS) | chunkX) + dx;
-                                            final int y = ((tileY << TILE_SIZE_BITS) | chunkY) + dy;
-                                            if (x < lowestX[0]) {
-                                                lowestX[0] = x;
-                                            }
-                                            if (x > highestX[0]) {
-                                                highestX[0] = x;
-                                            }
-                                            if (y < lowestY[0]) {
-                                                lowestY[0] = y;
-                                            }
-                                            if (y > highestY[0]) {
-                                                highestY[0] = y;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                });
-        if (lowestX[0] != Integer.MAX_VALUE) {
-            return new Rectangle(lowestX[0], lowestY[0], highestX[0] - lowestX[0] + 1, highestY[0] - lowestY[0] + 1);
-        } else {
-            return null;
-        }
+        return org.pepsoft.worldpainter.SelectionBoundsAccess.getBounds(dimension);
     }
 
     public void copySelection(int targetX, int targetY, ProgressReceiver progressReceiver) throws ProgressReceiver.OperationCancelled {
@@ -294,6 +240,12 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
         // Make sure to copy in the right direction to avoid problems if the
         // destination overlaps the selection
         clearUndoOnNewTileCreation = options.createNewTiles;
+        org.pepsoft.worldpainter.SelectionCopyAccess copyPlan = options.createNewTiles ? null
+                : options.doBlending ? org.pepsoft.worldpainter.SelectionCopyAccess.prepareBlended(dimension, dx, dy, options.copyHeights,
+                        options.copyTerrain, options.copyFluids, options.copyLayers, options.copyBiomes, options.copyAnnotations,
+                        options.removeExistingLayers, RANDOM)
+                : org.pepsoft.worldpainter.SelectionCopyAccess.prepare(dimension, dx, dy, options.copyHeights, options.copyTerrain,
+                        options.copyFluids, options.copyLayers, options.copyBiomes, options.copyAnnotations, options.removeExistingLayers);
         if (dx > 0) {
             // Shifting right
             if (dy > 0) {
@@ -301,7 +253,7 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
                 for (int tileX = tileX2; tileX >= tileX1; tileX--) {
                     for (int tileY = tileY2; tileY >= tileY1; tileY--) {
                         Tile tile = dimension.getTile(tileX, tileY);
-                        if (tile != null) {
+                        if (tile != null && (copyPlan == null || !copyPlan.copyTile(tile, dx, dy))) {
                             for (int xInTile = TILE_SIZE - 1; xInTile >= 0; xInTile--) {
                                 for (int yInTile = TILE_SIZE - 1; yInTile >= 0; yInTile--) {
                                     processColumn(tile, xInTile, yInTile, dx, dy);
@@ -318,7 +270,7 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
                 for (int tileX = tileX2; tileX >= tileX1; tileX--) {
                     for (int tileY = tileY1; tileY <= tileY2; tileY++) {
                         Tile tile = dimension.getTile(tileX, tileY);
-                        if (tile != null) {
+                        if (tile != null && (copyPlan == null || !copyPlan.copyTile(tile, dx, dy))) {
                             for (int xInTile = TILE_SIZE - 1; xInTile >= 0; xInTile--) {
                                 for (int yInTile = 0; yInTile < TILE_SIZE; yInTile++) {
                                     processColumn(tile, xInTile, yInTile, dx, dy);
@@ -338,7 +290,7 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
                 for (int tileX = tileX1; tileX <= tileX2; tileX++) {
                     for (int tileY = tileY2; tileY >= tileY1; tileY--) {
                         Tile tile = dimension.getTile(tileX, tileY);
-                        if (tile != null) {
+                        if (tile != null && (copyPlan == null || !copyPlan.copyTile(tile, dx, dy))) {
                             for (int xInTile = 0; xInTile < TILE_SIZE; xInTile++) {
                                 for (int yInTile = TILE_SIZE - 1; yInTile >= 0; yInTile--) {
                                     processColumn(tile, xInTile, yInTile,  dx, dy);
@@ -355,7 +307,7 @@ chunks:         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
                 for (int tileX = tileX1; tileX <= tileX2; tileX++) {
                     for (int tileY = tileY1; tileY <= tileY2; tileY++) {
                         Tile tile = dimension.getTile(tileX, tileY);
-                        if (tile != null) {
+                        if (tile != null && (copyPlan == null || !copyPlan.copyTile(tile, dx, dy))) {
                             for (int xInTile = 0; xInTile < TILE_SIZE; xInTile++) {
                                 for (int yInTile = 0; yInTile < TILE_SIZE; yInTile++) {
                                     processColumn(tile, xInTile, yInTile, dx, dy);
@@ -598,6 +550,9 @@ outer:  for (int dx = -1; dx <= 1; dx++) {
                             tile.clearLayerData(SelectionChunk.INSTANCE);
                         }
                     } else if (shape.intersects(tileBounds)) {
+                        if (tile.editSelectionShape(shape, add)) {
+                            continue;
+                        }
                         // The tile intersects the selection, but does not
                         // lie entirely inside it; go chunk by chunk
                         for (int chunkX = 0; chunkX < TILE_SIZE; chunkX += 16) {
@@ -688,12 +643,43 @@ outer:  for (int dx = -1; dx <= 1; dx++) {
         }
     }
 
+    private boolean editBrushSelectionNative(Tile tile, int x, int y, Brush brush, float level, boolean add) {
+        if (!Boolean.getBoolean("wp.native.gen.selectionCompact")
+                || dimension.getClass() != Dimension.class || brush == null || !tile.canEditSelectionMask()) return false;
+        int worldX = tile.getX() << TILE_SIZE_BITS, worldY = tile.getY() << TILE_SIZE_BITS;
+        // Ces pinceaux lisent leur cache ; une implémentation personnalisée peut observer les mutations précédentes.
+        if (!(brush instanceof RotatedBrush)) {
+            if (!(brush instanceof SymmetricBrush) || Math.abs((long) x - worldX) > brush.getRadius()
+                    || Math.abs((long) x - (worldX + 127L)) > brush.getRadius()
+                    || Math.abs((long) y - worldY) > brush.getRadius()
+                    || Math.abs((long) y - (worldY + 127L)) > brush.getRadius()) return false;
+        }
+        if (selectionMask == null) selectionMask = new byte[2048];
+        Arrays.fill(selectionMask, (byte) 0);
+        boolean chunksPresent = tile.hasLayer(SelectionChunk.INSTANCE);
+        // Le parcours historique saute le reste de la colonne de chunks dès qu’un chunk est sélectionné.
+        chunks: for (int cx = 0; cx < 128; cx += 16) for (int cy = 0; cy < 128; cy += 16) {
+            if (add && chunksPresent && tile.getBitLayerValue(SelectionChunk.INSTANCE, cx, cy)) continue chunks;
+            for (int dx = 0; dx < 16; dx++) for (int dy = 0; dy < 16; dy++) {
+                int wx = worldX | cx | dx, wy = worldY | cy | dy;
+                float strength = brush.getStrength(x - wx, y - wy) * level;
+                if (strength > 0.95f || selectionRandom.getAsDouble() < strength) {
+                    int bit = cx + dx + (cy + dy) * 128;
+                    selectionMask[bit / 8] |= (byte) (1 << (bit % 8));
+                }
+            }
+        }
+        return tile.editSelectionMask(selectionMask, add);
+    }
+
+    private byte[] selectionMask;
     private final Dimension dimension;
+    private final java.util.function.DoubleSupplier selectionRandom;
     private SelectionOptions options;
     private boolean clearUndoOnNewTileCreation;
 
     private static final double DISTANCE_TO_BLEND = 16.0 / Math.PI;
-    private static final Random RANDOM = new Random();
+    private static final org.pepsoft.worldpainter.nativeapi.SnapshotRandom RANDOM = new org.pepsoft.worldpainter.nativeapi.SnapshotRandom();
     private static final Set<Layer> SKIP_LAYERS = new HashSet<>(Arrays.asList(Biome.INSTANCE, SelectionChunk.INSTANCE,
             SelectionBlock.INSTANCE, NotPresent.INSTANCE, NotPresentBlock.INSTANCE, Annotations.INSTANCE,
             FloodWithLava.INSTANCE));

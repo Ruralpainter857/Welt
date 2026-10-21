@@ -64,11 +64,17 @@ public final class Bo3Object extends AbstractObject implements Bo2ObjectProvider
 
     @Override
     public Material getMaterial(int x, int y, int z) {
+        if (compactBlocks != null) {
+            Bo3BlockSpec spec = compactBlocks.spec(x, y, z, origin);
+            if (spec != null) return spec.getMaterial();
+            return Collections.<Point3i, Bo3BlockSpec>emptyMap().get(new Point3i(x - origin.x, y - origin.y, z - origin.z)).getMaterial();
+        }
         return blocks.get(new Point3i(x - origin.x, y - origin.y, z - origin.z)).getMaterial();
     }
 
     @Override
     public boolean getMask(int x, int y, int z) {
+        if (compactBlocks != null) return compactBlocks.mask(x, y, z, origin);
         return blocks.containsKey(new Point3i(x - origin.x, y - origin.y, z - origin.z));
     }
 
@@ -85,7 +91,7 @@ public final class Bo3Object extends AbstractObject implements Bo2ObjectProvider
     @Override
     public List<TileEntity> getTileEntities() {
         if (tileEntities == null) {
-            tileEntities = blocks.values().stream()
+            tileEntities = (compactBlocks == null ? blocks.values().stream() : compactBlocks.stream())
                 .flatMap(block -> block.getTileEntities().stream())
                 .map(tileEntity -> {
                     TileEntity clone = (TileEntity) tileEntity.clone();
@@ -140,6 +146,7 @@ public final class Bo3Object extends AbstractObject implements Bo2ObjectProvider
 
     @Override
     public boolean visitBlocks(BlockVisitor visitor) {
+        if (compactBlocks != null) return compactBlocks.visit(this, visitor, origin);
         for (Map.Entry<Point3i, Bo3BlockSpec> entry: blocks.entrySet()) {
             Point3i coords = entry.getKey();
             if (! visitor.visitBlock(this, coords.x + origin.x, coords.y + origin.y, coords.z + origin.z, entry.getValue().getMaterial())) {
@@ -166,6 +173,12 @@ public final class Bo3Object extends AbstractObject implements Bo2ObjectProvider
             guessConnectBlocks();
         }
         version = 2;
+        if (org.pepsoft.worldpainter.nativeapi.NativeSlices.isBo3ProjectSnapshotAvailable()) {
+            Bo3CompactBlocks restored;
+            try { restored = Bo3CompactBlocks.capture(blocks, origin, dimensions); }
+            catch (RuntimeException unsupported) { return; }
+            if (restored != null) { compactBlocks = restored; blocks = null; }
+        }
     }
     
     /**
@@ -196,6 +209,23 @@ public final class Bo3Object extends AbstractObject implements Bo2ObjectProvider
      * @throws IOException If an I/O error occurred while reading the file.
      */
     public static Bo3Object load(String objectName, File file) throws IOException {
+        if (org.pepsoft.worldpainter.nativeapi.NativeSlices.isBo3LoadingAvailable()) {
+            byte[] source;
+            try (InputStream in = new FileInputStream(file)) { source = in.readNBytes(16 * 1024 * 1024 + 1); }
+            if (source.length <= 16 * 1024 * 1024) {
+                Bo3NativeParser.Decoded decoded = Bo3NativeParser.decode(source, file);
+                if (decoded != null) {
+                    Map<String, Serializable> attributes = new HashMap<>(Collections.singletonMap(ATTRIBUTE_FILE.key, file));
+                    Bo3Object object = new Bo3Object(objectName, decoded.properties(), decoded.blocks(), decoded.origin(), decoded.dimensions(), attributes);
+                    Bo3NativeParser.completed();
+                    return object;
+                }
+            }
+        }
+        return loadJava(objectName, file);
+    }
+
+    private static Bo3Object loadJava(String objectName, File file) throws IOException {
         try (BufferedReader in = new BufferedReader(new InputStreamReader(new FileInputStream(file), Charset.forName("US-ASCII")))) {
             Map<String, String> properties = new HashMap<>();
             Map<Point3i, Bo3BlockSpec> blocks = new HashMap<>();
@@ -286,7 +316,7 @@ public final class Bo3Object extends AbstractObject implements Bo2ObjectProvider
         throw new IllegalArgumentException("Could not parse line \"" + line + "\"");
     }
 
-    private static Material decodeMaterial(String materialSpec) {
+    static Material decodeMaterial(String materialSpec) {
         int p = materialSpec.indexOf(':');
         if (p == -1) {
             if (Character.isDigit(materialSpec.charAt(0))) {
@@ -305,7 +335,7 @@ public final class Bo3Object extends AbstractObject implements Bo2ObjectProvider
         }
     }
 
-    private static TileEntity loadTileEntity(File bo3File, String nbtFileName) throws IOException {
+    static TileEntity loadTileEntity(File bo3File, String nbtFileName) throws IOException {
         File nbtFile = new File(bo3File.getParentFile(), nbtFileName);
         try (NBTInputStream in = new NBTInputStream(new GZIPInputStream(new FileInputStream(nbtFile)))) {
             CompoundTag tag = (CompoundTag) in.readTag();
@@ -321,9 +351,19 @@ public final class Bo3Object extends AbstractObject implements Bo2ObjectProvider
         }
     }
  
+    public long getBlockIndexStorageBytes() { return compactBlocks == null ? -1 : compactBlocks.storageBytes(); }
+    private void writeObject(ObjectOutputStream out) throws IOException {
+        ObjectOutputStream.PutField fields = out.putFields();
+        fields.put("name", name); fields.put("properties", properties);
+        fields.put("blocks", compactBlocks == null ? blocks : compactBlocks.historicalMap());
+        fields.put("origin", origin); fields.put("dimensions", dimensions); fields.put("attributes", attributes); fields.put("version", version);
+        out.writeFields();
+    }
+
     private String name;
     private final Map<String, String> properties;
-    private final Map<Point3i, Bo3BlockSpec> blocks;
+    private Map<Point3i, Bo3BlockSpec> blocks;
+    private transient Bo3CompactBlocks compactBlocks;
     private Point3i origin, dimensions;
     private Map<String, Serializable> attributes;
     private int version = 2;
