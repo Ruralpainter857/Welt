@@ -21,11 +21,30 @@ final class ViewportRenderAccess {
     private ByteBuffer data;
     private final boolean[] usedBiomes = new boolean[256];
     long completed;
+    private boolean boundedSurfaceHeights;
 
     ViewportRenderAccess(Platform platform) {
         this.platform = platform;
     }
     private boolean planTerrain(int i) {
+        if (planned[i] == 0 && TERRAINS[i].isCustom()) {
+            MixedMaterial material = Terrain.getCustomMaterial(TERRAINS[i].getCustomTerrainIndex());
+            // Custom slots can be replaced between redraws. Only their colour
+            // metadata is captured here; per-block or random mixtures retain Java.
+            Integer colour = material == null ? null : material.getColour();
+            org.pepsoft.minecraft.Material single = material == null ? null : material.getSingleMaterial();
+            if (colour != null) {
+                colours[i] = colour;
+                planned[i] = 1;
+            } else if (material != null && material.getMode() == MixedMaterial.Mode.SIMPLE && single != null && boundedSurfaceHeights) {
+                // Rounded surface heights cannot trigger the helper's AIR branch
+                // in this bounded range, so the single material has a fixed colour.
+                colours[i] = ColourScheme.DEFAULT.getColour(single);
+                planned[i] = 1;
+            } else {
+                planned[i] = 2;
+            }
+        }
         if (planned[i] == 0) {
             Class<?> type = TERRAINS[i].getClass();
             boolean supported;
@@ -86,6 +105,10 @@ final class ViewportRenderAccess {
         if (tile.getClass() != Tile.class || provider.getClass() != Dimension.class
                 || TERRAINS.length > 256 || contours && separation == 0) return false;
         if (shift < 0 || shift > 7) return false;
+        // The stored raw height is at most a signed int divided by 256.
+        // This min-height bound therefore keeps rounded surfaces away from int saturation.
+        boundedSurfaceHeights = tile.getMinHeight() >= -(1 << 24) && tile.getMinHeight() <= (1 << 24);
+        for (int i = 0; i < TERRAINS.length; i++) if (TERRAINS[i].isCustom()) planned[i] = 0;
         int width = 128 >> shift, area = width * width;
         boolean compact = shift != 0;
         if (!compact) for (byte terrain : terrains) if ((terrain & 255) >= TERRAINS.length || !planTerrain(terrain & 255)) return false;

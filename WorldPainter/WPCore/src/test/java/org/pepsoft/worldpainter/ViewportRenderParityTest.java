@@ -171,7 +171,7 @@ public class ViewportRenderParityTest {
         } finally { restore(Native.GEN_KEY, gen); restore(Native.RENDER_KEY, render); restore("welt.native.viewport", flag); }
     }
 
-    private static Dimension fixture(boolean masks, boolean unsupported) {
+    static Dimension fixture(boolean masks, boolean unsupported) {
         Platform p = DefaultPlugin.JAVA_ANVIL_1_19;
         TileFactory factory = TileFactoryFactory.createFlatTileFactory(17L, Terrain.GRASS, p.minZ, p.standardMaxHeight, 62, 62, false, false);
         Dimension d = new Dimension(new World2(p, p.minZ, p.standardMaxHeight), "Surface", 17L, factory, Dimension.Anchor.NORMAL_DETAIL);

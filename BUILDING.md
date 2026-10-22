@@ -683,3 +683,21 @@ cache recreation and rejected aliased buffers. `BitmapBrushBenchmark` measures
 intensity changes plus preparation of the first usable sample, alternates both
 paths after warmup, and accepts `welt.benchmark.bitmapMode=java|native` for
 separate memory measurements. This operation does not measure painting a world.
+### Custom terrain colours in the fused viewport
+
+`-Dwelt.native.viewport=true` now includes configured custom terrains with an
+explicit display colour and SIMPLE materials with a constant surface colour.
+The terrain palette is refreshed for each tile, including edits to the existing
+`MixedMaterial` instance and replacement of a custom slot. This uses the existing
+WVR frame and the same JNI transaction as layer composition and lighting.
+Variable mixtures without a colour override, unconfigured slots and extreme
+height metadata continue through the Java renderer.
+
+Run `CustomTerrainViewportParityTest` and `ViewportRenderParityTest` with
+`-Dwelt.test.requireCustomViewport=true` after building the release DLL. The tests
+compare complete images across light directions, zoom levels and layer anchors;
+they also cover live palette changes, random draw order and fallback transitions.
+`TileViewportBenchmark` accepts `-Dwelt.benchmark.viewportCustomTerrain=true` and
+`compare-fused` to measure complete redraws and require every tile to use Rust.
+For separate retained-memory runs, pass `-Dwelt.benchmark.viewportMemory=true`
+with the `java` or `fused` operation. Benchmark logs remain local.

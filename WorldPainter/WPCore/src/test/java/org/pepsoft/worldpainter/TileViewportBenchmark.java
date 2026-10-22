@@ -13,6 +13,7 @@ import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 /** Measures complete viewport redraws, including tile snapshots and image writes. */
 public final class TileViewportBenchmark {
     private static volatile int checksum;
+    private static volatile Setup retainedMemorySetup;
     private record Setup(Dimension dimension, Tile[] tiles, TileRenderer renderer, BufferedImage image, int origin, int tilePixels) { }
     private record Sample(long nanos, long allocated) { }
 
@@ -29,6 +30,11 @@ public final class TileViewportBenchmark {
         for (int sample = -warmups; sample < 9; sample++) {
             Sample result = redraw(setup);
             if (sample >= 0) { times[sample] = result.nanos; allocations[sample] = result.allocated; }
+        }
+        if (Boolean.getBoolean("welt.benchmark.viewportMemory")) {
+            retainedMemorySetup=setup;
+            for(int i=0;i<3;i++){System.gc();try{Thread.sleep(100);}catch(InterruptedException e){throw new AssertionError(e);}}
+            System.out.println("viewport retainedHeapBytes="+ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed());
         }
         Arrays.sort(times); Arrays.sort(allocations);
         long direct = ManagementFactory.getPlatformMXBeans(java.lang.management.BufferPoolMXBean.class).stream()
@@ -50,6 +56,13 @@ public final class TileViewportBenchmark {
                 p.minZ, p.standardMaxHeight, 62, 62, false, false);
         Dimension d = new Dimension(new World2(p, p.minZ, p.standardMaxHeight), "Surface", 17L, factory, Dimension.Anchor.NORMAL_DETAIL);
         Terrain[] terrains = {Terrain.GRASS, Terrain.SAND, Terrain.DIRT, Terrain.STONE};
+        if (Boolean.getBoolean("welt.benchmark.viewportCustomTerrain")) {
+            Terrain.setCustomMaterial(0, new MixedMaterial("Fixed custom mixture", new MixedMaterial.Row[] {
+                new MixedMaterial.Row(org.pepsoft.minecraft.Material.STONE, 600, 1f),
+                new MixedMaterial.Row(org.pepsoft.minecraft.Material.DIRT, 400, 1f)}, -1, 0x39715b));
+            Terrain.setCustomMaterial(1, MixedMaterial.create("Simple custom block", org.pepsoft.minecraft.Material.get("welt:viewport_custom")));
+            terrains = new Terrain[] {Terrain.GRASS, Terrain.CUSTOM_1, Terrain.CUSTOM_2, Terrain.DIRT};
+        }
         boolean indexed = Boolean.getBoolean("welt.benchmark.viewportIndexed");
         boolean custom = Boolean.getBoolean("welt.benchmark.viewportCustomPaint");
         CustomLayer solid = custom ? new CustomLayer("Solid", "Custom paint fixture", Layer.DataSize.NIBBLE, 101, new Color(0x17395b)) { } : null;
