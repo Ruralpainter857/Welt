@@ -55,6 +55,8 @@ public final class BitmapWorldCreationBenchmark {
                     new ConstantHeightMap(7)), new ConstantHeightMap(.8));
             case "affine" -> new TransformingHeightMap("Creation", map, 1.7f, .65f, 31, -47, .37f);
             case "slope" -> new SlopeHeightMap(map, 3.7f);
+            case "nested-slope" -> new SumHeightMap(new ConstantHeightMap(64), new ProductHeightMap(
+                    new SlopeHeightMap(new TransformingHeightMap("Slope domain", map, 1.7f, .65f, 31, -47, .37f), 3.7f), new ConstantHeightMap(.8)));
             case "affine-displacement" -> new TransformingHeightMap("Creation", proceduralMap("displacement"),
                     1.7f, .65f, 31, -47, .37f);
             case "displacement" -> new DisplacementHeightMap("Creation", map,

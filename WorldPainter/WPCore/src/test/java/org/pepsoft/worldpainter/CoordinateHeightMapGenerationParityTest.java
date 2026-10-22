@@ -202,4 +202,22 @@ public class CoordinateHeightMapGenerationParityTest {
         double before=map.getHeight(13,17);double[] matrix=new double[6];assertTrue(map.copySamplingMatrix(matrix));java.util.Arrays.fill(matrix,999);
         assertEquals(Double.doubleToLongBits(before),Double.doubleToLongBits(map.getHeight(13,17)));
     }
+    @Test public void nestedSlopesRetainCompleteJavaGenerationUntilRawMathIsCompatible() throws Exception {
+        ready();
+        for(float scale:new float[]{1f,1.75f,3.7f,-2f}) {
+            HeightMap base=transform(new NoiseHeightMap(45,.9,2,63));
+            HeightMap map=new SumHeightMap(new SlopeHeightMap(base,scale),new ConstantHeightMap(64));
+            assertNull("Nested slopes require JVM-compatible tangent evaluation",CoordinateHeightMapSource.prepare(map,-128,128,128,128));
+            ProceduralTileGenerationParityTest.compare(map,-64,320,-1,1,false);
+        }
+        HeightMap slope=new SlopeHeightMap(new NoiseHeightMap(38,.8,2,17),1.75f);
+        ProceduralTileGenerationParityTest.compare(transform(new ProductHeightMap(slope,new ConstantHeightMap(.8))),-64,320,0,-1,false);
+    }
+    @Test public void invalidNestedSlopeScalingKeepsTheCompleteJavaFallback() {
+        ready();
+        for(float scale:new float[]{0f,Float.NaN,Float.POSITIVE_INFINITY}) {
+            HeightMap map=new SumHeightMap(new SlopeHeightMap(new NoiseHeightMap(45,.9,2,63),scale),new ConstantHeightMap(64));
+            assertNull(CoordinateHeightMapSource.prepare(map,0,0,128,128));
+        }
+    }
 }

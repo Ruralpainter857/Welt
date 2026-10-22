@@ -153,7 +153,7 @@ public class SlopeHeightMap extends DelegatingHeightMap {
 
     @Override
     public SlopeHeightMap clone() {
-        return new SlopeHeightMap(children[0].clone(), name);
+        return new SlopeHeightMap(children[0].clone(), verticalScaling, name);
     }
 
     @Override

@@ -701,3 +701,14 @@ they also cover live palette changes, random draw order and fallback transitions
 `compare-fused` to measure complete redraws and require every tile to use Rust.
 For separate retained-memory runs, pass `-Dwelt.benchmark.viewportMemory=true`
 with the `java` or `fused` operation. Benchmark logs remain local.
+### Slope graph compatibility
+
+`SlopeHeightMap.clone()` preserves vertical scaling as well as its name, seed
+and cloned child map. `SlopeHeightMapCloneTest` checks direct and composed clones.
+Nested slope operators currently retain complete Java generation: JVM
+`Math.tan` intrinsics can differ by one double-precision bit from `StrictMath.tan`
+and the native tangent implementation. `CoordinateHeightMapGenerationParityTest`
+checks that these graphs keep the Java path and preserve all stored tile planes
+and random state. The `nested-slope` world-creation benchmark fixture is available
+for Java profiling; native `compare` remains a strict acceptance gate and is not
+expected to pass until this numerical compatibility issue is resolved.
