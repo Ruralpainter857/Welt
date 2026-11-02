@@ -46,22 +46,22 @@ public final class TileSnapshot extends Tile {
         if (! readableBuffers.contains(buffer)) {
             switch (buffer) {
                 case HEIGHTMAP:
-                    heightMap = snapshot.getBuffer(HEIGHTMAP_BUFFER_KEY);
+                    heightMap = TileHistoryStorage.read(snapshot.getBuffer(HEIGHTMAP_BUFFER_KEY));
                     break;
                 case TALL_HEIGHTMAP:
-                    tallHeightMap = snapshot.getBuffer(TALL_HEIGHTMAP_BUFFER_KEY);
+                    tallHeightMap = TileHistoryStorage.read(snapshot.getBuffer(TALL_HEIGHTMAP_BUFFER_KEY));
                     break;
                 case TERRAIN:
-                    terrain = snapshot.getBuffer(TERRAIN_BUFFER_KEY);
+                    terrain = TileHistoryStorage.read(snapshot.getBuffer(TERRAIN_BUFFER_KEY));
                     break;
                 case WATERLEVEL:
-                    waterLevel = snapshot.getBuffer(WATERLEVEL_BUFFER_KEY);
+                    waterLevel = TileHistoryStorage.read(snapshot.getBuffer(WATERLEVEL_BUFFER_KEY));
                     break;
                 case TALL_WATERLEVEL:
-                    tallWaterLevel = snapshot.getBuffer(TALL_WATERLEVEL_BUFFER_KEY);
+                    tallWaterLevel = TileHistoryStorage.read(snapshot.getBuffer(TALL_WATERLEVEL_BUFFER_KEY));
                     break;
                 case LAYER_DATA:
-                    layerData = snapshot.getBuffer(LAYER_DATA_BUFFER_KEY);
+                    layerData = TileHistoryStorage.read(snapshot.getBuffer(LAYER_DATA_BUFFER_KEY));
                     break;
                 case BIT_LAYER_DATA:
                     bitLayerData = snapshot.getBuffer(BIT_LAYER_DATA_BUFFER_KEY);
@@ -129,12 +129,13 @@ public final class TileSnapshot extends Tile {
     private final Snapshot snapshot;
     private final Set<TileBuffer> readableBuffers = EnumSet.noneOf(TileBuffer.class);
 
-    private transient BufferKey<short[]>            HEIGHTMAP_BUFFER_KEY;
-    private transient BufferKey<int[]>              TALL_HEIGHTMAP_BUFFER_KEY;
-    private transient BufferKey<short[]>            TALL_WATERLEVEL_BUFFER_KEY;
-    private transient BufferKey<byte[]>             TERRAIN_BUFFER_KEY;
-    private transient BufferKey<byte[]>             WATERLEVEL_BUFFER_KEY;
-    private transient BufferKey<Map<Layer, byte[]>> LAYER_DATA_BUFFER_KEY;
+    // Grid and byte layer buffers are stored through TileHistoryStorage, hence the untyped keys
+    private transient BufferKey<Object>             HEIGHTMAP_BUFFER_KEY;
+    private transient BufferKey<Object>             TALL_HEIGHTMAP_BUFFER_KEY;
+    private transient BufferKey<Object>             TALL_WATERLEVEL_BUFFER_KEY;
+    private transient BufferKey<Object>             TERRAIN_BUFFER_KEY;
+    private transient BufferKey<Object>             WATERLEVEL_BUFFER_KEY;
+    private transient BufferKey<Object>             LAYER_DATA_BUFFER_KEY;
     private transient BufferKey<Map<Layer, BitSet>> BIT_LAYER_DATA_BUFFER_KEY;
 
     private static final long serialVersionUID = 2011101501L;

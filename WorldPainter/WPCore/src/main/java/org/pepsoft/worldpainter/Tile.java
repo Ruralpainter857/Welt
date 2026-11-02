@@ -119,8 +119,8 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                         heightMap = new short[TILE_SIZE * TILE_SIZE];
                         waterLevel = new byte[TILE_SIZE * TILE_SIZE];
                         if (undoManager != null) {
-                            undoManager.addBuffer(HEIGHTMAP_BUFFER_KEY, heightMap, this);
-                            undoManager.addBuffer(WATERLEVEL_BUFFER_KEY, waterLevel, this);
+                            addUndoGrid(HEIGHTMAP_BUFFER_KEY, heightMap, false);
+                            addUndoGrid(WATERLEVEL_BUFFER_KEY, waterLevel, false);
                             readableBuffers.add(HEIGHTMAP);
                             readableBuffers.add(WATERLEVEL);
                             writeableBuffers.add(HEIGHTMAP);
@@ -148,8 +148,8 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                         tallHeightMap = new int[TILE_SIZE * TILE_SIZE];
                         tallWaterLevel = new short[TILE_SIZE * TILE_SIZE];
                         if (undoManager != null) {
-                            undoManager.addBuffer(TALL_HEIGHTMAP_BUFFER_KEY, tallHeightMap, this);
-                            undoManager.addBuffer(TALL_WATERLEVEL_BUFFER_KEY, tallWaterLevel, this);
+                            addUndoGrid(TALL_HEIGHTMAP_BUFFER_KEY, tallHeightMap, false);
+                            addUndoGrid(TALL_WATERLEVEL_BUFFER_KEY, tallWaterLevel, false);
                             readableBuffers.add(TALL_HEIGHTMAP);
                             readableBuffers.add(TALL_WATERLEVEL);
                             writeableBuffers.add(TALL_HEIGHTMAP);
@@ -348,15 +348,15 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                 tallHeightMap = new int[TILE_SIZE * TILE_SIZE];
                 tallWaterLevel = new short[TILE_SIZE * TILE_SIZE];
                 if (undoManager != null) {
-                    undoManager.addBuffer(TALL_HEIGHTMAP_BUFFER_KEY, tallHeightMap, this);
-                    undoManager.addBuffer(TALL_WATERLEVEL_BUFFER_KEY, tallWaterLevel, this);
+                    addUndoGrid(TALL_HEIGHTMAP_BUFFER_KEY, tallHeightMap, false);
+                    addUndoGrid(TALL_WATERLEVEL_BUFFER_KEY, tallWaterLevel, false);
                 }
             } else {
                 heightMap = new short[TILE_SIZE * TILE_SIZE];
                 waterLevel = new byte[TILE_SIZE * TILE_SIZE];
                 if (undoManager != null) {
-                    undoManager.addBuffer(HEIGHTMAP_BUFFER_KEY, heightMap, this);
-                    undoManager.addBuffer(WATERLEVEL_BUFFER_KEY, waterLevel, this);
+                    addUndoGrid(HEIGHTMAP_BUFFER_KEY, heightMap, false);
+                    addUndoGrid(WATERLEVEL_BUFFER_KEY, waterLevel, false);
                 }
             }
             if (undoManager != null) {
@@ -2714,6 +2714,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                 cachedLayers = null;
             }
         }
+        final List<Layer> removedLayers = new ArrayList<>();
         layerLoop:
         for (Iterator<Map.Entry<Layer, byte[]>> i = layerData.entrySet().iterator(); i.hasNext(); ) {
             Map.Entry<Layer, byte[]> entry = i.next();
@@ -2728,6 +2729,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                 }
                 // If we reach here all bytes were default bytes
                 i.remove();
+                removedLayers.add(layer);
                 cachedLayers = null;
             } else if (layer.getDataSize() == BYTE) {
                 final byte defaultByte = (byte) layer.getDefaultValue();
@@ -2738,8 +2740,13 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                 }
                 // If we reach here all bytes were default bytes
                 i.remove();
+                removedLayers.add(layer);
                 cachedLayers = null;
             }
+        }
+        if ((undoManager != null) && (! removedLayers.isEmpty())) {
+            // The map may be a history version assembled from compact storage; make the removal stick there too
+            TileHistoryStorage.layersRemoved(undoManager.getBuffer(LAYER_DATA_BUFFER_KEY), removedLayers);
         }
     }
 
@@ -2753,18 +2760,18 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
 
     private void registerUndoBuffers() {
         if (tall) {
-            undoManager.addBuffer(TALL_HEIGHTMAP_BUFFER_KEY,  tallHeightMap,  this);
-            undoManager.addBuffer(TALL_WATERLEVEL_BUFFER_KEY, tallWaterLevel, this);
+            addUndoGrid(TALL_HEIGHTMAP_BUFFER_KEY,  tallHeightMap,  isSharedBuffer(TALL_HEIGHTMAP));
+            addUndoGrid(TALL_WATERLEVEL_BUFFER_KEY, tallWaterLevel, isSharedBuffer(TALL_WATERLEVEL));
             readableBuffers = EnumSet.of(TALL_HEIGHTMAP, TALL_WATERLEVEL, TERRAIN, LAYER_DATA, BIT_LAYER_DATA);
             writeableBuffers = EnumSet.of(TALL_HEIGHTMAP, TALL_WATERLEVEL, TERRAIN, LAYER_DATA, BIT_LAYER_DATA);
         } else {
-            undoManager.addBuffer(HEIGHTMAP_BUFFER_KEY,  heightMap,  this);
-            undoManager.addBuffer(WATERLEVEL_BUFFER_KEY, waterLevel, this);
+            addUndoGrid(HEIGHTMAP_BUFFER_KEY,  heightMap,  isSharedBuffer(HEIGHTMAP));
+            addUndoGrid(WATERLEVEL_BUFFER_KEY, waterLevel, isSharedBuffer(WATERLEVEL));
             readableBuffers = EnumSet.of(HEIGHTMAP, WATERLEVEL, TERRAIN, LAYER_DATA, BIT_LAYER_DATA);
             writeableBuffers = EnumSet.of(HEIGHTMAP, WATERLEVEL, TERRAIN, LAYER_DATA, BIT_LAYER_DATA);
         }
-        undoManager.addBuffer(TERRAIN_BUFFER_KEY,        terrain,      this);
-        undoManager.addBuffer(LAYER_DATA_BUFFER_KEY,     layerData,    this);
+        addUndoGrid(TERRAIN_BUFFER_KEY, terrain, isSharedBuffer(TERRAIN));
+        addUndoLayerData(layerData);
         undoManager.addBuffer(BIT_LAYER_DATA_BUFFER_KEY, bitLayerData, this);
         if (seeds != null) {
             undoManager.addBuffer(SEEDS_BUFFER_KEY, seeds, this);
@@ -2798,28 +2805,51 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
             undoManager.removeBuffer(SEEDS_BUFFER_KEY);
         }
         readableBuffers = writeableBuffers = null;
+        layerDataVersion = null;
+    }
+
+    private <T> T readUndoBuffer(BufferKey<Object> key) {
+        return TileHistoryStorage.read(undoManager.getBuffer(key));
+    }
+
+    private <T> T editUndoBuffer(BufferKey<Object> key) {
+        final Object buffer = undoManager.getBufferForEditing(key);
+        if (key == LAYER_DATA_BUFFER_KEY) {
+            layerDataVersion = TileHistoryStorage.isLayerDataVersion(buffer) ? buffer : null;
+        }
+        return TileHistoryStorage.edit(buffer);
+    }
+
+    private void addUndoGrid(BufferKey<Object> key, Object array, boolean shared) {
+        undoManager.addBuffer(key, TileHistoryStorage.wrapGrid(array, shared), this);
+    }
+
+    private void addUndoLayerData(Map<Layer, byte[]> layerData) {
+        final Object buffer = TileHistoryStorage.wrapLayers(layerData);
+        layerDataVersion = TileHistoryStorage.isLayerDataVersion(buffer) ? buffer : null;
+        undoManager.addBuffer(LAYER_DATA_BUFFER_KEY, buffer, this);
     }
 
     protected synchronized void ensureReadable(TileBuffer buffer) {
         if ((undoManager != null) && (! readableBuffers.contains(buffer))) {
             switch (buffer) {
                 case HEIGHTMAP:
-                    heightMap = undoManager.getBuffer(HEIGHTMAP_BUFFER_KEY);
+                    heightMap = readUndoBuffer(HEIGHTMAP_BUFFER_KEY);
                     break;
                 case TALL_HEIGHTMAP:
-                    tallHeightMap = undoManager.getBuffer(TALL_HEIGHTMAP_BUFFER_KEY);
+                    tallHeightMap = readUndoBuffer(TALL_HEIGHTMAP_BUFFER_KEY);
                     break;
                 case TERRAIN:
-                    terrain = undoManager.getBuffer(TERRAIN_BUFFER_KEY);
+                    terrain = readUndoBuffer(TERRAIN_BUFFER_KEY);
                     break;
                 case WATERLEVEL:
-                    waterLevel = undoManager.getBuffer(WATERLEVEL_BUFFER_KEY);
+                    waterLevel = readUndoBuffer(WATERLEVEL_BUFFER_KEY);
                     break;
                 case TALL_WATERLEVEL:
-                    tallWaterLevel = undoManager.getBuffer(TALL_WATERLEVEL_BUFFER_KEY);
+                    tallWaterLevel = readUndoBuffer(TALL_WATERLEVEL_BUFFER_KEY);
                     break;
                 case LAYER_DATA:
-                    layerData = undoManager.getBuffer(LAYER_DATA_BUFFER_KEY);
+                    layerData = readUndoBuffer(LAYER_DATA_BUFFER_KEY);
                     break;
                 case BIT_LAYER_DATA:
                     bitLayerData = undoManager.getBuffer(BIT_LAYER_DATA_BUFFER_KEY);
@@ -2839,45 +2869,45 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
             } else {
                 switch (buffer) {
                     case HEIGHTMAP:
-                        heightMap = undoManager.getBufferForEditing(HEIGHTMAP_BUFFER_KEY);
+                        heightMap = editUndoBuffer(HEIGHTMAP_BUFFER_KEY);
                         if (isSharedUniformHeightMapBuffer(heightMap)) {
                             heightMap = heightMap.clone();
-                            undoManager.addBuffer(HEIGHTMAP_BUFFER_KEY, heightMap, this);
+                            addUndoGrid(HEIGHTMAP_BUFFER_KEY, heightMap, false);
                         }
                         break;
                     case TALL_HEIGHTMAP:
-                        tallHeightMap = undoManager.getBufferForEditing(TALL_HEIGHTMAP_BUFFER_KEY);
+                        tallHeightMap = editUndoBuffer(TALL_HEIGHTMAP_BUFFER_KEY);
                         if (isSharedUniformTallHeightMapBuffer(tallHeightMap)) {
                             tallHeightMap = tallHeightMap.clone();
-                            undoManager.addBuffer(TALL_HEIGHTMAP_BUFFER_KEY, tallHeightMap, this);
+                            addUndoGrid(TALL_HEIGHTMAP_BUFFER_KEY, tallHeightMap, false);
                         }
                         break;
                     case TERRAIN:
-                        terrain = undoManager.getBufferForEditing(TERRAIN_BUFFER_KEY);
+                        terrain = editUndoBuffer(TERRAIN_BUFFER_KEY);
                         if (terrain == DEFAULT_TERRAIN_BUFFER) {
                             terrain = DEFAULT_TERRAIN_BUFFER.clone();
-                            undoManager.addBuffer(TERRAIN_BUFFER_KEY, terrain, this);
+                            addUndoGrid(TERRAIN_BUFFER_KEY, terrain, false);
                         }
                         break;
                     case WATERLEVEL:
-                        waterLevel = undoManager.getBufferForEditing(WATERLEVEL_BUFFER_KEY);
+                        waterLevel = editUndoBuffer(WATERLEVEL_BUFFER_KEY);
                         if (isSharedUniformWaterLevelBuffer(waterLevel)) {
                             waterLevel = waterLevel.clone();
-                            undoManager.addBuffer(WATERLEVEL_BUFFER_KEY, waterLevel, this);
+                            addUndoGrid(WATERLEVEL_BUFFER_KEY, waterLevel, false);
                         }
                         break;
                     case TALL_WATERLEVEL:
-                        tallWaterLevel = undoManager.getBufferForEditing(TALL_WATERLEVEL_BUFFER_KEY);
+                        tallWaterLevel = editUndoBuffer(TALL_WATERLEVEL_BUFFER_KEY);
                         if (tallWaterLevel == DEFAULT_TALL_WATERLEVEL_BUFFER) {
                             tallWaterLevel = DEFAULT_TALL_WATERLEVEL_BUFFER.clone();
-                            undoManager.addBuffer(TALL_WATERLEVEL_BUFFER_KEY, tallWaterLevel, this);
+                            addUndoGrid(TALL_WATERLEVEL_BUFFER_KEY, tallWaterLevel, false);
                         }
                         break;
                     case LAYER_DATA:
-                        layerData = undoManager.getBufferForEditing(LAYER_DATA_BUFFER_KEY);
+                        layerData = editUndoBuffer(LAYER_DATA_BUFFER_KEY);
                         if (layerData == DEFAULT_LAYER_DATA_BUFFER) {
                             layerData = new HashMap<>();
-                            undoManager.addBuffer(LAYER_DATA_BUFFER_KEY, layerData, this);
+                            addUndoLayerData(layerData);
                         }
                         break;
                     case BIT_LAYER_DATA:
@@ -2898,22 +2928,22 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         if ((undoManager != null) && (! writeableBuffers.contains(buffer))) {
             switch (buffer) {
                 case HEIGHTMAP:
-                    heightMap = undoManager.getBufferForEditing(HEIGHTMAP_BUFFER_KEY);
+                    heightMap = editUndoBuffer(HEIGHTMAP_BUFFER_KEY);
                     break;
                 case TALL_HEIGHTMAP:
-                    tallHeightMap = undoManager.getBufferForEditing(TALL_HEIGHTMAP_BUFFER_KEY);
+                    tallHeightMap = editUndoBuffer(TALL_HEIGHTMAP_BUFFER_KEY);
                     break;
                 case TERRAIN:
-                    terrain = undoManager.getBufferForEditing(TERRAIN_BUFFER_KEY);
+                    terrain = editUndoBuffer(TERRAIN_BUFFER_KEY);
                     break;
                 case WATERLEVEL:
-                    waterLevel = undoManager.getBufferForEditing(WATERLEVEL_BUFFER_KEY);
+                    waterLevel = editUndoBuffer(WATERLEVEL_BUFFER_KEY);
                     break;
                 case TALL_WATERLEVEL:
-                    tallWaterLevel = undoManager.getBufferForEditing(TALL_WATERLEVEL_BUFFER_KEY);
+                    tallWaterLevel = editUndoBuffer(TALL_WATERLEVEL_BUFFER_KEY);
                     break;
                 case LAYER_DATA:
-                    layerData = undoManager.getBufferForEditing(LAYER_DATA_BUFFER_KEY);
+                    layerData = editUndoBuffer(LAYER_DATA_BUFFER_KEY);
                     break;
                 case BIT_LAYER_DATA:
                     bitLayerData = undoManager.getBufferForEditing(BIT_LAYER_DATA_BUFFER_KEY);
@@ -3530,7 +3560,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         } else {
             undoManager.getBufferForEditing(HEIGHTMAP_BUFFER_KEY);
             heightMap = sharedBuffer;
-            undoManager.addBuffer(HEIGHTMAP_BUFFER_KEY, sharedBuffer, this);
+            addUndoGrid(HEIGHTMAP_BUFFER_KEY, sharedBuffer, true);
             readableBuffers.add(HEIGHTMAP);
             writeableBuffers.add(HEIGHTMAP);
         }
@@ -3542,7 +3572,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         } else {
             undoManager.getBufferForEditing(TALL_HEIGHTMAP_BUFFER_KEY);
             tallHeightMap = sharedBuffer;
-            undoManager.addBuffer(TALL_HEIGHTMAP_BUFFER_KEY, sharedBuffer, this);
+            addUndoGrid(TALL_HEIGHTMAP_BUFFER_KEY, sharedBuffer, true);
             readableBuffers.add(TALL_HEIGHTMAP);
             writeableBuffers.add(TALL_HEIGHTMAP);
         }
@@ -3554,7 +3584,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         } else {
             undoManager.getBufferForEditing(WATERLEVEL_BUFFER_KEY);
             waterLevel = sharedBuffer;
-            undoManager.addBuffer(WATERLEVEL_BUFFER_KEY, sharedBuffer, this);
+            addUndoGrid(WATERLEVEL_BUFFER_KEY, sharedBuffer, true);
             readableBuffers.add(WATERLEVEL);
             writeableBuffers.add(WATERLEVEL);
         }
@@ -3566,13 +3596,17 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         } else {
             undoManager.getBufferForEditing(TALL_WATERLEVEL_BUFFER_KEY);
             tallWaterLevel = sharedBuffer;
-            undoManager.addBuffer(TALL_WATERLEVEL_BUFFER_KEY, sharedBuffer, this);
+            addUndoGrid(TALL_WATERLEVEL_BUFFER_KEY, sharedBuffer, true);
             readableBuffers.add(TALL_WATERLEVEL);
             writeableBuffers.add(TALL_WATERLEVEL);
         }
     }
 
     private byte[] detachSharedLayerDataBuffer(Layer layer, byte[] buffer) {
+        if (layerDataVersion != null) {
+            // Compact history: also copies arrays still shared with the previous history version
+            return TileHistoryStorage.detachLayer(layerDataVersion, layer, buffer, isSharedLayerDataBuffer(buffer));
+        }
         if (isSharedLayerDataBuffer(buffer)) {
             buffer = buffer.clone();
             layerData.put(layer, buffer);
@@ -3978,17 +4012,20 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     private transient Set<TileBuffer> readableBuffers;
     private transient Set<TileBuffer> writeableBuffers;
     private transient UndoManager undoManager;
+    /** The editable layer data version in the undo manager, when compact history storage is in use. */
+    private transient Object layerDataVersion;
     private transient List<Layer> cachedLayers;
     private transient volatile Set<Layer> dirtyLayers;
     private transient int maxY;
     private transient volatile int eventInhibitionCounter;
 
-    private transient BufferKey<short[]>            HEIGHTMAP_BUFFER_KEY;
-    private transient BufferKey<int[]>              TALL_HEIGHTMAP_BUFFER_KEY;
-    private transient BufferKey<byte[]>             TERRAIN_BUFFER_KEY;
-    private transient BufferKey<byte[]>             WATERLEVEL_BUFFER_KEY;
-    private transient BufferKey<short[]>            TALL_WATERLEVEL_BUFFER_KEY;
-    private transient BufferKey<Map<Layer, byte[]>> LAYER_DATA_BUFFER_KEY;
+    // Grid and byte layer buffers are stored through TileHistoryStorage, hence the untyped keys
+    private transient BufferKey<Object>             HEIGHTMAP_BUFFER_KEY;
+    private transient BufferKey<Object>             TALL_HEIGHTMAP_BUFFER_KEY;
+    private transient BufferKey<Object>             TERRAIN_BUFFER_KEY;
+    private transient BufferKey<Object>             WATERLEVEL_BUFFER_KEY;
+    private transient BufferKey<Object>             TALL_WATERLEVEL_BUFFER_KEY;
+    private transient BufferKey<Object>             LAYER_DATA_BUFFER_KEY;
     private transient BufferKey<Map<Layer, BitSet>> BIT_LAYER_DATA_BUFFER_KEY;
     private transient BufferKey<HashSet<Seed>>      SEEDS_BUFFER_KEY;
     
