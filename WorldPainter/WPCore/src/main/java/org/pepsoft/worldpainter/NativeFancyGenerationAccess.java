@@ -57,6 +57,8 @@ final class NativeFancyGenerationAccess {
         if(!NativeSlices.importHeightMapTile(data))return false;
         long calculated=profiling?System.nanoTime():0;
         tile.applyOrderedPlanes(data,meta,layers,roles,kinds,offsets);
+        // FancyTheme never reads or writes lava, so its final factory-wide mask commutes with the climate pass.
+        if(factory.isFloodWithLava())tile.setBitLayerValue(org.pepsoft.worldpainter.layers.FloodWithLava.INSTANCE);
         if(profiling){worker.preparation+=prepared-started;worker.nativeTime+=calculated-prepared;worker.application+=System.nanoTime()-calculated;}
         worker.calls++;
         return true;

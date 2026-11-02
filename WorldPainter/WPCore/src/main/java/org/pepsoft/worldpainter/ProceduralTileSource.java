@@ -3,7 +3,8 @@ package org.pepsoft.worldpainter;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-/** Immutable WTGP v1/v2 snapshot; intermediate source planes remain in Rust.
+/** Immutable WTGP expression snapshot; intermediate source planes remain in Rust.
+ * V3 carries coordinate expressions; V4 adds borrowed typed bitmap windows.
  * V2 mode 4 uses header word 60: maximum=0, minimum=1, sum=2, difference=3, product=4. */
 final class ProceduralTileSource {
     private final byte[] packet;

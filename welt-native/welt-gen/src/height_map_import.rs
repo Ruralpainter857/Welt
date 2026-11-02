@@ -328,7 +328,7 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
     if d.len() < HEADER
         || d.len() > MAX_BYTES
         || word(d, 0) != 0x4d49_4857
-        || !(1..=4).contains(&word(d, 4))
+        || !matches!(word(d, 4), 1..=4 | 6 | 7)
         || word(d, 8) as usize != d.len()
         || word(d, 124) as usize != HEADER
         || d[if word(d, 4) == 1 { 208 } else { 212 }..HEADER]
@@ -343,6 +343,8 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
     let flags = word(d, 24);
     let fresh = flags & 1 != 0;
     let factory_only = word(d, 4) >= 3;
+    // Generic lava factories use ordinary edits: later cells may clear chunk bits.
+    let accumulate_fresh_bits = !matches!(word(d, 4), 6 | 7);
     let raise = flags & 2 != 0;
     let void = flags & 4 != 0;
     let tall = i64::from(max) - i64::from(min) > 256;
@@ -422,7 +424,7 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
         }
         end = s.imported.read(d, imported, &planes[..n], beach)?;
     }
-    let source = if (2..=3).contains(&word(d, 4)) {
+    let source = if matches!(word(d, 4), 2 | 3 | 6) {
         if word(d, 208) as usize != end {
             return Err(bad);
         }
@@ -433,7 +435,7 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
             word(d, 44) as i32,
         )?)
     } else {
-        if word(d, 4) == 4 {
+        if matches!(word(d, 4), 4 | 7) {
             if word(d, 208) as usize != end {
                 return Err(bad);
             }
@@ -459,7 +461,7 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
     if factory_only && (long(d, meta + 8) != 7 || long(d, meta + 16) != 0) {
         return Err(bad);
     }
-    if word(d, 4) == 4 {
+    if matches!(word(d, 4), 4 | 7) {
         if end + 128 > d.len() || word(d, end + 28) != 128 || word(d, end + 32) != 128 {
             return Err(bad);
         }
@@ -532,7 +534,7 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
             &s.selected,
             &planes,
             &mut random,
-            true,
+            accumulate_fresh_bits,
             &mut state,
             &mut s.terrains,
         );
@@ -813,6 +815,56 @@ mod tests {
             assert_eq!(invalid, before);
         }
     }
+    #[test]
+    fn generic_factory_versions_preserve_last_chunk_draw_and_java_random_state() {
+        for (old_version, new_version) in [(3, 6), (4, 7)] {
+            let mut frame = if old_version == 3 {
+                factory_frame()
+            } else {
+                procedural_frame()
+            };
+            let meta = word(&frame, 120) as usize;
+            let theme = word(&frame, 128) as usize;
+            let source = word(&frame, 208) as usize;
+            let bits = meta + 32 + AREA * 9;
+            let removed = AREA / 8 - 8;
+            frame.drain(bits + 8..theme);
+            put(&mut frame, 256 + 3 * 16, 4);
+            put(&mut frame, 128, (theme - removed) as u32);
+            put(&mut frame, 208, (source - removed) as u32);
+            let size = frame.len();
+            put(&mut frame, 8, size as u32);
+            let mut accumulated = frame.clone();
+            import(&mut accumulated, &mut ImportScratch::default()).unwrap();
+            assert_eq!(&accumulated[bits..bits + 8], &[255; 8]);
+            put(&mut frame, 4, new_version);
+            let valid = frame.clone();
+            import(&mut frame, &mut ImportScratch::default()).unwrap();
+            let mut random = JavaRandom::new(42);
+            let mut expected = [0_u8; 8];
+            for x in 0..128 {
+                for y in 0..128 {
+                    let at = x / 16 + y / 16 * 8;
+                    let value = u8::from(random.next_int_bound(15) < 7);
+                    expected[at / 8] = (expected[at / 8] & !(1 << (at & 7))) | (value << (at & 7));
+                }
+            }
+            assert_eq!(&frame[bits..bits + 8], &expected);
+            assert_eq!(long(&frame, 104), random.lcg_state());
+            assert_eq!(long(&frame, 104), long(&accumulated, 104));
+            for (p, value) in [(4, 8), (24, 1), (208, 0), (source - removed, 0)] {
+                let mut invalid = valid.clone();
+                put(&mut invalid, p, value);
+                let before = invalid.clone();
+                assert_eq!(
+                    import(&mut invalid, &mut ImportScratch::default()),
+                    Err(WeltError::IllegalArgument)
+                );
+                assert_eq!(invalid, before);
+            }
+        }
+    }
+
     #[test]
     fn factory_only_sampling_quantisation_and_stochastic_theme_share_the_tile() {
         let mut data = factory_frame();

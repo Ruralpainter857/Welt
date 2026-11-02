@@ -1,4 +1,4 @@
-//! WTGP v3 coordinate-domain expressions. Heights, quantisation and theme remain in WHIM.
+//! WTGP v3/v4 coordinate expressions and borrowed bitmap windows; quantisation/theme stay in WHIM.
 use crate::noise_height_map::NoiseHeightMapBulk;
 use welt_core::error::WeltError;
 const HEADER: usize = 128;
@@ -34,6 +34,7 @@ enum Node {
     Constant(f64),
     Banded(i32, f64, i32, f64),
     Mandelbrot,
+    Bitmap(usize),
     Bicubic(usize, [i32; 7], std::cell::RefCell<LatticeCache>),
     Noise(NoiseHeightMapBulk),
     FastNoise(fastnoise_lite::FastNoiseLite, f64),
@@ -166,6 +167,13 @@ impl Program {
                         std::cell::RefCell::new(LatticeCache::default()),
                     )
                 }
+                15 => {
+                    let slot = word(r, 40);
+                    if !(0..64).contains(&slot) {
+                        return Err(WeltError::IllegalArgument);
+                    }
+                    Node::Bitmap(slot as usize)
+                }
                 13 => Node::Mandelbrot,
                 11 => {
                     let height = number(r, 16);
@@ -241,6 +249,35 @@ impl Program {
         self.bytes.extend_from_slice(records);
         Ok(())
     }
+    #[cfg(test)]
+    fn sample(&self, index: usize, coords: Coordinates) -> Result<f64, WeltError> {
+        Sampling {
+            program: self,
+            images: &crate::coordinate_bitmap::BitmapWindows::empty(),
+        }
+        .sample(index, coords)
+    }
+    #[cfg(test)]
+    fn sample_extended(
+        &self,
+        child: usize,
+        bounds: &[i32; 7],
+        x: f32,
+        y: f32,
+    ) -> Result<f64, WeltError> {
+        Sampling {
+            program: self,
+            images: &crate::coordinate_bitmap::BitmapWindows::empty(),
+        }
+        .sample_extended(child, bounds, x, y)
+    }
+}
+// The borrowed windows are scoped to one JNI transaction and never enter the worker cache.
+struct Sampling<'p, 'i> {
+    program: &'p Program,
+    images: &'i crate::coordinate_bitmap::BitmapWindows<'i>,
+}
+impl Sampling<'_, '_> {
     fn sample_extended(
         &self,
         child: usize,
@@ -287,7 +324,14 @@ impl Program {
         self.sample(child, Coordinates::Float(x, y))
     }
     fn sample(&self, index: usize, coords: Coordinates) -> Result<f64, WeltError> {
-        Ok(match &self.nodes[index] {
+        Ok(match &self.program.nodes[index] {
+            Node::Bitmap(slot) => {
+                let (x, y) = match coords {
+                    Coordinates::Integer(x, y) => (x, y),
+                    Coordinates::Float(x, y) => (x as i32, y as i32),
+                };
+                self.images.sample(*slot, x, y)?
+            }
             Node::Constant(value) => *value,
             Node::Noise(noise) => {
                 let (x, y) = coords.doubles();
@@ -535,32 +579,70 @@ pub(crate) fn fill_source(data: &[u8], base: usize, output: &mut [f64]) -> Resul
     let count = word(d, 12);
     let width = word(d, 28);
     let height = word(d, 32);
+    let version = word(d, 4);
     if word(d, 0) != 0x50475457
-        || word(d, 4) != 3
+        || !(3..=4).contains(&version)
         || word(d, 16) != 6
         || !(1..=MAX as i32).contains(&count)
         || word(d, 8) as usize != d.len()
-        || d.len() != HEADER + count as usize * STRIDE
         || !(1..=256).contains(&width)
         || !(1..=256).contains(&height)
         || width as usize * height as usize != output.len()
-        || d[36..HEADER].iter().any(|v| *v != 0)
     {
         return Err(bad);
     }
+    let records_end = HEADER + count as usize * STRIDE;
+    if records_end > d.len() {
+        return Err(bad);
+    }
+    let images = if version == 3 {
+        if d.len() != records_end || d[36..HEADER].iter().any(|v| *v != 0) {
+            return Err(bad);
+        }
+        crate::coordinate_bitmap::BitmapWindows::empty()
+    } else {
+        let table = word(d, 36);
+        let image_count = word(d, 40);
+        let pixels = word(d, 44);
+        let length = word(d, 48);
+        if table != records_end as i32
+            || !(1..=64).contains(&image_count)
+            || pixels < 0
+            || length < 0
+            || pixels as usize + length as usize != d.len()
+            || d[52..HEADER].iter().any(|v| *v != 0)
+        {
+            return Err(bad);
+        }
+        crate::coordinate_bitmap::BitmapWindows::read(
+            d,
+            table as usize,
+            image_count as usize,
+            pixels as usize,
+        )?
+    };
     let ox = word(d, 20);
     let oy = word(d, 24);
     PROGRAM.with(|worker| {
         let mut p = worker.borrow_mut();
-        p.configure(&d[HEADER..])?;
+        p.configure(&d[HEADER..records_end])?;
         for node in &p.nodes {
+            if let Node::Bitmap(slot) = node {
+                if !images.contains(*slot) {
+                    return Err(bad);
+                }
+            }
             if let Node::Bicubic(_, _, cache) = node {
                 cache.borrow_mut().next_tile();
             }
         }
+        let sampling = Sampling {
+            program: &p,
+            images: &images,
+        };
         for y in 0..height as usize {
             for x in 0..width as usize {
-                output[y * width as usize + x] = p.sample(
+                output[y * width as usize + x] = sampling.sample(
                     count as usize - 1,
                     Coordinates::Integer(ox.wrapping_add(x as i32), oy.wrapping_add(y as i32)),
                 )?;

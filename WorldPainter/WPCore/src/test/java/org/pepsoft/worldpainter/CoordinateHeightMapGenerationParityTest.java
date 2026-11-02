@@ -231,14 +231,14 @@ public class CoordinateHeightMapGenerationParityTest {
         byte[] after=new byte[length];invalid.duplicate().get(after);assertArrayEquals(before,after);
         rawAndStorage(BitmapWorldCreationBenchmark.proceduralMap("nested-bicubic"),1,-1);
     }
-    @Test public void bicubicBoundsSnapshotAndUnsupportedChildrenRetainJava() {
+    @Test public void bicubicBoundsSnapshotAndBitmapChildrenPrepareBoundedFrames() {
         ready();var image=new java.awt.image.BufferedImage(7,5,java.awt.image.BufferedImage.TYPE_BYTE_GRAY);
         var bitmap=BitmapHeightMap.build().withImage(image).now();
         for(boolean repeat:new boolean[]{false,true}) {
             var bicubic=new BicubicHeightMap(bitmap,repeat);int[] bounds=new int[7];bicubic.copySamplingBounds(bounds);
             assertArrayEquals(new int[]{repeat?3:2,7,5,0,0,7,5},bounds);
             java.util.Arrays.fill(bounds,99);bicubic.copySamplingBounds(bounds);assertEquals(7,bounds[1]);
-            assertNull(CoordinateHeightMapSource.prepare(new SumHeightMap(transform(bicubic),new ConstantHeightMap(7)),0,0,128,128));
+            assertNotNull(CoordinateHeightMapSource.prepare(new SumHeightMap(transform(bicubic),new ConstantHeightMap(7)),0,0,128,128));
         }
     }
     @Test public void nestedSlopesRetainCompleteJavaGenerationUntilRawMathIsCompatible() throws Exception {

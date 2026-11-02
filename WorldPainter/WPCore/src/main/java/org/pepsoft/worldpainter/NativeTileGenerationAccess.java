@@ -18,7 +18,7 @@ final class NativeTileGenerationAccess {
 
     static boolean fill(HeightMapTileFactory factory, Tile tile, int tx, int ty) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
-                || factory.getClass() != HeightMapTileFactory.class || factory.isFloodWithLava()) return false;
+                || factory.getClass() != HeightMapTileFactory.class) return false;
         if (factory.getTheme().getClass() == org.pepsoft.worldpainter.themes.impl.fancy.FancyTheme.class)
             return NativeFancyGenerationAccess.fill(factory, tile, tx, ty);
         if (factory.getTheme().getClass() != SimpleTheme.class) return false;
@@ -35,7 +35,12 @@ final class NativeTileGenerationAccess {
         if (window == null && program == null) return false;
         SimpleTheme.ImportPlan plan = ((SimpleTheme) factory.getTheme()).prepareImport();
         if (plan == null || !plan.supportsFreshImport()) return false;
-        Layer[] themeLayers = plan.getLayers(), layers = new Layer[themeLayers.length + 3];
+        Layer[] themeLayers = plan.getLayers();
+        // A theme which edits lava must observe the original per-cell mutation order.
+        // Other themes commute with the factory-wide lava fill, so one grouped write suffices.
+        if (factory.isFloodWithLava()) for (Layer layer : themeLayers)
+            if (layer.equals(org.pepsoft.worldpainter.layers.FloodWithLava.INSTANCE)) return false;
+        Layer[] layers = new Layer[themeLayers.length + 3];
         System.arraycopy(themeLayers, 0, layers, 3, themeLayers.length);
         int n = layers.length, samples = 256 + n * 16, meta = samples + AREA * 8;
         int[] kinds = new int[n], roles = new int[n], offsets = new int[n];
@@ -52,7 +57,9 @@ final class NativeTileGenerationAccess {
         if (worker.data == null || worker.data.capacity() < size) worker.data = ByteBuffer.allocateDirect(size).order(ByteOrder.LITTLE_ENDIAN);
         ByteBuffer data = worker.data; data.clear().limit(size);
         for (int i = 0; i < 256; i += 8) data.putLong(i, 0L);
-        data.putInt(0, 0x4d494857).putInt(4, program == null ? 3 : 4).putInt(8, size).putInt(12, n)
+        boolean overwriteChunkBits = factory.isFloodWithLava() && !factory.usesBatchFreshSimpleTheme((int) x, (int) y);
+        int version = program == null ? (overwriteChunkBits ? 6 : 3) : (overwriteChunkBits ? 7 : 4);
+        data.putInt(0, 0x4d494857).putInt(4, version).putInt(8, size).putInt(12, n)
                 .putInt(16, factory.getMinHeight()).putInt(20, factory.getMaxHeight()).putInt(24, 65)
                 .putInt(36, factory.getWaterHeight()).putInt(40, (int) x).putInt(44, (int) y)
                 .putInt(48, (int) x).putInt(52, (int) y).putInt(56, 128).putInt(60, 128)
@@ -67,6 +74,7 @@ final class NativeTileGenerationAccess {
         if (!SimpleTheme.processHeightMapImport(data)) return false;
         long calculated = profiling ? System.nanoTime() : 0;
         tile.applyOrderedPlanes(data, meta, layers, roles, kinds, offsets);
+        if (factory.isFloodWithLava()) tile.setBitLayerValue(org.pepsoft.worldpainter.layers.FloodWithLava.INSTANCE);
         if (profiling) {
             worker.preparationNanos += prepared - started;
             worker.nativeNanos += calculated - prepared;

@@ -36,6 +36,7 @@ public final class BitmapWorldCreationBenchmark {
             case "product-displacement" -> new ProductHeightMap(proceduralMap("displacement"),new ConstantHeightMap(.7));
             case "minimum-displacement" -> new MinimisingHeightMap(new ConstantHeightMap(90),proceduralMap("displacement"));
             case "fnl" -> new SumHeightMap(new ConstantHeightMap(32), new FastNoiseLiteHeightMap(160, .7, 3, 17));
+            case "image-noise" -> imageNoiseMap();
             case "nested-bicubic" -> new SumHeightMap(new TransformingHeightMap("Interpolated terrain",new BicubicHeightMap(map),1.7f,.65f,31,-47,.37f),new ConstantHeightMap(7));
             case "nested-shapes" -> new SumHeightMap(new TransformingHeightMap("Bands",new BandedHeightMap(31,43,19,177,false),1.7f,.65f,31,-47,.37f),
                     new TransformingHeightMap("Fractal",new MandelbrotHeightMap(),150,200,7,-11,.23f));
@@ -65,6 +66,12 @@ public final class BitmapWorldCreationBenchmark {
             default -> throw new IllegalArgumentException("Unknown creation source");
         };
     }
+    static HeightMap imageNoiseMap() {
+        BufferedImage image=new BufferedImage(768,512,BufferedImage.TYPE_USHORT_GRAY);
+        for(int y=0;y<image.getHeight();y++)for(int x=0;x<image.getWidth();x++)image.getRaster().setSample(x,y,0,(x*3+y*7)&127);
+        HeightMap bitmap=BitmapHeightMap.build().withImage(image).now();
+        return new SumHeightMap(new TransformingHeightMap("Image domain",new BicubicHeightMap(bitmap),1.7f,.65f,-173,-211,.37f),new NoiseHeightMap(45,.9,3,63));
+    }
     static HeightMap map() {
         if (!sourceName().equals("bitmap")) return proceduralMap(sourceName());
         BufferedImage image = new BufferedImage(512, 512, BufferedImage.TYPE_USHORT_GRAY);
@@ -73,7 +80,7 @@ public final class BitmapWorldCreationBenchmark {
     }
     private static State fixture(HeightMap map) {
         Platform p = DefaultPlugin.JAVA_ANVIL_1_19;
-        HeightMapTileFactory factory = new HeightMapTileFactory(197,map,p.minZ,p.standardMaxHeight,false,theme(p.minZ,p.standardMaxHeight));
+        HeightMapTileFactory factory = new HeightMapTileFactory(197,map,p.minZ,p.standardMaxHeight,Boolean.getBoolean("welt.benchmark.creationLava"),theme(p.minZ,p.standardMaxHeight));
         Dimension dimension = new Dimension(new World2(p,p.minZ,p.standardMaxHeight),"Creation",197,factory,Dimension.Anchor.NORMAL_DETAIL,false);
         return new State(factory,dimension);
     }
@@ -100,6 +107,7 @@ public final class BitmapWorldCreationBenchmark {
                 hash=hash*31+tile.getTerrain(x,y).ordinal();
                 hash=hash*31+tile.getLayerValue(Resources.INSTANCE,x,y); hash=hash*31+tile.getLayerValue(Biome.INSTANCE,x,y);
                 hash=hash*31+(tile.getBitLayerValue(Frost.INSTANCE,x,y)?1:0);
+                if (Boolean.getBoolean("welt.benchmark.creationLava")) hash=hash*31+(tile.getBitLayerValue(FloodWithLava.INSTANCE,x,y)?1:0);
             }
         }
         return hash;

@@ -10,6 +10,7 @@ import org.pepsoft.worldpainter.themes.impl.fancy.FancyTheme;
 /** Whole creation operation: source sampling, tile storage, theme and dimension insertion. */
 public final class FancyWorldCreationBenchmark {
     private static volatile long checksum;
+    private static volatile State retainedState;
     private static long nativeCalls() { return HeightMapTileFactory.completedNativeFancyTiles(); }
     private record State(HeightMapTileFactory factory, Dimension dimension) { }
     private record Result(long nanos, long allocated, State state, long calls) { }
@@ -18,7 +19,7 @@ public final class FancyWorldCreationBenchmark {
     private static State fixture(HeightMap ignored) {
         FancyTheme theme=template.clone();
         Platform p=DefaultPlugin.JAVA_ANVIL_1_19;
-        HeightMapTileFactory factory=new HeightMapTileFactory(197,theme.getHeightMap(),p.minZ,p.standardMaxHeight,false,theme);
+        HeightMapTileFactory factory=new HeightMapTileFactory(197,theme.getHeightMap(),p.minZ,p.standardMaxHeight,Boolean.getBoolean("welt.benchmark.creationLava"),theme);
         Dimension dimension=new Dimension(new World2(p,p.minZ,p.standardMaxHeight),"Creation",197,factory,Dimension.Anchor.NORMAL_DETAIL,false);
         return new State(factory,dimension);
     }
@@ -89,9 +90,22 @@ public final class FancyWorldCreationBenchmark {
             System.out.printf(Locale.ROOT,"worldCreation source=%s paired tiles=%d javaMs=%.3f rustMs=%.3f ratio=%.3f range=%.3f..%.3f javaAllocated=%d rustAllocated=%d checksum=%d nativeCalls=%d%n","fancy-"+System.getProperty("welt.benchmark.fancySource","noise"),SIDE*SIDE,javaTimes[4],rustTimes[4],ratios[4],ratios[0],ratios[8],ja[4],ra[4],checksum,nativeCalls);
         } else {
             double[] times=new double[9];long[] allocated=new long[9]; long nativeCalls=0;
-            for(int trial=-warmups;trial<9;trial++){Result result=run(map,nativeMode);checksum=hash(result.state);nativeCalls+=result.calls;if(trial>=0){times[trial]=result.nanos/1e6;allocated[trial]=result.allocated;}}
+            for(int trial=-warmups;trial<9;trial++){Result result=run(map,nativeMode);checksum=hash(result.state);retainedState=result.state;nativeCalls+=result.calls;if(trial>=0){times[trial]=result.nanos/1e6;allocated[trial]=result.allocated;}}
             Arrays.sort(times);Arrays.sort(allocated);
             System.out.printf(Locale.ROOT,"worldCreation source=%s mode=%s tiles=%d medianMs=%.3f allocatedBytes=%d checksum=%d nativeCalls=%d%n","fancy-"+System.getProperty("welt.benchmark.fancySource","noise"),nativeMode?"rust":"java",SIDE*SIDE,times[4],allocated[4],checksum,nativeCalls);
+        }
+        if (Boolean.getBoolean("welt.benchmark.creationMemory")) {
+            if (retainedState == null) throw new IllegalArgumentException("Memory runs require separate java/rust modes");
+            for (int i = 0; i < 3; i++) {
+                System.gc();
+                try { Thread.sleep(100); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IllegalStateException(e); }
+            }
+            long direct = 0;
+            for (var pool : ManagementFactory.getPlatformMXBeans(java.lang.management.BufferPoolMXBean.class))
+                if (pool.getName().equals("direct")) direct += pool.getMemoryUsed();
+            System.out.printf(Locale.ROOT, "creationMemory retainedTiles=%d heapBytes=%d directBytes=%d%n",
+                    retainedState.dimension.getTiles().size(), ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed(), direct);
         }
         if (Boolean.getBoolean("welt.native.generationProfile")) {
             long[] p=HeightMapTileFactory.nativeGenerationProfile();

@@ -219,6 +219,17 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                 b.heightMapScales, b.heightMapOctaves, b.heightMapSeeds);
     }
 
+    /** Shared by Java creation and native planning: chunk bits accumulate only in this mode. */
+    final boolean usesBatchFreshSimpleTheme(int originX, int originY) {
+        if (theme.getClass() != SimpleTheme.class) return false;
+        Map<?, ?> configuredLayers = ((SimpleTheme) theme).getLayerMap();
+        if (floodWithLava && configuredLayers != null && configuredLayers.containsValue(FloodWithLava.INSTANCE)) return false;
+        return isBatchSafeHeightMap(heightMap) || isNativeBandedHeightMap(heightMap)
+                || isNativeSlopeHeightMap(heightMap) || isNativeDisplacementHeightMap(heightMap)
+                || isNativeTransformingHeightMap(heightMap) || getBatchSafeTranslation(heightMap) != null
+                || isBulkReadableBitmapHeightMap(heightMap) || isNativeShelvingHeightMap(heightMap, originX, originY);
+    }
+
     @Override
     public Tile createTile(int tileX, int tileY) {
         final int maxZ = maxHeight - 1, myWaterHeight = getWaterHeight();
@@ -255,19 +266,7 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                     && !floodWithLava && ((FancyTheme) theme).supportsFreshTileBatch()
                     ? (FancyTheme) theme : null;
             final boolean freshSimpleTheme = isSimpleTheme && !floodWithLava;
-            final Map<?, ?> simpleThemeLayerMap = isSimpleTheme
-                    ? ((SimpleTheme) theme).getLayerMap() : null;
-            final boolean themeConfiguresFloodWithLava = (simpleThemeLayerMap != null)
-                    && simpleThemeLayerMap.containsValue(FloodWithLava.INSTANCE);
-            final boolean batchFreshSimpleTheme = isSimpleTheme
-                    && (!floodWithLava || !themeConfiguresFloodWithLava)
-                    && (isBatchSafeHeightMap(heightMap) || isNativeBandedHeightMap(heightMap)
-                    || isNativeSlopeHeightMap(heightMap)
-                    || isNativeDisplacementHeightMap(heightMap)
-                    || isNativeTransformingHeightMap(heightMap)
-                    || (translatedHeightMap != null)
-                    || isBulkReadableBitmapHeightMap(heightMap)
-                    || isNativeShelvingHeightMap(heightMap, worldTileX, worldTileY));
+            final boolean batchFreshSimpleTheme = usesBatchFreshSimpleTheme(worldTileX, worldTileY);
             final GenerationBuffers buffers = batchFreshSimpleTheme ? GENERATION_BUFFERS.get() : null;
             if ((freshFancyTheme != null) && (freshFancyTheme.getHeightMap() == heightMap)
                     && Native.isNinePatchGenEnabled()) {

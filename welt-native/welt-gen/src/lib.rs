@@ -10,6 +10,7 @@ pub mod height_map_displacement;
 pub mod height_map_import;
 pub mod mask_import;
 mod bitmap_import;
+mod coordinate_bitmap;
 pub mod bitmap_preview;
 pub mod noise_height_map;
 pub mod resource_noise;
