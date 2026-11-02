@@ -636,6 +636,9 @@ version = "0.1.0"
 [[package]]
 name = "welt-render"
 version = "0.1.0"
+dependencies = [
+ "welt-core",
+]
 
 [[package]]
 name = "welt-slices"

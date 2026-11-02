@@ -166,6 +166,38 @@ public final class MixedMaterial implements Serializable, Comparable<MixedMateri
         }
     }
     
+    /** Size of a deterministic material-field snapshot, without expanding layered palettes. */
+    int viewportModelBytes() {
+        if (mode != Mode.BLOBS && mode != Mode.LAYERED) return 0;
+        Row[] source = mode == Mode.BLOBS ? sortedRows : rows;
+        if (source == null || source.length < 2 || source.length > 256
+                || mode == Mode.LAYERED && (materials.length < 1 || materials.length > 1_000_000)) return 0;
+        for (Row row : source) if (row.material == null) return 0;
+        return 96 + source.length * 16;
+    }
+
+    /** WMF1: immutable selector settings and row colours for one fused render transaction. */
+    boolean writeViewportModel(java.nio.ByteBuffer destination, int offset) {
+        int bytes = viewportModelBytes();
+        if (bytes == 0 || offset < 0 || (long) offset + bytes > destination.limit()) return false;
+        Row[] source = mode == Mode.BLOBS ? sortedRows : rows;
+        for (int i = 0; i < 96; i += 8) destination.putLong(offset + i, 0L);
+        destination.putInt(offset, 0x31464d57).putInt(offset + 4, 1)
+                .putInt(offset + 8, mode == Mode.BLOBS ? 2 : 3).putInt(offset + 12, source.length)
+                .putInt(offset + 16, mode == Mode.LAYERED ? materials.length : 0).putInt(offset + 20, repeat ? 1 : 0)
+                .putFloat(offset + 24, scale).putInt(offset + 28, layerNoiseheightMap == null ? 0 : layerNoiseheightMap.getOctaves())
+                .putDouble(offset + 32, layerNoiseheightMap == null ? 1 : layerNoiseheightMap.getScale())
+                .putDouble(offset + 40, layerNoiseheightMap == null ? 0 : layerNoiseheightMap.getHeight())
+                .putDouble(offset + 48, layerXSlope).putDouble(offset + 56, layerYSlope)
+                .putInt(offset + 64, layerNoiseOffset).putInt(offset + 68, ColourScheme.DEFAULT.getColour(Material.AIR))
+                .putInt(offset + 72, bytes).putLong(offset + 80, layerNoiseheightMap == null ? 0 : layerNoiseheightMap.getSeedOffset());
+        for (int i = 0; i < source.length; i++) {
+            Row row = source[i]; int p = offset + 96 + i * 16;
+            destination.putFloat(p, row.scale).putFloat(p + 4, row.chance)
+                    .putInt(p + 8, ColourScheme.DEFAULT.getColour(row.material)).putInt(p + 12, row.occurrence);
+        }
+        return true;
+    }
     /** Render the material editor cross-section, preserving colour callback order. */
     public BufferedImage createPreview(int width, int height, ColourScheme colourScheme) {
         BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);

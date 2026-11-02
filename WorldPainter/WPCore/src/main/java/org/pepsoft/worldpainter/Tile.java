@@ -3398,6 +3398,27 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     }
 
     /** Read displayed cells and their immediate physical neighbors in one tile transaction. */
+    /** Read only the visible terrain ordinals when planning a compact viewport frame. */
+    synchronized void copySampledTerrainOrdinals(int shift, byte[] output) {
+        if (shift < 1 || shift > 7) throw new IllegalArgumentException("Compact shift must be 1..7");
+        int width = 128 >> shift;
+        if (output.length < width * width) throw new IllegalArgumentException("Insufficient terrain space");
+        ensureReadable(TERRAIN);
+        for (int row = 0; row < width; row++) for (int col = 0; col < width; col++)
+            output[col + row * width] = terrain[(col << shift) + ((row << shift) << TILE_SIZE_BITS)];
+    }
+    /** Copy unrounded sampled surfaces from the readable height version in one transaction. */
+    synchronized void copySampledRenderHeights(int shift, java.nio.FloatBuffer output) {
+        if (shift < 0 || shift > 7) throw new IllegalArgumentException("Render shift must be 0..7");
+        int width = 128 >> shift;
+        if (output.remaining() < width * width) throw new IllegalArgumentException("Insufficient sampled height space");
+        ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP);
+        for (int row = 0; row < width; row++) for (int column = 0; column < width; column++) {
+            int index = (column << shift) + ((row << shift) << TILE_SIZE_BITS);
+            output.put((tall ? tallHeightMap[index] : heightMap[index] & 0xffff) / 256f + minHeight);
+        }
+    }
+    /** Read displayed cells and their immediate physical neighbors in one tile transaction. */
     synchronized void copySampledRenderPoints(int shift, ByteBuffer output, int terrainOffset, int heightsOffset, int wetOffset) {
         if (shift < 1 || shift > 7) throw new IllegalArgumentException("Sample shift must be 1..7");
         int width = 128 >> shift, area = width * width;

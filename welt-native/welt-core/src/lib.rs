@@ -21,6 +21,7 @@ pub mod jni_gen;
 pub mod layer_edit;
 pub mod line_raster;
 pub mod mountain;
+pub mod material_field;
 pub mod nibble_paint;
 pub mod noise;
 pub mod paint_mask;

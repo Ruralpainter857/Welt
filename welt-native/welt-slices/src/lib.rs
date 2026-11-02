@@ -38,7 +38,10 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
         let pointer = address(env, buffer);
         if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
         let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
-        match welt_render::viewport::render(data) { Ok(()) => WeltError::Ok as jint, Err(_) => WeltError::IllegalArgument as jint }
+        thread_local! { static VIEWPORT: RefCell<welt_render::viewport::Workspace> = RefCell::new(Default::default()); }
+        VIEWPORT.with(|worker| match welt_render::viewport::render_with_workspace(data, &mut worker.borrow_mut()) {
+            Ok(()) => WeltError::Ok as jint, Err(_) => WeltError::IllegalArgument as jint
+        })
     }) }
 }
 use welt_core::erosion::erode_raw_height_region;

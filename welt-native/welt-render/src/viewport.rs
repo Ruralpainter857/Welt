@@ -1,4 +1,4 @@
-//! WVR versions 1 through 4: complete tile composition with compact overlay planes.
+//! WVR versions 1 through 6: tile composition, compact overlays and deterministic terrain fields.
 use crate::shade::java_multiply;
 
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -146,18 +146,27 @@ fn paint(plane: Plane, data: &[u8], x: i32, y: i32, colour: i32, value: i32) -> 
     result
 }
 
+#[derive(Default)]
+pub struct Workspace {
+    materials: Vec<welt_core::material_field::Workspace>,
+}
+
 pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
+    render_with_workspace(data, &mut Workspace::default())
+}
+
+pub fn render_with_workspace(data: &mut [u8], worker: &mut Workspace) -> Result<(), RenderError> {
     let bad = RenderError::InvalidFrame;
     if data.len() < 128
         || data.len() > MAX_BYTES
         || int(data, 0) != 0x31525657
-        || !matches!(int(data, 4), 1..=4)
+        || !matches!(int(data, 4), 1..=6)
     {
         return Err(bad);
     }
     let count = int(data, 8) as usize;
     let version = int(data, 4);
-    let shift = if version == 4 {
+    let shift = if matches!(version, 4 | 6) {
         let shift = int(data, 104);
         if !(1..=7).contains(&shift) {
             return Err(bad);
@@ -168,7 +177,7 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
     };
     let width = 128 >> shift;
     let area = width * width;
-    let compact = version == 4;
+    let compact = matches!(version, 4 | 6);
     let palette_count = int(data, 12) as usize;
     let flags = int(data, 20);
     let separation = int(data, 24);
@@ -177,7 +186,7 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
     if count > 128
         || visible > count
         || !(1..=256).contains(&palette_count)
-        || !(0..=7).contains(&flags)
+        || !(0..=if version >= 5 { 15 } else { 7 }).contains(&flags)
         || !(0..=4).contains(&light)
         || flags & 1 != 0 && separation == 0
     {
@@ -290,6 +299,81 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
             _ => (),
         }
     }
+    let mut selector_offsets = [(0_usize, 0_usize); 256];
+    let mut selector_terrains = [0_usize; 256];
+    let mut selector_count = 0_usize;
+    let mut surfaces = 0_usize;
+    if version >= 5 {
+        selector_count = int(data, 124) as usize;
+        if !(1..=palette_count).contains(&selector_count)
+            || int(data, 108) as usize != cursor
+            || cursor + selector_count * 12 > data.len()
+        {
+            return Err(bad);
+        }
+        let entries = cursor;
+        cursor += selector_count * 12;
+        let mut used = [false; 256];
+        let mut noise_budget = 0;
+        for slot in 0..selector_count {
+            let p = entries + slot * 12;
+            let terrain = int(data, p) as usize;
+            let offset = int(data, p + 4) as usize;
+            let size = int(data, p + 8) as usize;
+            if terrain >= palette_count
+                || used[terrain]
+                || offset != cursor
+                || size < 96
+                || size > data.len() - cursor
+            {
+                return Err(bad);
+            }
+            let model =
+                welt_core::material_field::Field::read(&data[offset..offset + size]).ok_or(bad)?;
+            noise_budget += model.noise_count();
+            if noise_budget > 512 {
+                return Err(bad);
+            }
+            selector_offsets[slot] = (offset, size);
+            selector_terrains[slot] = terrain;
+            used[terrain] = true;
+            cursor += size;
+        }
+        surfaces = cursor;
+        if int(data, 120) as usize != surfaces || surfaces + area * 4 > data.len() {
+            return Err(bad);
+        }
+        cursor += area * 4;
+        let ox = int(data, 96) as f64;
+        let oy = int(data, 100) as f64;
+        let mut domain = ox
+            .abs()
+            .max((ox + 127.0).abs())
+            .max(oy.abs())
+            .max((oy + 127.0).abs());
+        for cell in 0..area {
+            let value = f32::from_bits(int(data, surfaces + cell * 4) as u32);
+            let x = (cell % width) << shift;
+            let y = (cell / width) << shift;
+            let at = if compact {
+                cell * 5
+            } else {
+                x + 1 + (y + 1) * 130
+            };
+            if !value.is_finite() || java_round(value) != int(data, heights + at * 4) {
+                return Err(bad);
+            }
+            domain = domain.max(value.abs() as f64);
+        }
+        for (offset, size) in selector_offsets.iter().copied().take(selector_count) {
+            if !welt_core::material_field::Field::read(&data[offset..offset + size])
+                .ok_or(bad)?
+                .supports_domain(domain)
+            {
+                return Err(bad);
+            }
+        }
+    }
     let output = cursor;
     if int(data, 64) as usize != output
         || output + area * 4 != data.len()
@@ -312,6 +396,25 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
     let hide_fluids = flags & 2 != 0;
     let origin_x = if version >= 3 { int(data, 96) } else { 0 };
     let origin_y = if version >= 3 { int(data, 100) } else { 0 };
+    worker
+        .materials
+        .resize_with(selector_count, Default::default);
+    worker.materials.truncate(selector_count);
+    let (inputs, pixels) = data.split_at_mut(output);
+    let data = &*inputs;
+    let mut fields = [None; 256];
+    let seed = if version >= 5 {
+        word(data, 112) as i64
+    } else {
+        0
+    };
+    for slot in 0..selector_count {
+        let (offset, size) = selector_offsets[slot];
+        let model =
+            welt_core::material_field::Field::read(&data[offset..offset + size]).ok_or(bad)?;
+        model.prepare(seed, &mut worker.materials[slot]);
+        fields[selector_terrains[slot]] = Some((model, slot));
+    }
     for row in 0..width {
         for col in 0..width {
             let x = col << shift;
@@ -351,7 +454,19 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
                 } else if flags & 4 == 0 && h == min {
                     int(data, 40)
                 } else {
-                    int(data, palette + data[terrain + cell] as usize * 4)
+                    let ordinal = data[terrain + cell] as usize;
+                    if let Some((model, slot)) = fields[ordinal] {
+                        model.colour(
+                            &worker.materials[slot],
+                            origin_x.wrapping_add(x as i32),
+                            origin_y.wrapping_add(y as i32),
+                            f32::from_bits(int(data, surfaces + cell * 4) as u32),
+                            h,
+                            flags & 8 != 0,
+                        )
+                    } else {
+                        int(data, palette + ordinal * 4)
+                    }
                 };
                 if !contour {
                     for plane in planes.iter().take(visible) {
@@ -416,7 +531,7 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
                 }
                 rgb | 0xff000000u32 as i32
             };
-            data[output + cell * 4..output + cell * 4 + 4].copy_from_slice(&colour.to_le_bytes());
+            pixels[cell * 4..cell * 4 + 4].copy_from_slice(&colour.to_le_bytes());
         }
     }
     Ok(())
@@ -632,6 +747,133 @@ mod tests {
                 assert_eq!(truncated, before);
             }
         }
+    }
+
+    // A deterministic last-row blob model keeps these ABI tests independent of noise output.
+    fn field_frame(version: i32, rows: usize, models: usize) -> Vec<u8> {
+        let compact = version == 6;
+        let area = if compact { 1 } else { AREA };
+        let terrain = 128 + models * 4;
+        let heights = terrain + area;
+        let height_bytes = if compact { 20 } else { HALO * 4 };
+        let wet = heights + height_bytes;
+        let entries = wet + height_bytes;
+        let model_size = 96 + rows * 16;
+        let surfaces = entries + models * 12 + models * model_size;
+        let output = surfaces + area * 4;
+        let mut data = vec![0; output + area * 4];
+        for (p, v) in [
+            (0, 0x31525657),
+            (4, version),
+            (12, models as i32),
+            (28, 4),
+            (52, terrain as i32),
+            (56, heights as i32),
+            (60, wet as i32),
+            (64, output as i32),
+            (68, 128),
+            (72, terrain as i32),
+            (80, -1),
+            (84, -1),
+            (88, -1),
+            (92, -1),
+            (104, if compact { 7 } else { 0 }),
+            (108, entries as i32),
+            (120, surfaces as i32),
+            (124, models as i32),
+        ] {
+            data[p..p + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        for p in (heights..wet).step_by(4) {
+            data[p..p + 4].copy_from_slice(&64_i32.to_le_bytes());
+        }
+        for p in (wet..entries).step_by(4) {
+            data[p..p + 4].copy_from_slice(&i32::MIN.to_le_bytes());
+        }
+        for slot in 0..models {
+            let offset = entries + models * 12 + slot * model_size;
+            for (p, v) in [(0, slot as i32), (4, offset as i32), (8, model_size as i32)] {
+                data[entries + slot * 12 + p..entries + slot * 12 + p + 4]
+                    .copy_from_slice(&v.to_le_bytes());
+            }
+            for (p, v) in [
+                (0, 0x31464d57),
+                (4, 1),
+                (8, 2),
+                (12, rows as i32),
+                (24, 1_f32.to_bits() as i32),
+                (72, model_size as i32),
+            ] {
+                data[offset + p..offset + p + 4].copy_from_slice(&v.to_le_bytes());
+            }
+            for row in 0..rows {
+                let at = offset + 96 + row * 16;
+                for (p, v) in [
+                    (0, 1_f32.to_bits() as i32),
+                    (4, 1e9_f32.to_bits() as i32),
+                    (8, 0x123456),
+                ] {
+                    data[at + p..at + p + 4].copy_from_slice(&v.to_le_bytes());
+                }
+            }
+        }
+        for p in (surfaces..output).step_by(4) {
+            data[p..p + 4].copy_from_slice(&64_f32.to_le_bytes());
+        }
+        data[output..].fill(0x5a);
+        data
+    }
+
+    #[test]
+    fn deterministic_fields_validate_every_plane_before_writing() {
+        for version in [5, 6] {
+            let frame = field_frame(version, 2, 2);
+            let entries = int(&frame, 108) as usize;
+            let model = int(&frame, entries + 4) as usize;
+            let surfaces = int(&frame, 120) as usize;
+            for (p, v) in [
+                (108, entries as i32 + 1),
+                (124, 0),
+                (entries + 12, 0),
+                (entries + 4, -1),
+                (entries + 8, i32::MAX),
+                (model + 72, 1),
+                (model + 76, 1),
+                (surfaces, f32::NAN.to_bits() as i32),
+                (surfaces, 63_f32.to_bits() as i32),
+                (64, -1),
+            ] {
+                let mut invalid = frame.clone();
+                invalid[p..p + 4].copy_from_slice(&v.to_le_bytes());
+                let before = invalid.clone();
+                assert_eq!(render(&mut invalid), Err(RenderError::InvalidFrame));
+                assert_eq!(invalid, before, "version {version}, offset {p}");
+            }
+            let mut valid = frame;
+            let output = int(&valid, 64) as usize;
+            render(&mut valid).unwrap();
+            assert!(valid[output..]
+                .chunks_exact(4)
+                .all(|p| u32::from_le_bytes(p.try_into().unwrap()) == 0xff123456));
+        }
+    }
+
+    #[test]
+    fn deterministic_field_workers_enforce_total_noise_budget_and_release_unused_slots() {
+        let mut worker = Workspace::default();
+        let mut valid = field_frame(6, 256, 2);
+        render_with_workspace(&mut valid, &mut worker).unwrap();
+        assert_eq!(worker.materials.len(), 2);
+        let mut excessive = field_frame(6, 256, 3);
+        let before = excessive.clone();
+        assert_eq!(
+            render_with_workspace(&mut excessive, &mut worker),
+            Err(RenderError::InvalidFrame)
+        );
+        assert_eq!(excessive, before);
+        let mut smaller = field_frame(6, 2, 1);
+        render_with_workspace(&mut smaller, &mut worker).unwrap();
+        assert_eq!(worker.materials.len(), 1);
     }
 
     #[test]

@@ -306,7 +306,7 @@ public final class TileRenderer {
                 && Boolean.parseBoolean(System.getProperty("welt.native.viewport", "false"))
                 && NativeLoader.areSlicesAvailable()) {
             if (viewportRenderAccess == null) viewportRenderAccess = new ViewportRenderAccess(platform);
-            if (viewportRenderAccess.render(tile, tileProvider, layers, renderers, intHeightCache, intFluidHeightCache,
+            if (viewportRenderAccess.render(tile, tileProvider, layers, renderers, floatHeightCache, intHeightCache, intFluidHeightCache,
                     terrainOrdinalCache, contourLines, contourSeparation, lightOrigin.ordinal(), hideFluids, bottomless,
                     _void, notAllBlocksPresent, !hideFluids && tileLayers.contains(FloodWithLava.INSTANCE),
                     waterColour, lavaColour, bedrockColour, voidColour, notPresentColour, renderBuffer, -zoom)) {

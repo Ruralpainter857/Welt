@@ -61,7 +61,12 @@ public final class TileViewportBenchmark {
                 new MixedMaterial.Row(org.pepsoft.minecraft.Material.STONE, 600, 1f),
                 new MixedMaterial.Row(org.pepsoft.minecraft.Material.DIRT, 400, 1f)}, -1, 0x39715b));
             Terrain.setCustomMaterial(1, MixedMaterial.create("Simple custom block", org.pepsoft.minecraft.Material.get("welt:viewport_custom")));
-            terrains = new Terrain[] {Terrain.GRASS, Terrain.CUSTOM_1, Terrain.CUSTOM_2, Terrain.DIRT};
+            String mixture=System.getProperty("welt.benchmark.viewportMixture","fixed");
+            MixedMaterial.Row[] rows={new MixedMaterial.Row(org.pepsoft.minecraft.Material.STONE,600,1f),
+                    new MixedMaterial.Row(org.pepsoft.minecraft.Material.DIRT,400,.7f)};
+            if(mixture.equals("blobs"))Terrain.setCustomMaterial(0,new MixedMaterial("Viewport blobs",rows,-1,null,1.2f));
+            else if(mixture.equals("layered"))Terrain.setCustomMaterial(0,new MixedMaterial("Viewport strata",new MixedMaterial.Row[]{new MixedMaterial.Row(org.pepsoft.minecraft.Material.STONE,10,1),new MixedMaterial.Row(org.pepsoft.minecraft.Material.DIRT,50,1)},-1,null,new NoiseSettings(0,17,3,1.2f),-.7,.4,true));
+            else if(!mixture.equals("fixed"))throw new IllegalArgumentException("Unknown viewport mixture");            terrains = new Terrain[] {Terrain.GRASS, Terrain.CUSTOM_1, Terrain.CUSTOM_2, Terrain.DIRT};
         }
         boolean indexed = Boolean.getBoolean("welt.benchmark.viewportIndexed");
         boolean custom = Boolean.getBoolean("welt.benchmark.viewportCustomPaint");

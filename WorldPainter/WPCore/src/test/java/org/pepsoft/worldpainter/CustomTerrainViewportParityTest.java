@@ -90,11 +90,11 @@ public class CustomTerrainViewportParityTest {
             Terrain.setCustomMaterial(0,fixed(0x3719cb));compare(d,java,rust,0,true);
         }
     }
-    @Test public void variableAndUnconfiguredTerrainsKeepTheOriginalRenderer(){
+    @Test public void deterministicMixturesAreNativeAndUnconfiguredTerrainsKeepJava(){
         requireLibrary();try(State ignored=new State()){
             bindings();Dimension d=fixture();d.setTopLayerAnchor(Dimension.LayerAnchor.BEDROCK);
             TileRenderer java=renderer(d,0),rust=renderer(d,0);
-            Terrain.setCustomMaterial(0,new MixedMaterial("Variable blobs",rows(),-1,null,1.2f));compare(d,java,rust,0,false);
+            Terrain.setCustomMaterial(0,new MixedMaterial("Variable blobs",rows(),-1,null,1.2f));compare(d,java,rust,0,true);
             Terrain.setCustomMaterial(0,null);compare(d,java,rust,0,false);
         }
     }
@@ -104,9 +104,57 @@ public class CustomTerrainViewportParityTest {
             Tile tile=new Tile(-1,0,Integer.MAX_VALUE-1024,Integer.MAX_VALUE-512);
             byte[] terrains=new byte[16384];Arrays.fill(terrains,(byte)Terrain.CUSTOM_1.ordinal());
             int[] output=new int[16384];Arrays.fill(output,42);
-            assertFalse(new ViewportRenderAccess(d.getWorld().getPlatform()).render(tile,d,new Layer[0],new LayerRenderer[0],new int[16384],new int[16384],terrains,
+            assertFalse(new ViewportRenderAccess(d.getWorld().getPlatform()).render(tile,d,new Layer[0],new LayerRenderer[0],new float[16384],new int[16384],new int[16384],terrains,
                 false,10,0,false,false,false,false,false,0,0,0,0,0,output,0));
             for(int value:output)assertEquals(42,value);
         }
     }
-}
+    @Test public void variableMixturesPreserveLightsZoomsAnchorsAndLiveEdits() {
+        requireLibrary();try(State ignored=new State()) {
+            bindings();Dimension d=fixture();
+            for(int mode=0;mode<3;mode++) {
+                MixedMaterial.Row[] strata={new MixedMaterial.Row(Material.STONE,10,1),new MixedMaterial.Row(Material.DIRT,50,1)};
+                MixedMaterial mixture=mode==0?new MixedMaterial("Blobs",rows(),-1,null,.7f)
+                    :new MixedMaterial("Strata",strata,-1,null,new NoiseSettings(0,17,3,1.2f),mode==1?-.7:0,mode==1?.4:0,mode==1);
+                Terrain.setCustomMaterial(0,mixture);
+                for(int zoom:new int[]{0,-1,-3,-7})for(Dimension.LayerAnchor anchor:Dimension.LayerAnchor.values()) {
+                    d.setTopLayerAnchor(anchor);TileRenderer java=renderer(d,zoom),rust=renderer(d,zoom);
+                    for(TileRenderer.LightOrigin light:TileRenderer.LightOrigin.values()) {
+                        java.setLightOrigin(light);rust.setLightOrigin(light);compare(d,java,rust,zoom,true);
+                    }
+                }
+            }
+            Terrain.setCustomMaterial(0,new MixedMaterial("Live blobs",rows(),-1,null,1.2f));
+            TileRenderer java=renderer(d,0),rust=renderer(d,0);compare(d,java,rust,0,true);
+            Terrain.getCustomMaterial(0).edit("Edited strata",new MixedMaterial.Row[]{new MixedMaterial.Row(Material.SAND,10,1),new MixedMaterial.Row(Material.STONE,50,1)},
+                -1,MixedMaterial.Mode.LAYERED,1,null,new NoiseSettings(0,7,2,.7f),.25,-.5,true);
+            compare(d,java,rust,0,true);
+        }
+    }
+    @Test public void variableTerrainSeedsWrapExactlyAndMalformedModelsDoNotWritePixels() throws Exception {
+        requireLibrary();try(State ignored=new State()) {
+            bindings();Dimension source=fixture();Platform platform=source.getWorld().getPlatform();
+            for(long seed:new long[]{Long.MIN_VALUE,Long.MAX_VALUE,-89173}) {
+                Dimension d=new Dimension(new World2(platform,platform.minZ,platform.standardMaxHeight),"Seed",seed,source.getTileFactory(),source.getAnchor(),false);
+                // Fixture tiles remain read-only while checking independent world seeds.
+                for(Tile tile:source.getTiles())d.addTile(tile);
+                for(boolean strata:new boolean[]{false,true}) {
+                    Terrain.setCustomMaterial(0,strata?new MixedMaterial("Seeded strata",new MixedMaterial.Row[]{new MixedMaterial.Row(Material.STONE,10,1),new MixedMaterial.Row(Material.DIRT,50,1)},-1,null,new NoiseSettings(0,17,3,1.2f),-.7,.4,true)
+                        :new MixedMaterial("Seeded blobs",rows(),-1,null,1.2f));
+                    compare(d,renderer(d,0),renderer(d,0),0,true);
+                }
+            }
+            Terrain.setCustomMaterial(0,new MixedMaterial("Malformed frame fixture",rows(),-1,null,1.2f));
+            TileRenderer rust=renderer(source,0);draw(source,rust,true,0);
+            Field accessField=TileRenderer.class.getDeclaredField("viewportRenderAccess");accessField.setAccessible(true);
+            Object access=accessField.get(rust);Field frameField=ViewportRenderAccess.class.getDeclaredField("data");frameField.setAccessible(true);
+            java.nio.ByteBuffer sourceFrame=((java.nio.ByteBuffer)frameField.get(access)).duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            assertEquals(5,sourceFrame.getInt(4));int table=sourceFrame.getInt(108),model=sourceFrame.getInt(table+4),length=sourceFrame.limit();
+            java.nio.ByteBuffer invalid=java.nio.ByteBuffer.allocateDirect(length).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            sourceFrame.position(0);invalid.put(sourceFrame).position(0);invalid.putInt(model+72,1);
+            byte[] before=new byte[length];invalid.duplicate().get(before);
+            assertFalse(org.pepsoft.worldpainter.nativeapi.NativeSlices.renderViewportTile(invalid));
+            byte[] after=new byte[length];invalid.duplicate().get(after);assertArrayEquals(before,after);
+            compare(source,renderer(source,0),rust,0,true);
+        }
+    }}

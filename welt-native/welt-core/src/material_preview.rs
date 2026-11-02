@@ -18,9 +18,8 @@ fn float(b: &[u8], p: usize) -> f32 {
 fn double(b: &[u8], p: usize) -> f64 {
     f64::from_le_bytes(b[p..p + 8].try_into().unwrap())
 }
-fn round(v: f32) -> i32 {
-    (v as f64 + 0.5).floor() as i32
-}
+#[cfg(test)]
+use crate::material_field::round;
 
 /// Invalid frames are rejected before changing any output byte.
 pub fn fill(b: &mut [u8], w: &mut Workspace) -> bool {
@@ -148,20 +147,17 @@ pub fn fill(b: &mut [u8], w: &mut Workspace) -> bool {
         for y in 0..height {
             let z = (height - y - 1) as i32;
             let material = if mode == 2 {
-                let mut selected = rows - 1;
-                for r in (0..rows - 1).rev() {
-                    if w.noises[r].get_perlin_noise_3d_column_prepared(
-                        &mut w.columns[r],
-                        w.z_axes[r * height + y],
-                    ) >= float(b, 132 + r * 8)
-                    {
-                        selected = r;
-                    }
-                }
-                selected
+                crate::material_field::blob_choice(rows, |r| {
+                    (
+                        w.noises[r].get_perlin_noise_3d_column_prepared(
+                            &mut w.columns[r],
+                            w.z_axes[r * height + y],
+                        ),
+                        float(b, 132 + r * 8),
+                    )
+                })
             } else {
-                let mut fz = z as f32;
-                if octaves > 0 {
+                let variation = if octaves > 0 {
                     let mut noise = 0.0_f64;
                     for octave in 0..octaves as usize {
                         noise += w.noises[0].get_perlin_noise_3d_column_prepared(
@@ -169,18 +165,20 @@ pub fn fill(b: &mut [u8], w: &mut Workspace) -> bool {
                             w.z_axes[octave * height + y],
                         ) as f64;
                     }
-                    let value = (noise / octaves as f64 + 0.5) * noise_height;
-                    fz = (fz as f64 + (value - offset as f64)) as f32;
-                }
-                if repeat != 0 && slope != 0.0 {
-                    fz = (fz as f64 + slope * x as f64) as f32;
-                }
-                let rounded = round(fz);
-                if repeat != 0 {
-                    rounded.rem_euclid(palette as i32) as usize
+                    Some(((noise / octaves as f64 + 0.5) * noise_height, offset))
                 } else {
-                    rounded.clamp(0, palette as i32 - 1) as usize
-                }
+                    None
+                };
+                crate::material_field::layered_index(
+                    z as f32,
+                    variation,
+                    repeat != 0,
+                    slope,
+                    0.0,
+                    x as i32,
+                    0,
+                    palette as i32,
+                )
             };
             let at = out + (x + y * width) * 4;
             b[at..at + 4].copy_from_slice(&(material as i32).to_le_bytes());
