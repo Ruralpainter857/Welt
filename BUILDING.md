@@ -712,3 +712,101 @@ checks that these graphs keep the Java path and preserve all stored tile planes
 and random state. The `nested-slope` world-creation benchmark fixture is available
 for Java profiling; native `compare` remains a strict acceptance gate and is not
 expected to pass until this numerical compatibility issue is resolved.
+### Compact temporary preview worlds
+
+Palette storage is enabled by default for `MinecraftWorldObject`, including the
+temporary worlds built by the layer preview creator. Set
+`-Dwelt.compact.previewWorld=false` to restore the historical Java representation.
+Dimensions which cannot fit a flat Java array also retain the historical storage.
+
+The palette retains material identities and properties, with distinct AIR and
+null entries. An unsigned byte plane promotes to a Java char plane as needed,
+then to flat material references when the palette exceeds 65,536 entries.
+`wp.native.gen=true` permits one whole-plane JNI transaction for byte-to-char
+promotion when the release slices library is available; otherwise promotion
+stays in Java. Ordinary per-block reads and writes never call JNI. Storage is
+owned by the preview builder and published to readers after construction, as
+with the previous mutable world. Clones own their mutable planes independently.
+This change does not introduce persistence for preview objects: their historical
+Box field currently prevents Java serialization.
+
+Run `MinecraftWorldObjectStorageParityTest` after building the release library,
+with `-Dwelt.test.requirePreviewWorld=true` to require the native promotion test.
+It covers coordinate boundaries, nulls, material properties, reset, clones,
+Java/native promotion and palette exhaustion. The real GUI-module benchmark is
+`org.pepsoft.worldpainter.CompactLayerPreviewBenchmark`: set APPDATA to an isolated
+local directory and pass that directory as `welt.benchmark.configRoot`. It warms
+the JVM, alternates the storage representations, compares every material outside
+timing and measures complete preview construction including post-processing.
+`welt.benchmark.previewLayer` accepts `resources` (default), `frost`, `caverns`,
+`chasms`, `groundcover` or `pockets`. The last two use custom materials.
+For untimed parity smoke checks, use `welt.benchmark.previewWarmups=0` and
+`welt.benchmark.previewSamples=1`; their timings are not performance evidence.
+Resources offsets and the plant RNG are fixed only in the benchmark fixture.
+Other generation kernels are disabled in this storage comparison.
+For separate memory processes, set `welt.benchmark.previewSolo=true` and
+`welt.benchmark.previewCompact=false` or `true`. Heap/direct-memory reporting is
+included; process RSS must be sampled separately. The smaller core
+`MinecraftWorldObjectStorageBenchmark` measures only construction/population and
+must not be reported as a complete layer-preview or export benchmark.
+### Bicubic operators in coordinate-aware generation
+
+The opt-in coordinate graph route (`welt.native.coordinateGraphGeneration=true`,
+with native procedural generation enabled) supports `BicubicHeightMap` around
+supported graph children, including compositions with transforms and noise.
+Integer entry coordinates keep Java's direct child delegation; floating entry
+coordinates use its half-pixel shift, Catmull-Rom arithmetic order and corner
+clamp. WTGP v3 opcode 14 stores a child index and seven integers at offsets
+40..64: repeat/extent flags, cached width/height and the live extent rectangle.
+Older native libraries reject the new opcode and retain complete Java fallback.
+Unsupported children, including bitmap leaves handled by the separate bitmap
+pipeline, also keep the existing route.
+
+Interpolation reuses lattice samples inside Rust. Each bicubic node has a lazy,
+collision-checked cache of at most 8192 entries owned by the native worker.
+A tile epoch invalidates values between transactions, and changed program bytes
+replace the previous program and caches. No JNI call is made per sample.
+`BicubicHeightMap.copySamplingBounds` snapshots cached dimensions separately from
+the live extent so later rectangle edits do not change the historical clipping
+rules accidentally.
+
+Run `CoordinateHeightMapGenerationParityTest` with
+`-Dwelt.test.requireCoordinateGraph=true` and a release slices library. The tests
+compare raw double heights and all tile planes, including negative and large
+coordinates, integer/float domains, changed children/seeds, nested interpolation,
+worker reuse and invalid transactions. Rust graph tests cover cache collisions,
+fixed memory bounds, tile-epoch rollover and finite/repeating edge semantics.
+`BitmapWorldCreationBenchmark` accepts
+`-Dwelt.benchmark.creationSource=nested-bicubic` with the `compare` operation for
+warmed alternating trials of source sampling, tile storage, themes and dimension
+insertion. Use separate `java`/`rust` processes with
+`welt.benchmark.creationMemory=true` for retained-memory reporting and sample
+process RSS separately. This is a terrain-creation scenario, not an export or a
+measurement of overall application speed.
+### Compact tile undo history
+
+Tile undo history now shares unchanged immutable 16x16 pages between historical
+height, water and terrain grids. Byte/nibble layer maps copy only the layer first
+edited in a new history frame. Current tile reads still use ordinary Java arrays;
+there is no JNI call or decompression per cell. Cold history is reconstructed on
+undo/redo or snapshot reads and cached weakly. Historical versions own their
+pages independently, parent links are weak, and clearing/pruning/unregistering
+releases versions. Existing project stream fields and serialVersionUIDs remain
+unchanged; the compact wrappers are transient runtime undo state.
+
+This deliberately trades some history transition CPU/allocation cost for lower
+retained history memory. A live snapshot can retain reconstructed arrays in
+addition to the pages. Set `-Dwelt.tileHistory.compact=false` at JVM startup to
+restore the original undo representations; the setting is fixed at class load.
+BIT layers and seeds keep their existing storage. No native duplicate, global
+cache, background thread or modified external UndoManager dependency is added.
+
+`TileHistoryStorageTest` exercises full-state model parity, page/layer sharing,
+pruning, snapshot/save/load semantics and reference release. Run it along with
+`TileUndoSnapshotTest`, `TileUniformTerrainMemoryTest`, `TileRenderDataSnapshotTest`,
+`TileLayerBulkReadTest` and `SnapshotRandomParityTest`. The core test utility
+`TileHistoryBenchmark` supports `short`, `tall`, `noise`, `focus` and `focus-tall`
+profiles for complete strokes plus undo/redo, with checksum mode, retained heap,
+allocation and RSS reporting. Compare independent reference/new JVMs with the
+same warm-up and parameters; keep snapshots alive or release them explicitly
+when interpreting retained-memory results. Reports stay local.

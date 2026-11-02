@@ -36,6 +36,7 @@ public final class BitmapWorldCreationBenchmark {
             case "product-displacement" -> new ProductHeightMap(proceduralMap("displacement"),new ConstantHeightMap(.7));
             case "minimum-displacement" -> new MinimisingHeightMap(new ConstantHeightMap(90),proceduralMap("displacement"));
             case "fnl" -> new SumHeightMap(new ConstantHeightMap(32), new FastNoiseLiteHeightMap(160, .7, 3, 17));
+            case "nested-bicubic" -> new SumHeightMap(new TransformingHeightMap("Interpolated terrain",new BicubicHeightMap(map),1.7f,.65f,31,-47,.37f),new ConstantHeightMap(7));
             case "nested-shapes" -> new SumHeightMap(new TransformingHeightMap("Bands",new BandedHeightMap(31,43,19,177,false),1.7f,.65f,31,-47,.37f),
                     new TransformingHeightMap("Fractal",new MandelbrotHeightMap(),150,200,7,-11,.23f));
             case "nested-fnl" -> new SumHeightMap(new ConstantHeightMap(32),new DisplacementHeightMap("FNL deformation",

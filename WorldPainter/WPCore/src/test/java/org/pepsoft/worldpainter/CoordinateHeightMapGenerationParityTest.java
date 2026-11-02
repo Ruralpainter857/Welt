@@ -196,11 +196,50 @@ public class CoordinateHeightMapGenerationParityTest {
         var terrain=new java.util.TreeMap<Integer,Terrain>(); terrain.put(-65,Terrain.GRASS);
         var theme=new SimpleTheme(197,62,terrain,null,-64,320,false,false);
         return new HeightMapTileFactory(197+index,BitmapWorldCreationBenchmark.proceduralMap(
-                index%5==0?"nested-shapes":index%5==1?"nested-fnl":index%5==2?"nested-warp":index%5==3?"nested-affine":"nested-translate"),-64,320,false,theme);
+                index%6==0?"nested-bicubic":index%6==1?"nested-shapes":index%6==2?"nested-fnl":index%6==3?"nested-warp":index%6==4?"nested-affine":"nested-translate"),-64,320,false,theme);
     }
     @Test public void samplingMatrixSnapshotCannotChangeTheMap(){var map=new TransformingHeightMap("Matrix",new NoiseHeightMap(100,1,3,0),1.7f,.65f,31,-47,.37f);
         double before=map.getHeight(13,17);double[] matrix=new double[6];assertTrue(map.copySamplingMatrix(matrix));java.util.Arrays.fill(matrix,999);
         assertEquals(Double.doubleToLongBits(before),Double.doubleToLongBits(map.getHeight(13,17)));
+    }
+    @Test public void bicubicCompositionsKeepRawHeightsAndIntegerOverloads() throws Exception {
+        ready();
+        for(HeightMap child:new HeightMap[]{new NoiseHeightMap(130,.7,3,17),new BandedHeightMap(31,-13.75,19,177.125,false),new FastNoiseLiteHeightMap(130,.7,3,17)}) {
+            var bicubic=new BicubicHeightMap(child);
+            rawAndStorage(new SumHeightMap(transform(bicubic),new ConstantHeightMap(7)),-1,1);
+            rawAndStorage(new SumHeightMap(bicubic,new ConstantHeightMap(7)),1,-1);
+        }
+        rawAndStorage(BitmapWorldCreationBenchmark.proceduralMap("nested-bicubic"),-1,1);
+        rawAndStorage(BitmapWorldCreationBenchmark.proceduralMap("nested-bicubic"),131073,-131073);
+    }
+    @Test public void bicubicCacheTracksChildrenSeedsAndNestedInterpolation() throws Exception {
+        ready();var bicubic=new BicubicHeightMap(new NoiseHeightMap(130,.7,3,17));
+        var map=new SumHeightMap(transform(bicubic),new ConstantHeightMap(7));
+        rawAndStorage(map,-1,1);map.setSeed(-89173);rawAndStorage(map,1,-1);
+        bicubic.replace(0,new NoiseHeightMap(80,1.9,4,-37));rawAndStorage(map,-1,1);
+        rawAndStorage(new SumHeightMap(transform(new BicubicHeightMap(transform(bicubic))),new ConstantHeightMap(7)),0,0);
+    }
+    @Test public void invalidBicubicMetadataLeavesTheNativeTransactionUnchanged() throws Exception {
+        ready();rawAndStorage(BitmapWorldCreationBenchmark.proceduralMap("nested-bicubic"),-1,1);
+        ByteBuffer source=lastFrame();int length=source.getInt(8),patch=source.getInt(208),count=source.getInt(patch+12);
+        ByteBuffer invalid=ByteBuffer.allocateDirect(length).order(ByteOrder.LITTLE_ENDIAN);
+        source.position(0).limit(length);invalid.put(source).position(0);
+        int node=-1;for(int i=0;i<count;i++)if(invalid.getInt(patch+128+i*96)==14)node=i;
+        assertTrue(node>=0);invalid.putInt(patch+128+node*96+40,4);
+        byte[] before=new byte[length];invalid.duplicate().get(before);
+        assertFalse(org.pepsoft.worldpainter.nativeapi.NativeSlices.importHeightMapTile(invalid));
+        byte[] after=new byte[length];invalid.duplicate().get(after);assertArrayEquals(before,after);
+        rawAndStorage(BitmapWorldCreationBenchmark.proceduralMap("nested-bicubic"),1,-1);
+    }
+    @Test public void bicubicBoundsSnapshotAndUnsupportedChildrenRetainJava() {
+        ready();var image=new java.awt.image.BufferedImage(7,5,java.awt.image.BufferedImage.TYPE_BYTE_GRAY);
+        var bitmap=BitmapHeightMap.build().withImage(image).now();
+        for(boolean repeat:new boolean[]{false,true}) {
+            var bicubic=new BicubicHeightMap(bitmap,repeat);int[] bounds=new int[7];bicubic.copySamplingBounds(bounds);
+            assertArrayEquals(new int[]{repeat?3:2,7,5,0,0,7,5},bounds);
+            java.util.Arrays.fill(bounds,99);bicubic.copySamplingBounds(bounds);assertEquals(7,bounds[1]);
+            assertNull(CoordinateHeightMapSource.prepare(new SumHeightMap(transform(bicubic),new ConstantHeightMap(7)),0,0,128,128));
+        }
     }
     @Test public void nestedSlopesRetainCompleteJavaGenerationUntilRawMathIsCompatible() throws Exception {
         ready();

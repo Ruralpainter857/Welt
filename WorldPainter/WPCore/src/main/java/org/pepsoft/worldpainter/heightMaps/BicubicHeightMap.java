@@ -33,6 +33,14 @@ public class BicubicHeightMap extends DelegatingHeightMap {
         setHeightMap(0, baseHeightMap);
     }
 
+    /** Snapshot cached sampling dimensions and the live extent for a bulk native program. */
+    public void copySamplingBounds(int[] destination) {
+        if (destination.length < 7) throw new IllegalArgumentException("Seven sampling fields required");
+        destination[0] = (repeat ? 1 : 0) | (extent != null ? 2 : 0);
+        destination[1] = width; destination[2] = height;
+        destination[3] = extent == null ? 0 : extent.x; destination[4] = extent == null ? 0 : extent.y;
+        destination[5] = extent == null ? 0 : extent.width; destination[6] = extent == null ? 0 : extent.height;
+    }
     public boolean isRepeat() {
         return repeat;
     }

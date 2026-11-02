@@ -39,6 +39,7 @@ final class CoordinateHeightMapSource {
         final ByteBuffer data = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
         final IdentityHashMap<HeightMap, Boolean> visiting = new IdentityHashMap<>();
         final double[] matrix = new double[6];
+        final int[] samplingBounds = new int[7];
         int count;
         boolean nested;
 
@@ -54,7 +55,7 @@ final class CoordinateHeightMapSource {
                         : type == ProductHeightMap.class ? 4 : type == MinimisingHeightMap.class ? 5
                         : type == MaximisingHeightMap.class ? 6 : type == TransformingHeightMap.class ? 8
                         : type == DisplacementHeightMap.class ? 9 : type == FastNoiseLiteHeightMap.class ? 11
-                        : type == BandedHeightMap.class ? 12 : type == MandelbrotHeightMap.class ? 13 : -1;
+                        : type == BandedHeightMap.class ? 12 : type == MandelbrotHeightMap.class ? 13 : type == BicubicHeightMap.class ? 14 : -1;
                 if (opcode < 0) {
                     return -1;
                 }
@@ -76,6 +77,14 @@ final class CoordinateHeightMapSource {
                     left = append(((TransformingHeightMap) map).getBaseHeightMap(), depth + 1);
                     if (left < 0) return -1;
                 }
+                if (opcode == 14) {
+                    BicubicHeightMap bicubic = (BicubicHeightMap) map;
+                    left = append(bicubic.getHeightMap(0), depth + 1);
+                    if (left < 0) return -1;
+                    bicubic.copySamplingBounds(samplingBounds);
+                    if ((samplingBounds[0] & 2) != 0 && (samplingBounds[1] <= 0 || samplingBounds[2] <= 0)) return -1;
+                    nested = true;
+                }
                 if (opcode == 9) {
                     DisplacementHeightMap displacement = (DisplacementHeightMap) map;
                     left = append(displacement.getBaseHeightMap(), depth + 1);
@@ -95,7 +104,9 @@ final class CoordinateHeightMapSource {
                             || noise.getScale() <= 0 || noise.getOctaves() > 10) return -1;
                     data.putDouble(p + 16, noise.getHeight()).putDouble(p + 24, noise.getScale())
                             .putLong(p + 32, noise.getSeed() + noise.getSeedOffset()).putInt(p + 40, noise.getOctaves());
-                } else if (opcode == 12) {
+                } else if (opcode == 14) {
+                    ((BicubicHeightMap) map).copySamplingBounds(samplingBounds);
+                    for (int i = 0; i < samplingBounds.length; i++) data.putInt(p + 40 + i * 4, samplingBounds[i]);                } else if (opcode == 12) {
                     BandedHeightMap bands = (BandedHeightMap) map;
                     long total = (long) bands.getSegment1Length() + bands.getSegment2Length();
                     if (bands.isSmooth() || bands.getSegment1Length() <= 0 || bands.getSegment2Length() <= 0 || total > Integer.MAX_VALUE

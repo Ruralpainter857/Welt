@@ -34,6 +34,7 @@ enum Node {
     Constant(f64),
     Banded(i32, f64, i32, f64),
     Mandelbrot,
+    Bicubic(usize, [i32; 7], std::cell::RefCell<LatticeCache>),
     Noise(NoiseHeightMapBulk),
     FastNoise(fastnoise_lite::FastNoiseLite, f64),
     Binary(i32, usize, usize),
@@ -41,6 +42,56 @@ enum Node {
     Affine(usize, [f64; 6]),
     Displacement(usize, usize, usize),
     FixedDisplacement(usize, usize, f64, f64),
+}
+// Fixed-size, collision-checked lattice storage. A tile epoch prevents cross-tile stale values.
+// Each native worker owns its Program; no global cache or Java/native duplicate is retained.
+#[derive(Clone, Copy, Default)]
+struct LatticeEntry {
+    coordinates: u64,
+    value: f64,
+    epoch: u32,
+}
+struct LatticeCache {
+    entries: Vec<LatticeEntry>,
+    epoch: u32,
+}
+impl Default for LatticeCache {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            epoch: 1,
+        }
+    }
+}
+impl LatticeCache {
+    fn key(x: i32, y: i32) -> (usize, u64) {
+        let slot =
+            ((x as u32).wrapping_mul(0x9e37) ^ (y as u32).wrapping_mul(0x85eb)) as usize & 8191;
+        (slot, x as u32 as u64 | ((y as u32 as u64) << 32))
+    }
+    fn get(&self, x: i32, y: i32) -> Option<f64> {
+        let (slot, coordinates) = Self::key(x, y);
+        let entry = *self.entries.get(slot)?;
+        (entry.epoch == self.epoch && entry.coordinates == coordinates).then_some(entry.value)
+    }
+    fn insert(&mut self, x: i32, y: i32, value: f64) {
+        let (slot, coordinates) = Self::key(x, y);
+        if self.entries.is_empty() {
+            self.entries.resize(8192, LatticeEntry::default());
+        }
+        self.entries[slot] = LatticeEntry {
+            coordinates,
+            value,
+            epoch: self.epoch,
+        };
+    }
+    fn next_tile(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+        if self.epoch == 0 {
+            self.entries.fill(LatticeEntry::default());
+            self.epoch = 1;
+        }
+    }
 }
 #[derive(Default)]
 struct Program {
@@ -100,6 +151,20 @@ impl Program {
                         return Err(WeltError::IllegalArgument);
                     }
                     Node::Banded(first, a, second, b)
+                }
+                14 => {
+                    let bounds = std::array::from_fn(|i| word(r, 40 + i * 4));
+                    if !(0..=3).contains(&bounds[0])
+                        || bounds[0] & 1 != 0 && bounds[0] & 2 == 0
+                        || bounds[0] & 2 != 0 && (bounds[1] <= 0 || bounds[2] <= 0)
+                    {
+                        return Err(WeltError::IllegalArgument);
+                    }
+                    Node::Bicubic(
+                        child(left)?,
+                        bounds,
+                        std::cell::RefCell::new(LatticeCache::default()),
+                    )
                 }
                 13 => Node::Mandelbrot,
                 11 => {
@@ -176,6 +241,51 @@ impl Program {
         self.bytes.extend_from_slice(records);
         Ok(())
     }
+    fn sample_extended(
+        &self,
+        child: usize,
+        bounds: &[i32; 7],
+        mut x: f32,
+        mut y: f32,
+    ) -> Result<f64, WeltError> {
+        if bounds[0] & 1 != 0 {
+            let modulo = |a: f32, b: f32| {
+                if a < 0.0 {
+                    a + (-a / b).ceil() * b
+                } else if a >= b {
+                    a - (a / b).floor() * b
+                } else {
+                    a
+                }
+            };
+            x = modulo(x, bounds[1] as f32);
+            y = modulo(y, bounds[2] as f32);
+        } else if bounds[0] & 2 != 0 {
+            let inside = bounds[5] > 0
+                && bounds[6] > 0
+                && x as f64 >= bounds[3] as f64
+                && y as f64 >= bounds[4] as f64
+                && (x as f64) < bounds[3] as f64 + bounds[5] as f64
+                && (y as f64) < bounds[4] as f64 + bounds[6] as f64;
+            if !inside {
+                x = if x < 0.0 {
+                    0.0
+                } else if x < bounds[1] as f32 {
+                    x
+                } else {
+                    bounds[1] as f32 - 1.0
+                };
+                y = if y < 0.0 {
+                    0.0
+                } else if y < bounds[2] as f32 {
+                    y
+                } else {
+                    bounds[2] as f32 - 1.0
+                };
+            }
+        }
+        self.sample(child, Coordinates::Float(x, y))
+    }
     fn sample(&self, index: usize, coords: Coordinates) -> Result<f64, WeltError> {
         Ok(match &self.nodes[index] {
             Node::Constant(value) => *value,
@@ -183,6 +293,73 @@ impl Program {
                 let (x, y) = coords.doubles();
                 noise.get_value(x, y)
             }
+            Node::Bicubic(child, bounds, cache) => match coords {
+                Coordinates::Integer(x, y) => {
+                    let (x, y) = if bounds[0] & 1 != 0 {
+                        (x.rem_euclid(bounds[1]), y.rem_euclid(bounds[2]))
+                    } else {
+                        (x, y)
+                    };
+                    self.sample(*child, Coordinates::Integer(x, y))?
+                }
+                Coordinates::Float(x, y) => {
+                    let half = |v: f32| {
+                        if v == 0.0 || v.is_nan() {
+                            v
+                        } else if v < 0.0 {
+                            -1.0
+                        } else {
+                            1.0
+                        }
+                    };
+                    let x = x - half(x) / 2.0;
+                    let y = y - half(y) / 2.0;
+                    let ix = x.floor() as i32;
+                    let iy = y.floor() as i32;
+                    let dx = x - ix as f32;
+                    let dy = y - iy as f32;
+                    let sample = |a: i32, b: i32| -> Result<f64, WeltError> {
+                        if let Some(value) = cache.borrow().get(a, b) {
+                            return Ok(value);
+                        }
+                        let value = self.sample_extended(*child, bounds, a as f32, b as f32)?;
+                        cache.borrow_mut().insert(a, b, value);
+                        Ok(value)
+                    };
+                    let a = sample(ix, iy)?;
+                    let b = sample(ix, iy.wrapping_add(1))?;
+                    let c = sample(ix.wrapping_add(1), iy)?;
+                    let d = sample(ix.wrapping_add(1), iy.wrapping_add(1))?;
+                    let minimum = java_min(java_min(a, b), java_min(c, d));
+                    let maximum = java_max(java_max(a, b), java_max(c, d));
+                    let mut rows = [0.0; 4];
+                    for (row, target) in rows.iter_mut().enumerate() {
+                        let col = ix.wrapping_add(row as i32 - 1);
+                        let (middle_a, middle_b) = if row == 1 {
+                            (a, b)
+                        } else if row == 2 {
+                            (c, d)
+                        } else {
+                            (sample(col, iy)?, sample(col, iy.wrapping_add(1))?)
+                        };
+                        *target = cubic(
+                            sample(col, iy.wrapping_sub(1))?,
+                            middle_a,
+                            middle_b,
+                            sample(col, iy.wrapping_add(2))?,
+                            dy,
+                        );
+                    }
+                    let result = cubic(rows[0], rows[1], rows[2], rows[3], dx);
+                    if result < minimum {
+                        minimum
+                    } else if result > maximum {
+                        maximum
+                    } else {
+                        result
+                    }
+                }
+            },
             Node::Mandelbrot => {
                 let (x0, y0) = coords.floats();
                 let mut x = 0_f32;
@@ -281,6 +458,13 @@ impl Program {
         })
     }
 }
+// Preserve Java promotion of the float fraction and the original arithmetic order (no FMA).
+fn cubic(y0: f64, y1: f64, y2: f64, y3: f64, fraction: f32) -> f64 {
+    let mu = fraction as f64;
+    y1 + 0.5
+        * mu
+        * (y2 - y0 + mu * (2.0 * y0 - 5.0 * y1 + 4.0 * y2 - y3 + mu * (3.0 * (y1 - y2) + y3 - y0)))
+}
 fn java_min(a: f64, b: f64) -> f64 {
     if a.is_nan() || b.is_nan() {
         f64::NAN
@@ -369,6 +553,11 @@ pub(crate) fn fill_source(data: &[u8], base: usize, output: &mut [f64]) -> Resul
     PROGRAM.with(|worker| {
         let mut p = worker.borrow_mut();
         p.configure(&d[HEADER..])?;
+        for node in &p.nodes {
+            if let Node::Bicubic(_, _, cache) = node {
+                cache.borrow_mut().next_tile();
+            }
+        }
         for y in 0..height as usize {
             for x in 0..width as usize {
                 output[y * width as usize + x] = p.sample(
@@ -552,5 +741,103 @@ mod tests {
             affine([0.0, 2.0, 3.0, 0.0, 4.0, 5.0], 7.0, 11.0),
             (37.0, 19.0)
         );
+    }
+}
+
+#[cfg(test)]
+mod bicubic_lattice_tests {
+    use super::*;
+    #[test]
+    fn lattice_checks_collisions_preserves_bits_and_expires_on_tile_change() {
+        let mut cache = LatticeCache::default();
+        assert!(cache.entries.is_empty());
+        assert_eq!(cache.get(-7, 11), None);
+        cache.insert(-7, 11, -0.0);
+        assert_eq!(cache.get(-7, 11).unwrap().to_bits(), (-0.0_f64).to_bits());
+        cache.insert(-7 + 8192, 11, 19.0);
+        assert_eq!(cache.get(-7, 11), None);
+        assert_eq!(cache.get(-7 + 8192, 11), Some(19.0));
+        for i in 0..50_000 {
+            cache.insert(i, -i, i as f64);
+        }
+        assert_eq!(cache.entries.len(), 8192);
+        cache.next_tile();
+        assert_eq!(cache.get(49_999, -49_999), None);
+        cache.epoch = u32::MAX;
+        cache.insert(1, 2, 3.0);
+        cache.next_tile();
+        assert_eq!(cache.epoch, 1);
+        assert_eq!(cache.get(1, 2), None);
+    }
+    fn program(bounds: [i32; 7]) -> Program {
+        Program {
+            bytes: vec![],
+            nodes: vec![
+                Node::Banded(31, 43.0, 19, 177.0),
+                Node::Bicubic(0, bounds, std::cell::RefCell::new(LatticeCache::default())),
+            ],
+        }
+    }
+    #[test]
+    fn integer_entry_bypasses_interpolation_and_repeating_coordinates_wrap() {
+        let p = program([0, -1, -1, 0, 0, 0, 0]);
+        for x in [i32::MIN, -1, 0, 1, 16_777_217, i32::MAX] {
+            assert_eq!(
+                p.sample(1, Coordinates::Integer(x, 7)).unwrap().to_bits(),
+                p.sample(0, Coordinates::Integer(x, 7)).unwrap().to_bits()
+            );
+        }
+        let p = program([3, 7, 5, 0, 0, 7, 5]);
+        assert_eq!(
+            p.sample(1, Coordinates::Integer(-1, -1)).unwrap().to_bits(),
+            p.sample(0, Coordinates::Integer(6, 4)).unwrap().to_bits()
+        );
+        assert_eq!(
+            p.sample_extended(0, &[3, 7, 5, 0, 0, 7, 5], -1.0, -1.0)
+                .unwrap()
+                .to_bits(),
+            p.sample(0, Coordinates::Float(6.0, 4.0)).unwrap().to_bits()
+        );
+    }
+    #[test]
+    fn finite_float_edges_extend_and_cold_cache_does_not_change_results() {
+        let bounds = [2, 7, 5, 0, 0, 7, 5];
+        let p = program(bounds);
+        for (x, expected) in [(-100.0, 0.0), (2.0, 2.0), (100.0, 6.0)] {
+            assert_eq!(
+                p.sample_extended(0, &bounds, x, -100.0).unwrap().to_bits(),
+                p.sample(0, Coordinates::Float(expected, 0.0))
+                    .unwrap()
+                    .to_bits()
+            );
+        }
+        for (x, y) in [(-1.25, -0.0), (0.0, 0.0), (3.75, 1.25), (100.0, -100.0)] {
+            let before = p.sample(1, Coordinates::Float(x, y)).unwrap();
+            if let Node::Bicubic(_, _, cache) = &p.nodes[1] {
+                cache.borrow_mut().next_tile();
+            }
+            assert_eq!(
+                before.to_bits(),
+                p.sample(1, Coordinates::Float(x, y)).unwrap().to_bits()
+            );
+        }
+    }
+    #[test]
+    fn malformed_bicubic_metadata_keeps_the_previously_configured_program() {
+        let mut records = vec![0_u8; STRIDE * 2];
+        records[..4].copy_from_slice(&0_i32.to_le_bytes());
+        records[16..24].copy_from_slice(&7_f64.to_le_bytes());
+        records[STRIDE..STRIDE + 4].copy_from_slice(&14_i32.to_le_bytes());
+        records[STRIDE + 44..STRIDE + 48].copy_from_slice(&(-1_i32).to_le_bytes());
+        records[STRIDE + 48..STRIDE + 52].copy_from_slice(&(-1_i32).to_le_bytes());
+        let mut p = Program::default();
+        p.configure(&records).unwrap();
+        let valid = records.clone();
+        for (offset, value) in [(40, 4_i32), (40, 1), (4, 1)] {
+            records.clone_from(&valid);
+            records[STRIDE + offset..STRIDE + offset + 4].copy_from_slice(&value.to_le_bytes());
+            assert!(p.configure(&records).is_err());
+            assert_eq!(p.bytes, valid);
+        }
     }
 }
