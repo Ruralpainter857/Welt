@@ -789,3 +789,32 @@ mod indexed_states_tests {
         assert_eq!(states, [2]);
     }
 }
+/// Preserve linear (including column-major) indices while promoting one whole palette plane.
+pub fn widen_indices(source: &[u8], output: &mut [u16]) -> bool {
+    if source.len() != output.len() || source.len() > 16 * 1024 * 1024 {
+        return false;
+    }
+    for (target, value) in output.iter_mut().zip(source) {
+        *target = *value as u16;
+    }
+    true
+}
+#[cfg(test)]
+mod widening_tests {
+    use super::*;
+    #[test]
+    fn every_byte_value_survives_palette_promotion() {
+        let source: Vec<u8> = (0..=255).collect();
+        let mut output = vec![999; 256];
+        assert!(widen_indices(&source, &mut output));
+        for (i, v) in output.iter().enumerate() {
+            assert_eq!(*v, i as u16);
+        }
+    }
+    #[test]
+    fn invalid_promotion_preserves_output() {
+        let mut output = [999; 3];
+        assert!(!widen_indices(&[0, 1], &mut output));
+        assert_eq!(output, [999; 3]);
+    }
+}

@@ -570,3 +570,42 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
     }
     result
 }
+/// # Safety
+/// Primitive arrays stay alive and are borrowed only for this bounded conversion.
+/// No allocation, callbacks, locks or unrelated JVM calls occur while arrays are critical.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeWidenMaterialIndices(
+    env: *mut JNIEnv,
+    _class: jclass,
+    source: jobject,
+    output: jobject,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            let bad = WeltError::IllegalArgument as jint;
+            if source.is_null() || output.is_null() {
+                return bad;
+            }
+            type Length = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
+            let length: Length = std::mem::transmute(function(env, GET_ARRAY_LENGTH));
+            let count = length(env, source);
+            if !(1..=16_777_216).contains(&count) || length(env, output) != count {
+                return bad;
+            }
+            let Some(input) = critical_array::CriticalArray::acquire(env, source, JNI_ABORT) else {
+                return bad;
+            };
+            let Some(target) = critical_array::CriticalArray::acquire(env, output, 0) else {
+                return bad;
+            };
+            if welt_objects::material_volume::widen_indices(
+                slice::from_raw_parts(input.pointer.cast::<u8>(), count as usize),
+                slice::from_raw_parts_mut(target.pointer.cast::<u16>(), count as usize),
+            ) {
+                WeltError::Ok as jint
+            } else {
+                bad
+            }
+        })
+    }
+}

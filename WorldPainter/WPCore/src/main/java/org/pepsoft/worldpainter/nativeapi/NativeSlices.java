@@ -1901,5 +1901,14 @@ public final class NativeSlices {
         catch (UnsatisfiedLinkError e) { return false; }
     }
     private static native int nativeScaleBitmapBrush(byte[] source, float level, byte[] output);
+    /** Promote a complete mutable material plane without per-block JNI calls. */
+    public static boolean widenMaterialIndices(byte[] source, char[] output) {
+        if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || source == null || output == null
+                || source.length < 1 || source.length > 16777216 || output.length != source.length) return false;
+        try { return nativeWidenMaterialIndices(source, output) == 0; }
+        catch (UnsatisfiedLinkError e) { return false; }
+    }
+    private static native int nativeWidenMaterialIndices(byte[] source, char[] output);
+
     static native int nativeAbiVersion();
 }

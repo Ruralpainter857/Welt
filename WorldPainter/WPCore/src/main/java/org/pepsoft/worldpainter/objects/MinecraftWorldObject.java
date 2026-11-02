@@ -18,6 +18,9 @@ import org.pepsoft.worldpainter.exporting.VirtualChunk;
 
 import javax.vecmath.Point3i;
 import java.io.Serializable;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -81,33 +84,28 @@ public final class MinecraftWorldObject implements MinecraftWorld, WPObject {
         dy = volume.getY1();
         dz = volume.getZ1();
         dimensions = new Point3i(volume.getWidth(), volume.getLength(), volume.getHeight());
-        blocks = new Material[volume.getWidth()][volume.getLength()][volume.getHeight()];
-        for (Material[][] slice: blocks) {
-            for (Material[] column: slice) {
-                Arrays.fill(column, AIR);
-                if (lowestBlocks != null) {
-                    System.arraycopy(this.lowestBlocks, 0, column, 0, this.lowestBlocks.length);
+        if (compactEnabled(volume.getWidth(), volume.getLength(), volume.getHeight())) {
+            compactBlocks = new MutableMaterialVolume(volume.getWidth(), volume.getLength(), volume.getHeight(), lowestBlocks);
+        } else {
+            blocks = new Material[volume.getWidth()][volume.getLength()][volume.getHeight()];
+            for (Material[][] slice: blocks) {
+                for (Material[] column: slice) {
+                    Arrays.fill(column, AIR);
+                    if (lowestBlocks != null) System.arraycopy(lowestBlocks, 0, column, 0, lowestBlocks.length);
                 }
             }
         }
     }
-
-    // Copy constructor for clone()
-    private MinecraftWorldObject(String name, Box volume, int maxHeight, int waterLevel, Material[][][] blocks, Material[] lowestBlocks, Point3i offset) {
-        this.name = name;
-        this.volume = volume;
-        this.maxHeight = maxHeight;
-        this.waterLevel = waterLevel;
-        this.blocks = blocks;
-        this.lowestBlocks = lowestBlocks;
-        dx = volume.getX1();
-        dy = volume.getY1();
-        dz = volume.getZ1();
-        dimensions = new Point3i(volume.getWidth(), volume.getLength(), volume.getHeight());
-        this.offset = offset;
+    private MinecraftWorldObject(MinecraftWorldObject source) {
+        name = source.name; volume = source.volume.clone(); maxHeight = source.maxHeight; waterLevel = source.waterLevel;
+        dx = source.dx; dy = source.dy; dz = source.dz;
+        dimensions = (Point3i) source.dimensions.clone(); offset = (Point3i) source.offset.clone();
+        lowestBlocks = source.lowestBlocks == null ? null : source.lowestBlocks.clone();
+        blocks = source.blocks == null ? null : copyLegacy(source.blocks);
+        compactBlocks = source.compactBlocks == null ? null : source.compactBlocks.copy();
     }
-    
     public void reset() {
+        if (compactBlocks != null) { compactBlocks.reset(lowestBlocks); return; }
         for (Material[][] slice: blocks) {
             for (Material[] row: slice) {
                 Arrays.fill(row, AIR);
@@ -131,7 +129,7 @@ public final class MinecraftWorldObject implements MinecraftWorld, WPObject {
     @Override
     public int getBlockTypeAt(int x, int y, int height) {
         if (volume.contains(x, y, height)) {
-            return blocks[x - dx][y - dy][height - dz].blockType;
+            return materialAtRelative(x - dx, y - dy, height - dz).blockType;
         } else {
             return BLK_AIR;
         }
@@ -140,7 +138,7 @@ public final class MinecraftWorldObject implements MinecraftWorld, WPObject {
     @Override
     public int getDataAt(int x, int y, int height) {
         if (volume.contains(x, y, height)) {
-            return blocks[x - dx][y - dy][height - dz].data;
+            return materialAtRelative(x - dx, y - dy, height - dz).data;
         } else {
             return 0;
         }
@@ -149,7 +147,7 @@ public final class MinecraftWorldObject implements MinecraftWorld, WPObject {
     @Override
     public Material getMaterialAt(int x, int y, int height) {
         if (volume.contains(x, y, height)) {
-            return blocks[x - dx][y - dy][height - dz];
+            return materialAtRelative(x - dx, y - dy, height - dz);
         } else {
             return AIR;
         }
@@ -168,7 +166,7 @@ public final class MinecraftWorldObject implements MinecraftWorld, WPObject {
     @Override
     public void setMaterialAt(int x, int y, int height, Material material) {
         if (volume.contains(x, y, height)) {
-            blocks[x - dx][y - dy][height - dz] = material;
+            putRelative(x - dx, y - dy, height - dz, material);
         }
     }
 
@@ -234,7 +232,7 @@ public final class MinecraftWorldObject implements MinecraftWorld, WPObject {
                 int blockX = (chunk.getxPos() << 4) | x, blockY = (chunk.getzPos() << 4) | z;
                 if (volume.containsXY(blockX, blockY)) {
                     for (int y = Math.min(chunk.getHighestNonAirBlock(x, z), dz + volume.getHeight() - 1); y >= dz; y--) {
-                        blocks[blockX - dx][blockY - dy][y - dz] = chunk.getMaterial(x, y, z);
+                        putRelative(blockX - dx, blockY - dy, y - dz, chunk.getMaterial(x, y, z));
                     }
                 }
             }
@@ -245,7 +243,7 @@ public final class MinecraftWorldObject implements MinecraftWorld, WPObject {
     public int getHighestNonAirBlock(int x, int y) {
         if (volume.containsXY(x, y)) {
             for (int z = volume.getHeight() - 1; z >= 0; z--) {
-                if (blocks[x - dx][y - dy][z] != null) {
+                if (materialAtRelative(x - dx, y - dy, z) != null) {
                     return z + dz;
                 }
             }
@@ -289,12 +287,12 @@ public final class MinecraftWorldObject implements MinecraftWorld, WPObject {
 
     @Override
     public Material getMaterial(int x, int y, int z) {
-        return blocks[x][y][z];
+        return materialAtRelative(x, y, z);
     }
 
     @Override
     public boolean getMask(int x, int y, int z) {
-        return blocks[x][y][z] != null;
+        return materialAtRelative(x, y, z) != null;
     }
 
     @Override
@@ -345,13 +343,50 @@ public final class MinecraftWorldObject implements MinecraftWorld, WPObject {
     @Override
     @SuppressWarnings("CloneDoesntCallSuperClone")
     public MinecraftWorldObject clone() {
-        return new MinecraftWorldObject(name, volume.clone(), maxHeight, waterLevel, blocks.clone(), lowestBlocks.clone(), (Point3i) offset.clone());
+        return new MinecraftWorldObject(this);
     }
+
+    private Material materialAtRelative(int x, int y, int z) {
+        return compactBlocks == null ? blocks[x][y][z] : compactBlocks.get(x, y, z);
+    }
+    private void putRelative(int x, int y, int z, Material material) {
+        if (compactBlocks == null) blocks[x][y][z] = material; else compactBlocks.set(x, y, z, material);
+    }
+    private static boolean compactEnabled(int width, int length, int height) {
+        return Boolean.parseBoolean(System.getProperty("welt.compact.previewWorld", "true")) && width >= 0 && length >= 0 && height >= 0
+                && (height == 0 || (long) width * length <= Integer.MAX_VALUE / height);
+    }
+    private static Material[][][] copyLegacy(Material[][][] source) {
+        Material[][][] copy = source.clone();
+        for (int x = 0; x < copy.length; x++) if (source[x] != null) {
+            copy[x] = source[x].clone();
+            for (int y = 0; y < copy[x].length; y++) if (source[x][y] != null) copy[x][y] = source[x][y].clone();
+        }
+        return copy;
+    }
+    // Retain the historical field layout; Box currently prevents Java serialization.
+    private void writeObject(ObjectOutputStream out) throws IOException {
+        ObjectOutputStream.PutField fields = out.putFields();
+        fields.put("name", name); fields.put("volume", volume); fields.put("dx", dx); fields.put("dy", dy); fields.put("dz", dz);
+        fields.put("maxHeight", maxHeight); fields.put("waterLevel", waterLevel); fields.put("dimensions", dimensions);
+        fields.put("offset", offset); fields.put("lowestBlocks", lowestBlocks);
+        fields.put("blocks", compactBlocks == null ? blocks : compactBlocks.toLegacy());
+        out.writeFields();
+    }
+    private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+        in.defaultReadObject();
+        if (compactEnabled(volume.getWidth(), volume.getLength(), volume.getHeight())) {
+            compactBlocks = MutableMaterialVolume.fromLegacy(blocks, volume.getWidth(), volume.getLength(), volume.getHeight());
+            if (compactBlocks != null) blocks = null;
+        }
+    }
+    private static final long serialVersionUID = 5054283000984305244L;
 
     private final String name;
     private final Box volume;
     private final int dx, dy, dz, maxHeight, waterLevel;
     private final Point3i dimensions, offset;
-    private final Material[][][] blocks;
+    private Material[][][] blocks;
+    private transient MutableMaterialVolume compactBlocks;
     private final Material[] lowestBlocks;
 }
