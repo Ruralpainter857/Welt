@@ -13,8 +13,46 @@ import static org.pepsoft.minecraft.Constants.DEFAULT_WATER_LEVEL;
 
 /** One renderer-owned compact WVR frame, borrowed by Rust only during JNI. */
 final class ViewportRenderAccess {
+    /**
+     * A linked surface intersection (WVR versions 7..10), filled by the renderer for each tile and reused. The linked
+     * heights are copied into the frame; nothing here is retained by native code.
+     */
+    static final class Intersection {
+        void ceiling(int reflection) {
+            mode = 1;
+            this.reflection = reflection;
+        }
+
+        void tunnelRoof(int roofMode, int level, int min, int max, int minZ, int maxZ) {
+            mode = 2;
+            this.roofMode = roofMode;
+            this.level = level;
+            this.min = min;
+            this.max = max;
+            this.minZ = minZ;
+            this.maxZ = maxZ;
+            noise = false;
+        }
+
+        void noise(double dHeight, double scale, int octaves, long seed, int offset) {
+            noise = true;
+            this.dHeight = dHeight;
+            this.scale = scale;
+            this.octaves = octaves;
+            this.seed = seed;
+            noiseOffset = offset;
+        }
+
+        /** Full resolution linked heights, one per cell, in Java's {@code x + y * 128} order. */
+        final int[] linkedHeights = new int[AREA];
+        private int mode, reflection, roofMode, level, min, max, minZ, maxZ, octaves, noiseOffset;
+        private boolean noise;
+        private double dHeight, scale;
+        private long seed;
+    }
+
     private static final Terrain[] TERRAINS = Terrain.values();
-    private static final int HEADER = 128, AREA = 16384, HALO = 130 * 130, MAX_BYTES = 4194304;
+    private static final int AREA = 16384, HALO = 130 * 130, MAX_BYTES = 4194304;
     private final int[] colours = new int[TERRAINS.length];
     private final byte[] planned = new byte[TERRAINS.length];
     private final MixedMaterial[] mixtures = new MixedMaterial[TERRAINS.length];
@@ -102,10 +140,22 @@ final class ViewportRenderAccess {
     }
     private static int bytes(int bits, int area) { return bits == 0 ? 8 : (area * bits + 7) / 8; }
 
+    /** A tile without linked surface intersection (WVR versions 3..6). */
     boolean render(Tile tile, TileProvider provider, Layer[] layers, LayerRenderer[] renderers,
                    float[] surfaces, int[] heights, int[] water, byte[] terrains, boolean contours, int separation, int light,
                    boolean hideFluids, boolean bottomless, boolean voidPresent, boolean missingPresent, boolean lavaPresent,
                    int waterColour, int lavaColour, int bedrockColour, int voidColour, int missingColour, int[] output, int shift) {
+        return render(tile, provider, layers, renderers, surfaces, heights, water, terrains, contours, separation, light, hideFluids,
+                bottomless, voidPresent, missingPresent, lavaPresent, waterColour, lavaColour, bedrockColour, voidColour, missingColour,
+                output, shift, null);
+    }
+
+    /** @param intersection The tile's linked surface intersection (WVR versions 7..10), or {@code null} for none. */
+    boolean render(Tile tile, TileProvider provider, Layer[] layers, LayerRenderer[] renderers,
+                   float[] surfaces, int[] heights, int[] water, byte[] terrains, boolean contours, int separation, int light,
+                   boolean hideFluids, boolean bottomless, boolean voidPresent, boolean missingPresent, boolean lavaPresent,
+                   int waterColour, int lavaColour, int bedrockColour, int voidColour, int missingColour, int[] output, int shift,
+                   Intersection intersection) {
         if (tile.getClass() != Tile.class || provider.getClass() != Dimension.class
                 || TERRAINS.length > 256 || contours && separation == 0) return false;
         if (shift < 0 || shift > 7) return false;
@@ -143,7 +193,9 @@ final class ViewportRenderAccess {
             Tile[] edges = {provider.getTile(tile.getX(), tile.getY() - 1), provider.getTile(tile.getX(), tile.getY() + 1),
                     provider.getTile(tile.getX() - 1, tile.getY()), provider.getTile(tile.getX() + 1, tile.getY())};
             for (Tile edge : edges) if (edge != null && edge.getClass() != Tile.class) return false;
-            int palette = HEADER, table = palette + colours.length * 4, terrainOffset = table + models.size() * 32;
+            // The intersection variants extend the 128 byte header to 208 bytes
+            int header = (intersection != null) ? 208 : 128;
+            int palette = header, table = palette + colours.length * 4, terrainOffset = table + models.size() * 32;
             int heightOffset = terrainOffset + area, heightBytes = compact ? area * 20 : HALO * 4;
             int wetOffset = heightOffset + heightBytes, planes = wetOffset + heightBytes;
             int end = planes; for (Model model : models) end += bytes(model.bits, area);
@@ -154,11 +206,13 @@ final class ViewportRenderAccess {
                 required += 16 + (paint.getRed() == null ? 0 : paint.getW() * paint.getH() * 16);
             }
             if (mixtureCount != 0) required += mixtureBytes + area * 4;
+            if (intersection != null) required += AREA * 4;
             if (required > MAX_BYTES) return false;
             if (data == null || data.capacity() < required) data = ByteBuffer.allocateDirect(required).order(ByteOrder.LITTLE_ENDIAN);
             data.clear().limit(required);
-            for (int i = 0; i < HEADER; i += 8) data.putLong(i, 0L);
-            data.putInt(0, 0x31525657).putInt(4, mixtureCount == 0 ? (compact ? 4 : 3) : (compact ? 6 : 5)).putInt(8, models.size()).putInt(12, colours.length)
+            for (int i = 0; i < header; i += 8) data.putLong(i, 0L);
+            int version = (mixtureCount == 0 ? (compact ? 4 : 3) : (compact ? 6 : 5)) + ((intersection != null) ? 4 : 0);
+            data.putInt(0, 0x31525657).putInt(4, version).putInt(8, models.size()).putInt(12, colours.length)
                     .putInt(16, tile.getMinHeight()).putInt(20, (contours ? 1 : 0) | (hideFluids ? 2 : 0) | (bottomless ? 4 : 0))
                     .putInt(24, separation).putInt(28, light).putInt(32, waterColour).putInt(36, lavaColour)
                     .putInt(40, bedrockColour).putInt(44, voidColour).putInt(48, missingColour)
@@ -257,6 +311,22 @@ final class ViewportRenderAccess {
                 java.nio.FloatBuffer floats = data.slice().order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
                 if (compact) tile.copySampledRenderHeights(shift, floats); else floats.put(surfaces, 0, area);
                 offset += area * 4;
+            }
+            if (intersection != null) {
+                data.putInt(128, intersection.mode).putInt(132, offset);
+                if (intersection.mode == 1) {
+                    data.putInt(136, intersection.reflection);
+                } else {
+                    data.putInt(136, intersection.roofMode).putInt(140, intersection.level).putInt(144, intersection.min)
+                            .putInt(148, intersection.max).putInt(152, intersection.minZ).putInt(156, intersection.maxZ);
+                    if (intersection.noise) {
+                        data.putInt(160, 1).putInt(164, intersection.octaves).putDouble(168, intersection.dHeight)
+                                .putDouble(176, intersection.scale).putLong(184, intersection.seed).putInt(192, intersection.noiseOffset);
+                    }
+                }
+                data.position(offset);
+                data.slice().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer().put(intersection.linkedHeights);
+                offset += AREA * 4;
             }
             data.putInt(64, offset); data.limit(offset + area * 4);
             data.position(0);

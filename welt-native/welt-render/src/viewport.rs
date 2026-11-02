@@ -1,14 +1,86 @@
-//! WVR versions 1 through 6: tile composition, compact overlays and deterministic terrain fields.
+//! WVR versions 1 through 10: tile composition, compact overlays and deterministic terrain fields.
+//!
+//! Versions 7 to 10 are versions 3 to 6 plus a linked surface intersection (ceiling/floor dimensions or tunnel
+//! roofs), described by a header extension at bytes 128..208 and one plane of linked heights.
 use crate::shade::java_multiply;
 
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
 #[cfg(test)]
 const AREA: usize = 16384;
+/// Cells of a full resolution tile plane (the linked heights are always full resolution).
+const AREA_FULL: usize = 16384;
 const HALO: usize = 130 * 130;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderError {
     InvalidFrame,
 }
+/// Parameters of a Java `NoiseHeightMap` (its `getHeight(int, int)`), with the seed already combined with the offset.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NoiseParams {
+    pub d_height: f64,
+    pub scale: f64,
+    pub octaves: i32,
+    pub seed: i64,
+}
+
+/// Evaluates tunnel roof noise for an intersection frame. Implemented by the JNI layer, which owns the noise code.
+pub trait NoiseSource {
+    /// Fill `output[col + row * width]` with `(int) noise.getHeight(origin_x + (col << shift), origin_y + (row << shift))`
+    /// (Java's saturating cast). Returns false when the parameters are not supported.
+    fn fill(
+        &self,
+        params: &NoiseParams,
+        origin_x: i32,
+        origin_y: i32,
+        width: usize,
+        shift: u32,
+        output: &mut [i32],
+    ) -> bool;
+}
+
+/// The linked surface intersection of a version 7..10 frame.
+#[derive(Clone, Copy)]
+enum Intersection {
+    None,
+    Ceiling {
+        linked: usize,
+        reflection: i32,
+    },
+    TunnelRoof {
+        linked: usize,
+        mode: i32,
+        level: i32,
+        min: i32,
+        max: i32,
+        min_z: i32,
+        max_z: i32,
+        noise: Option<(NoiseParams, i32)>,
+    },
+}
+
+/// Java's `TileRenderer.CEILING_PATTERN`, indexed `[x & 7][y & 7]`.
+const CEILING_PATTERN: [[bool; 8]; 8] = [
+    [true, true, false, false, true, true, false, false],
+    [false, true, true, true, true, false, false, false],
+    [false, false, true, true, false, false, false, false],
+    [false, true, true, true, true, false, false, false],
+    [true, true, false, false, true, true, false, false],
+    [true, false, false, false, false, true, true, true],
+    [false, false, false, false, false, false, true, true],
+    [true, false, false, false, false, true, true, true],
+];
+
+/// Java's `MathUtils.clamp(int, int, int)`.
+fn clamp(min: i32, value: i32, max: i32) -> i32 {
+    if value < min {
+        min
+    } else if value > max {
+        max
+    } else {
+        value
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Plane {
     bits: usize,
@@ -149,6 +221,7 @@ fn paint(plane: Plane, data: &[u8], x: i32, y: i32, colour: i32, value: i32) -> 
 #[derive(Default)]
 pub struct Workspace {
     materials: Vec<welt_core::material_field::Workspace>,
+    noise: Vec<i32>,
 }
 
 pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
@@ -156,16 +229,34 @@ pub fn render(data: &mut [u8]) -> Result<(), RenderError> {
 }
 
 pub fn render_with_workspace(data: &mut [u8], worker: &mut Workspace) -> Result<(), RenderError> {
+    render_with_noise(data, worker, None)
+}
+
+/// Renders a frame; tunnel roof intersections with noise require a `noise` source and are rejected without one.
+pub fn render_with_noise(
+    data: &mut [u8],
+    worker: &mut Workspace,
+    noise: Option<&dyn NoiseSource>,
+) -> Result<(), RenderError> {
     let bad = RenderError::InvalidFrame;
     if data.len() < 128
         || data.len() > MAX_BYTES
         || int(data, 0) != 0x31525657
-        || !matches!(int(data, 4), 1..=6)
+        || !matches!(int(data, 4), 1..=10)
     {
         return Err(bad);
     }
     let count = int(data, 8) as usize;
-    let version = int(data, 4);
+    // Versions 7..10 are the intersection variants of 3..6; `version` keeps meaning the base layout below
+    let extended = int(data, 4) >= 7;
+    let version = if extended {
+        int(data, 4) - 4
+    } else {
+        int(data, 4)
+    };
+    if extended && data.len() < 208 {
+        return Err(bad);
+    }
     let shift = if matches!(version, 4 | 6) {
         let shift = int(data, 104);
         if !(1..=7).contains(&shift) {
@@ -192,7 +283,7 @@ pub fn render_with_workspace(data: &mut [u8], worker: &mut Workspace) -> Result<
     {
         return Err(bad);
     }
-    let palette = 128;
+    let palette = if extended { 208 } else { 128 };
     let table = palette + palette_count * 4;
     let terrain = table + count * 32;
     let heights = terrain + area;
@@ -374,6 +465,68 @@ pub fn render_with_workspace(data: &mut [u8], worker: &mut Workspace) -> Result<
             }
         }
     }
+    let mut intersection = Intersection::None;
+    if extended {
+        let mode = int(data, 128);
+        let linked = int(data, 132) as usize;
+        if !matches!(mode, 1 | 2)
+            || linked != cursor
+            || cursor + AREA_FULL * 4 > data.len()
+            || data[200..208].iter().any(|&b| b != 0)
+        {
+            return Err(bad);
+        }
+        cursor += AREA_FULL * 4;
+        intersection = if mode == 1 {
+            if data[140..200].iter().any(|&b| b != 0) {
+                return Err(bad);
+            }
+            Intersection::Ceiling {
+                linked,
+                reflection: int(data, 136),
+            }
+        } else {
+            let roof_mode = int(data, 136);
+            let noise_flag = int(data, 160);
+            if !(0..=2).contains(&roof_mode) || !matches!(noise_flag, 0 | 1) {
+                return Err(bad);
+            }
+            let noise_params = if noise_flag == 1 {
+                let params = NoiseParams {
+                    d_height: f64::from_bits(word(data, 168)),
+                    scale: f64::from_bits(word(data, 176)),
+                    octaves: int(data, 164),
+                    seed: word(data, 184) as i64,
+                };
+                if !(1..=10).contains(&params.octaves)
+                    || !params.d_height.is_finite()
+                    || !params.scale.is_finite()
+                    || params.scale == 0.0
+                {
+                    return Err(bad);
+                }
+                Some((params, int(data, 192)))
+            } else {
+                if data[164..196].iter().any(|&b| b != 0) {
+                    return Err(bad);
+                }
+                None
+            };
+            if data[196..200].iter().any(|&b| b != 0) {
+                return Err(bad);
+            }
+            Intersection::TunnelRoof {
+                linked,
+                mode: roof_mode,
+                level: int(data, 140),
+                min: int(data, 144),
+                max: int(data, 148),
+                min_z: int(data, 152),
+                max_z: int(data, 156),
+                noise: noise_params,
+            }
+        };
+    }
     let output = cursor;
     if int(data, 64) as usize != output
         || output + area * 4 != data.len()
@@ -391,11 +544,30 @@ pub fn render_with_workspace(data: &mut [u8], worker: &mut Workspace) -> Result<
         }
         *mask = index;
     }
+    let origin_x = if version >= 3 { int(data, 96) } else { 0 };
+    let origin_y = if version >= 3 { int(data, 100) } else { 0 };
+    if let Intersection::TunnelRoof {
+        noise: Some((params, _)),
+        ..
+    } = intersection
+    {
+        // Evaluated into the worker's buffer before the first output write; refused noise rejects the frame
+        let source = noise.ok_or(bad)?;
+        worker.noise.resize(area, 0);
+        if !source.fill(
+            &params,
+            origin_x,
+            origin_y,
+            width,
+            shift,
+            &mut worker.noise[..area],
+        ) {
+            return Err(bad);
+        }
+    }
     // All descriptors and bounds are validated before the first output write.
     let min = int(data, 16);
     let hide_fluids = flags & 2 != 0;
-    let origin_x = if version >= 3 { int(data, 96) } else { 0 };
-    let origin_y = if version >= 3 { int(data, 100) } else { 0 };
     worker
         .materials
         .resize_with(selector_count, Default::default);
@@ -429,6 +601,18 @@ pub fn render_with_workspace(data: &mut [u8], worker: &mut Workspace) -> Result<
                 |index: i32| index >= 0 && planes[index as usize].value(data, x, y, cell) != 0;
             let colour = if set(masks[1]) || set(masks[2]) {
                 int(data, 48)
+            } else if intersects(
+                &intersection,
+                data,
+                &worker.noise,
+                heights + halo * 4,
+                x,
+                y,
+                cell,
+            ) && (compact || CEILING_PATTERN[x & 7][y & 7])
+            {
+                // Java writes opaque black without shading, the full block when zoomed out
+                0xff000000u32 as i32
             } else if set(masks[0]) {
                 int(data, 44)
             } else {
@@ -535,6 +719,69 @@ pub fn render_with_workspace(data: &mut [u8], worker: &mut Workspace) -> Result<
         }
     }
     Ok(())
+}
+
+/// Java's `oppositesOverlap` for one rendered cell at tile coordinates (x, y).
+fn intersects(
+    intersection: &Intersection,
+    data: &[u8],
+    noise: &[i32],
+    height_at: usize,
+    x: usize,
+    y: usize,
+    cell: usize,
+) -> bool {
+    match *intersection {
+        Intersection::None => false,
+        Intersection::Ceiling { linked, reflection } => {
+            reflection.wrapping_sub(int(data, linked + (x + y * 128) * 4)) <= int(data, height_at)
+        }
+        Intersection::TunnelRoof {
+            linked,
+            mode,
+            level,
+            min,
+            max,
+            min_z,
+            max_z,
+            noise: noise_settings,
+        } => {
+            let terrain = int(data, linked + (x + y * 128) * 4);
+            let offset = match noise_settings {
+                Some((_, noise_offset)) => noise[cell].wrapping_sub(noise_offset),
+                None => 0,
+            };
+            int(data, height_at) >= roof_level(mode, terrain, level, min, max, min_z, max_z, offset)
+        }
+    }
+}
+
+/// Java's `TunnelLayerHelper.calculateRoofLevel()` for CONSTANT_DEPTH (0), FIXED_HEIGHT (1) and INVERTED_DEPTH (2),
+/// with `offset` the roof noise term, in int arithmetic.
+#[allow(clippy::too_many_arguments)]
+fn roof_level(
+    mode: i32,
+    terrain: i32,
+    level: i32,
+    min: i32,
+    max: i32,
+    min_z: i32,
+    max_z: i32,
+    offset: i32,
+) -> i32 {
+    match mode {
+        0 => clamp(
+            min_z,
+            clamp(min, terrain.wrapping_sub(level), max).wrapping_add(offset),
+            max_z,
+        ),
+        1 => clamp(min_z, level.wrapping_add(offset), max_z),
+        _ => clamp(
+            min_z,
+            clamp(min, level.wrapping_sub(terrain.wrapping_sub(level)), max).wrapping_add(offset),
+            max_z,
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -956,5 +1203,240 @@ mod tests {
             assert!(render(&mut invalid).is_err());
             assert_eq!(invalid, before);
         }
+    }
+
+    /// A flat full resolution (version 7) or compact shift 2 (version 8) intersection frame of height 64 with one
+    /// palette colour and no layers; `linked` gives the linked height of each full resolution cell.
+    fn intersection_frame(
+        compact: bool,
+        header: &[(usize, i32)],
+        linked: impl Fn(usize, usize) -> i32,
+    ) -> Vec<u8> {
+        let shift = if compact { 2 } else { 0 };
+        let width = 128 >> shift;
+        let area = width * width;
+        let terrain = 212;
+        let heights = terrain + area;
+        let height_bytes = if compact { area * 20 } else { HALO * 4 };
+        let wet = heights + height_bytes;
+        let plane = wet + height_bytes;
+        let output = plane + AREA_FULL * 4;
+        let mut data = vec![0; output + area * 4];
+        for (p, v) in [
+            (0, 0x31525657),
+            (4, if compact { 8 } else { 7 }),
+            (12, 1),
+            (28, 4),
+            (52, terrain as i32),
+            (56, heights as i32),
+            (60, wet as i32),
+            (64, output as i32),
+            (68, 208),
+            (72, 212),
+            (80, -1),
+            (84, -1),
+            (88, -1),
+            (92, -1),
+            (96, -256),
+            (100, 128),
+            (104, shift as i32),
+            (132, plane as i32),
+            (208, 0x123456),
+        ] {
+            data[p..p + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        for &(p, v) in header {
+            data[p..p + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        for i in 0..height_bytes / 4 {
+            data[heights + i * 4..heights + i * 4 + 4].copy_from_slice(&64i32.to_le_bytes());
+            data[wet + i * 4..wet + i * 4 + 4].copy_from_slice(&i32::MIN.to_le_bytes());
+        }
+        for y in 0..128 {
+            for x in 0..128 {
+                let p = plane + (x + y * 128) * 4;
+                data[p..p + 4].copy_from_slice(&linked(x, y).to_le_bytes());
+            }
+        }
+        data
+    }
+
+    fn pixel(data: &[u8], cell: usize) -> u32 {
+        int(data, int(data, 64) as usize + cell * 4) as u32
+    }
+
+    #[test]
+    fn ceiling_intersection_uses_the_pattern_at_full_zoom_and_whole_blocks_when_zoomed_out() {
+        // Reflection 150: overlap where 150 - linked <= 64, i.e. linked >= 86, here for x < 64
+        let linked = |x: usize, _y: usize| if x < 64 { 86 } else { 85 };
+        let mut full = intersection_frame(false, &[(128, 1), (136, 150)], linked);
+        render(&mut full).unwrap();
+        for y in 0..128 {
+            for x in 0..128 {
+                let expected = if x < 64 && CEILING_PATTERN[x & 7][y & 7] {
+                    0xff000000
+                } else {
+                    0xff123456
+                };
+                assert_eq!(pixel(&full, x + y * 128), expected, "({x}, {y})");
+            }
+        }
+        let mut compact = intersection_frame(true, &[(128, 1), (136, 150)], linked);
+        render(&mut compact).unwrap();
+        for row in 0..32 {
+            for col in 0..32 {
+                let expected = if (col << 2) < 64 {
+                    0xff000000
+                } else {
+                    0xff123456
+                };
+                assert_eq!(pixel(&compact, col + row * 32), expected, "({col}, {row})");
+            }
+        }
+        // Java's int arithmetic: a reflection point near MIN_VALUE wraps
+        let mut wrapped = intersection_frame(false, &[(128, 1), (136, i32::MIN)], |_, _| 1);
+        render(&mut wrapped).unwrap();
+        assert_eq!(pixel(&wrapped, 0), 0xff123456); // MIN_VALUE - 1 = MAX_VALUE > 64
+    }
+
+    #[test]
+    fn roof_levels_follow_java_clamps_and_int_overflow() {
+        assert_eq!(clamp(10, 5, 0), 10);
+        assert_eq!(clamp(10, 20, 0), 0);
+        // A missing detail tile gives Integer.MIN_VALUE as terrain height
+        assert_eq!(roof_level(0, i32::MIN, 18, -60, 280, -63, 319, 0), 280);
+        assert_eq!(roof_level(2, i32::MIN, 18, -60, 280, -63, 319, 0), -60);
+        assert_eq!(roof_level(1, i32::MIN, 44, -60, 280, -63, 319, 3), 47);
+        assert_eq!(roof_level(0, 70, 18, -60, 280, -63, 319, -5), 47);
+        assert_eq!(roof_level(2, 70, 18, -60, 280, -63, 319, 2), -32);
+        assert_eq!(roof_level(1, 70, i32::MAX, -60, 280, -63, 319, 1), -63); // MAX_VALUE + 1 wraps below minZ
+    }
+
+    struct ConstantNoise(i32, std::cell::Cell<usize>);
+    impl NoiseSource for ConstantNoise {
+        fn fill(
+            &self,
+            params: &NoiseParams,
+            origin_x: i32,
+            origin_y: i32,
+            width: usize,
+            shift: u32,
+            output: &mut [i32],
+        ) -> bool {
+            assert_eq!(
+                (
+                    params.octaves,
+                    params.seed,
+                    origin_x,
+                    origin_y,
+                    width,
+                    shift
+                ),
+                (2, 99, -256, 128, 128, 0)
+            );
+            output.fill(self.0);
+            self.1.set(self.1.get() + 1);
+            true
+        }
+    }
+
+    #[test]
+    fn tunnel_roof_intersection_with_noise_requires_a_noise_source() {
+        // CONSTANT_DEPTH, level 18, noise value 30 with offset 10: roof = clamp(-63, clamp(-60, terrain - 18, 280) + 20, 319)
+        let header = [
+            (128, 2),
+            (136, 0),
+            (140, 18),
+            (144, -60),
+            (148, 280),
+            (152, -63),
+            (156, 319),
+            (160, 1),
+            (164, 2),
+            (168, (1.0_f64.to_bits() & 0xffff_ffff) as i32),
+            (172, (1.0_f64.to_bits() >> 32) as i32),
+            (176, (2.0_f64.to_bits() & 0xffff_ffff) as i32),
+            (180, (2.0_f64.to_bits() >> 32) as i32),
+            (184, 99),
+            (192, 10),
+        ];
+        // Terrain 62 gives roof 64 (intersects at height 64), 63 gives roof 65 (does not)
+        let valid = intersection_frame(false, &header, |x, _| if x < 64 { 62 } else { 63 });
+        let mut data = valid.clone();
+        assert!(render(&mut data).is_err());
+        assert_eq!(data, valid, "rejected frame must be unchanged");
+        let noise = ConstantNoise(30, std::cell::Cell::new(0));
+        render_with_noise(&mut data, &mut Workspace::default(), Some(&noise)).unwrap();
+        assert_eq!(noise.1.get(), 1);
+        for y in 0..128 {
+            for x in 0..128 {
+                let expected = if x < 64 && CEILING_PATTERN[x & 7][y & 7] {
+                    0xff000000
+                } else {
+                    0xff123456
+                };
+                assert_eq!(pixel(&data, x + y * 128), expected, "({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_intersection_extensions_are_rejected_before_writing() {
+        let ceiling = [(128, 1), (136, 150)];
+        for (p, v) in [
+            (128, 3_i32), // Unknown mode
+            (128, 0),
+            (132, 0), // Linked plane not where the layout puts it
+            (140, 1), // Tunnel fields in a ceiling frame
+            (160, 1),
+            (200, 1), // Reserved
+            (204, 1),
+        ] {
+            let mut data = intersection_frame(false, &ceiling, |_, _| 0);
+            data[p..p + 4].copy_from_slice(&v.to_le_bytes());
+            let before = data.clone();
+            assert!(render(&mut data).is_err(), "offset {p} value {v}");
+            assert_eq!(data, before);
+        }
+        let roof = [(128, 2), (136, 0), (152, -63), (156, 319)];
+        for (p, v) in [
+            (136, 3_i32),
+            (160, 2),
+            (164, 1), /* noise settings without noise */
+            (196, 1),
+        ] {
+            let mut data = intersection_frame(false, &roof, |_, _| 0);
+            data[p..p + 4].copy_from_slice(&v.to_le_bytes());
+            let before = data.clone();
+            assert!(render(&mut data).is_err(), "offset {p} value {v}");
+            assert_eq!(data, before);
+        }
+        for octaves in [0_i32, 11] {
+            let mut data = intersection_frame(
+                false,
+                &[
+                    (128, 2),
+                    (160, 1),
+                    (164, octaves),
+                    (176, 0),
+                    (180, 0x3ff0_0000),
+                ],
+                |_, _| 0,
+            );
+            let before = data.clone();
+            assert!(render_with_noise(
+                &mut data,
+                &mut Workspace::default(),
+                Some(&ConstantNoise(0, Default::default()))
+            )
+            .is_err());
+            assert_eq!(data, before);
+        }
+        // A version 7 frame is too short for the extension; an old layout (palette at 128) is not accepted as 7
+        let mut short = intersection_frame(false, &ceiling, |_, _| 0);
+        short[68..72].copy_from_slice(&128_i32.to_le_bytes());
+        let before = short.clone();
+        assert!(render(&mut short).is_err());
+        assert_eq!(short, before);
     }
 }

@@ -167,6 +167,24 @@ public class TunnelLayerHelper {
         return (float) wallDistanceCache.getHeight(x, y);
     }
 
+    /**
+     * The exact parameters of the roof noise this helper adds in {@link #calculateRoofLevel}, for code that evaluates
+     * it elsewhere: {@code (int) noise.getHeight(x, y) - offset}. The noise is fixed when the helper is created.
+     *
+     * @return The roof noise parameters, or {@code null} if this helper applies no roof noise.
+     */
+    public RoofNoise getRoofNoise() {
+        return (roofNoise != null)
+                ? new RoofNoise(roofNoise.getHeight(), roofNoise.getScale(), roofNoise.getOctaves(), roofNoise.getSeed() + roofNoise.getSeedOffset(), roofNoiseOffset)
+                : null;
+    }
+
+    /**
+     * Immutable parameters of a {@link NoiseHeightMap} as used for the roof level, with the seed already combined with
+     * the seed offset.
+     */
+    public record RoofNoise(double height, double scale, int octaves, long effectiveSeed, int offset) { }
+
     private final TunnelLayer layer;
     private final Dimension floorDimension;
     private final NoiseHeightMap floorNoise, roofNoise;

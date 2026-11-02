@@ -131,6 +131,8 @@ public final class TileRenderer {
         TileProvider relatedTileProvider = null;
         boolean renderCeilingIntersection = false, renderTunnelRoofIntersection = false;
         TunnelLayerHelper tunnelLayerHelper = null;
+        TunnelLayerHelper.RoofNoise roofNoise = null;
+        TunnelLayer roofTunnelLayer = null;
         if ((dimension != null) && (dimension.getWorld() != null)) {
             platform = dimension.getWorld().getPlatform();
             final Anchor anchor = dimension.getAnchor();
@@ -145,6 +147,9 @@ public final class TileRenderer {
                         relatedTileProvider = detailDimension;
                         renderTunnelRoofIntersection = true;
                         tunnelLayerHelper = new TunnelLayerHelper(tunnelLayer, detailDimension, true);
+                        // Fixed when the helper is created
+                        roofNoise = tunnelLayerHelper.getRoofNoise();
+                        roofTunnelLayer = tunnelLayer;
                     }
                 }
             }
@@ -155,6 +160,8 @@ public final class TileRenderer {
         this.renderCeilingIntersection = renderCeilingIntersection;
         this.renderTunnelRoofIntersection = renderTunnelRoofIntersection;
         this.tunnelLayerHelper = tunnelLayerHelper;
+        this.roofTunnelLayer = roofTunnelLayer;
+        this.roofNoise = roofNoise;
         this.zoom = zoom;
         this.colourRamp = colourRamp;
         this.colourScheme = colourScheme;
@@ -229,21 +236,80 @@ public final class TileRenderer {
 //        synchronized (tile) {
 
         final int tileX = tile.getX(), tileY = tile.getY();
-        final boolean compactViewport = zoom >= -7 && zoom < 0 && !renderCeilingIntersection && !renderTunnelRoofIntersection
-                && colourScheme == ColourScheme.DEFAULT && !hiddenLayers.contains(TERRAIN_AS_LAYER)
-                && tile.getX() >= -(1 << 24) && tile.getX() < (1 << 24) && tile.getY() >= -(1 << 24) && tile.getY() < (1 << 24)
+        final boolean viewportCandidate = colourScheme == ColourScheme.DEFAULT && !hiddenLayers.contains(TERRAIN_AS_LAYER)
                 && Native.isRenderEnabled() && Boolean.getBoolean("welt.native.viewport") && NativeLoader.areSlicesAvailable();
+        // An intersection is rendered natively when it can be described to the WVR frame; otherwise Java renders it
+        ViewportRenderAccess.Intersection intersection = null;
+        boolean nativeIntersection = !renderCeilingIntersection && !renderTunnelRoofIntersection;
+        if (viewportCandidate && !nativeIntersection && ((zoom == 0) || ((zoom >= -7) && (zoom < 0)))) {
+            final int prepared = prepareIntersection(tileX, tileY);
+            nativeIntersection = prepared != INTERSECTION_UNSUPPORTED;
+            intersection = (prepared == INTERSECTION_PREPARED) ? viewportIntersection : null;
+        }
+        final boolean compactViewport = zoom >= -7 && zoom < 0 && nativeIntersection && viewportCandidate
+                && tile.getX() >= -(1 << 24) && tile.getX() < (1 << 24) && tile.getY() >= -(1 << 24) && tile.getY() < (1 << 24);
         if (!compactViewport) tile.copyRenderDataTo(floatHeightCache, intHeightCache, intFluidHeightCache, terrainOrdinalCache);
 
-        // Determine which coordinates, if any, have heights which would intersect with the opposite tile, if any
         final boolean bottomless, topLayersRelativeToTerrain;
         final long seed;
-        boolean noOpposites = true;
         if (tileProvider instanceof Dimension) {
-            final Dimension dim = (Dimension) tileProvider, oppositeDim = (Dimension) relatedTileProvider;
+            final Dimension dim = (Dimension) tileProvider;
             bottomless = dim.isBottomless();
             topLayersRelativeToTerrain = dim.getTopLayerAnchor() == Dimension.LayerAnchor.TERRAIN;
             seed = dim.getSeed();
+        } else {
+            bottomless = false;
+            topLayersRelativeToTerrain = false;
+            seed = 0L;
+        }
+
+        // Biome defaults to 255 (no overlay); only stored biome data belongs in this per-pixel list.
+        final List<Layer> tileLayers = tile.getLayers();
+        final List<Layer> layerList = new ArrayList<>(tileLayers);
+        layerList.removeAll(hiddenLayers);
+        final boolean hideTerrain = hiddenLayers.contains(TERRAIN_AS_LAYER);
+        final boolean hideFluids = hiddenLayers.contains(FLUIDS_AS_LAYER);
+        if (hiddenLayers.contains(ALL_TUNNELS_AS_LAYER)) {
+            layerList.removeIf(layer -> layer instanceof TunnelLayer);
+        }
+        final boolean _void = layerList.contains(org.pepsoft.worldpainter.layers.Void.INSTANCE), notAllBlocksPresent = layerList.contains(NotPresent.INSTANCE) || layerList.contains(NotPresentBlock.INSTANCE);
+        if (hideAllLayers) {
+            layerList.clear();
+        } else {
+            layerList.removeIf(layer -> (layer instanceof Void) || (layer instanceof NotPresent) || (layer instanceof NotPresentBlock));
+        }
+        final Layer[] layers = layerList.toArray(new Layer[layerList.size()]);
+        final LayerRenderer[] renderers = new LayerRenderer[layers.length];
+        for (int i = 0; i < layers.length; i++) {
+            renderers[i] = getRenderer(layers[i]);
+        }
+        if ((zoom == 0 || compactViewport) && !hideTerrain && nativeIntersection && viewportCandidate) {
+            if (viewportRenderAccess == null) viewportRenderAccess = new ViewportRenderAccess(platform);
+            if (viewportRenderAccess.render(tile, tileProvider, layers, renderers, floatHeightCache, intHeightCache, intFluidHeightCache,
+                    terrainOrdinalCache, contourLines, contourSeparation, lightOrigin.ordinal(), hideFluids, bottomless,
+                    _void, notAllBlocksPresent, !hideFluids && tileLayers.contains(FloodWithLava.INSTANCE),
+                    waterColour, lavaColour, bedrockColour, voidColour, notPresentColour, renderBuffer, -zoom, intersection)) {
+                if (!copyRenderBufferToArgbImage(image, dx, dy)) {
+                    Graphics2D graphics = (Graphics2D) image.getGraphics();
+                    try {
+                        graphics.setComposite(AlphaComposite.Src);
+                        if (zoom == 0) graphics.drawImage(bufferedImage, dx, dy, null);
+                        else {
+                            int size = 128 >> -zoom;
+                            graphics.drawImage(bufferedImage, dx, dy, dx + size, dy + size, 0, 0, size, size, null);
+                        }
+                    }
+                    finally { graphics.dispose(); }
+                }
+                return;
+            }
+        }
+        if (compactViewport) tile.copyRenderDataTo(floatHeightCache, intHeightCache, intFluidHeightCache, terrainOrdinalCache);
+
+        // Determine which coordinates, if any, have heights which would intersect with the opposite tile, if any
+        boolean noOpposites = true;
+        if (tileProvider instanceof Dimension) {
+            final Dimension dim = (Dimension) tileProvider, oppositeDim = (Dimension) relatedTileProvider;
             if (renderCeilingIntersection) {
                 final int reflectionPoint = (dim.getAnchor().invert ? dim.getCeilingHeight() : oppositeDim.getCeilingHeight()) + oppositeDim.getMinHeight();
                 final Tile relatedTile = oppositeDim.getTile(tile.getX(), tile.getY());
@@ -275,57 +341,7 @@ public final class TileRenderer {
                     }
                 }
             }
-        } else {
-            bottomless = false;
-            topLayersRelativeToTerrain = false;
-            seed = 0L;
         }
-
-        // Biome defaults to 255 (no overlay); only stored biome data belongs in this per-pixel list.
-        final List<Layer> tileLayers = tile.getLayers();
-        final List<Layer> layerList = new ArrayList<>(tileLayers);
-        layerList.removeAll(hiddenLayers);
-        final boolean hideTerrain = hiddenLayers.contains(TERRAIN_AS_LAYER);
-        final boolean hideFluids = hiddenLayers.contains(FLUIDS_AS_LAYER);
-        if (hiddenLayers.contains(ALL_TUNNELS_AS_LAYER)) {
-            layerList.removeIf(layer -> layer instanceof TunnelLayer);
-        }
-        final boolean _void = layerList.contains(org.pepsoft.worldpainter.layers.Void.INSTANCE), notAllBlocksPresent = layerList.contains(NotPresent.INSTANCE) || layerList.contains(NotPresentBlock.INSTANCE);
-        if (hideAllLayers) {
-            layerList.clear();
-        } else {
-            layerList.removeIf(layer -> (layer instanceof Void) || (layer instanceof NotPresent) || (layer instanceof NotPresentBlock));
-        }
-        final Layer[] layers = layerList.toArray(new Layer[layerList.size()]);
-        final LayerRenderer[] renderers = new LayerRenderer[layers.length];
-        for (int i = 0; i < layers.length; i++) {
-            renderers[i] = getRenderer(layers[i]);
-        }
-        if ((zoom == 0 || compactViewport) && !hideTerrain && !renderCeilingIntersection && !renderTunnelRoofIntersection
-                && colourScheme == ColourScheme.DEFAULT && Native.isRenderEnabled()
-                && Boolean.parseBoolean(System.getProperty("welt.native.viewport", "false"))
-                && NativeLoader.areSlicesAvailable()) {
-            if (viewportRenderAccess == null) viewportRenderAccess = new ViewportRenderAccess(platform);
-            if (viewportRenderAccess.render(tile, tileProvider, layers, renderers, floatHeightCache, intHeightCache, intFluidHeightCache,
-                    terrainOrdinalCache, contourLines, contourSeparation, lightOrigin.ordinal(), hideFluids, bottomless,
-                    _void, notAllBlocksPresent, !hideFluids && tileLayers.contains(FloodWithLava.INSTANCE),
-                    waterColour, lavaColour, bedrockColour, voidColour, notPresentColour, renderBuffer, -zoom)) {
-                if (!copyRenderBufferToArgbImage(image, dx, dy)) {
-                    Graphics2D graphics = (Graphics2D) image.getGraphics();
-                    try {
-                        graphics.setComposite(AlphaComposite.Src);
-                        if (zoom == 0) graphics.drawImage(bufferedImage, dx, dy, null);
-                        else {
-                            int size = 128 >> -zoom;
-                            graphics.drawImage(bufferedImage, dx, dy, dx + size, dy + size, 0, 0, size, size, null);
-                        }
-                    }
-                    finally { graphics.dispose(); }
-                }
-                return;
-            }
-        }
-        if (compactViewport) tile.copyRenderDataTo(floatHeightCache, intHeightCache, intFluidHeightCache, terrainOrdinalCache);
         layerValueSnapshot.prepare(tile, layers, _void, notAllBlocksPresent,
                 (!hideFluids) && tileLayers.contains(FloodWithLava.INSTANCE));
 
@@ -435,6 +451,59 @@ public final class TileRenderer {
             }
         }
 //        }
+    }
+
+    /**
+     * Describe this tile's intersection for the native viewport frame, with the same inputs as the Java mask below:
+     * the linked tile's rounded heights and the settings read at this moment.
+     *
+     * @return {@link #INTERSECTION_PREPARED}, {@link #INTERSECTION_NONE} if Java would find no intersection at all
+     * (no opposite tile), or {@link #INTERSECTION_UNSUPPORTED} if Java must render the tile.
+     */
+    private int prepareIntersection(int tileX, int tileY) {
+        if (!(tileProvider instanceof Dimension) || !(relatedTileProvider instanceof Dimension)) {
+            return INTERSECTION_UNSUPPORTED;
+        }
+        final Dimension dim = (Dimension) tileProvider, relatedDim = (Dimension) relatedTileProvider;
+        final Tile relatedTile = relatedDim.getTile(tileX, tileY);
+        if ((relatedTile != null) && (relatedTile.getClass() != Tile.class)) {
+            return INTERSECTION_UNSUPPORTED;
+        }
+        if (viewportIntersection == null) {
+            viewportIntersection = new ViewportRenderAccess.Intersection();
+        }
+        if (renderCeilingIntersection) {
+            if (relatedTile == null) {
+                return INTERSECTION_NONE;
+            }
+            viewportIntersection.ceiling((dim.getAnchor().invert ? dim.getCeilingHeight() : relatedDim.getCeilingHeight()) + relatedDim.getMinHeight());
+        } else {
+            // The helper reads the roof settings from the layer for every cell; its roof noise was fixed at construction
+            final int roofMode;
+            switch (roofTunnelLayer.getRoofMode()) {
+                case CONSTANT_DEPTH -> roofMode = 0;
+                case FIXED_HEIGHT -> roofMode = 1;
+                case INVERTED_DEPTH -> roofMode = 2;
+                default -> {
+                    return INTERSECTION_UNSUPPORTED;
+                }
+            }
+            viewportIntersection.tunnelRoof(roofMode, roofTunnelLayer.getRoofLevel(), roofTunnelLayer.getRoofMin(), roofTunnelLayer.getRoofMax(),
+                    relatedDim.getMinHeight() + (relatedDim.isBottomless() ? 0 : 1), relatedDim.getMaxHeight() - 1);
+            if (roofNoise != null) {
+                if ((roofNoise.octaves() < 1) || (roofNoise.octaves() > 10)) {
+                    return INTERSECTION_UNSUPPORTED;
+                }
+                viewportIntersection.noise(roofNoise.height(), roofNoise.scale(), roofNoise.octaves(), roofNoise.effectiveSeed(), roofNoise.offset());
+            }
+        }
+        if (relatedTile != null) {
+            relatedTile.copyQuantisedHeights(viewportIntersection.linkedHeights);
+        } else {
+            // Dimension.getIntHeightAt() of a missing detail tile
+            Arrays.fill(viewportIntersection.linkedHeights, Integer.MIN_VALUE);
+        }
+        return INTERSECTION_PREPARED;
     }
 
     private boolean copyRenderBufferToArgbImage(Image image, int dx, int dy) {
@@ -777,6 +846,7 @@ public final class TileRenderer {
     private final int[] renderBuffer;
     private final TileLayerSnapshot layerValueSnapshot = new TileLayerSnapshot();
     private ViewportRenderAccess viewportRenderAccess;
+    private ViewportRenderAccess.Intersection viewportIntersection;
     /** Diagnostics for complete-render parity and performance measurements. */
     public long completedNativeViewportTiles() { return viewportRenderAccess == null ? 0L : viewportRenderAccess.completed; }
     private final int[][] heights = new int[3][3], deltas = new int[3][3], fluidHeights = new int[3][3], fluidDeltas = new int[3][3];
@@ -786,6 +856,8 @@ public final class TileRenderer {
     private final TileProvider tileProvider, relatedTileProvider;
     private final boolean renderCeilingIntersection, renderTunnelRoofIntersection;
     private final TunnelLayerHelper tunnelLayerHelper;
+    private final TunnelLayer roofTunnelLayer;
+    private final TunnelLayerHelper.RoofNoise roofNoise;
     private final ColourRamp colourRamp;
     private BiomeRenderer biomeRenderer;
     private final CustomBiomeManager customBiomeManager;
@@ -821,6 +893,7 @@ public final class TileRenderer {
     };
 
     private static final int BLACK = 0x000000, LIGHT_GREY = 0xD0D0D0;
+    private static final int INTERSECTION_UNSUPPORTED = 0, INTERSECTION_NONE = 1, INTERSECTION_PREPARED = 2;
     private static final boolean[][] CEILING_PATTERN = {
             { true,  true, false, false,  true,  true, false, false},
             {false,  true,  true,  true,  true, false, false, false},

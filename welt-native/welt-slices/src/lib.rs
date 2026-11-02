@@ -39,10 +39,24 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
         if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
         let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
         thread_local! { static VIEWPORT: RefCell<welt_render::viewport::Workspace> = RefCell::new(Default::default()); }
-        VIEWPORT.with(|worker| match welt_render::viewport::render_with_workspace(data, &mut worker.borrow_mut()) {
+        VIEWPORT.with(|worker| match welt_render::viewport::render_with_noise(data, &mut worker.borrow_mut(), Some(&ViewportNoise)) {
             Ok(()) => WeltError::Ok as jint, Err(_) => WeltError::IllegalArgument as jint
         })
     }) }
+}
+/// Tunnel roof noise for viewport intersection frames: Java's `NoiseHeightMap.getHeight(int, int)` cast to int.
+struct ViewportNoise;
+impl welt_render::viewport::NoiseSource for ViewportNoise {
+    fn fill(&self, params: &welt_render::viewport::NoiseParams, origin_x: i32, origin_y: i32, width: usize, shift: u32, output: &mut [i32]) -> bool {
+        let Ok(map) = NoiseHeightMapBulk::new(params.d_height, params.scale, params.octaves, params.seed) else { return false; };
+        for (cell, value) in output.iter_mut().enumerate() {
+            let x = origin_x.wrapping_add(((cell % width) << shift) as i32);
+            let y = origin_y.wrapping_add(((cell / width) << shift) as i32);
+            // `as` saturates and maps NaN to zero, like Java's (int) cast of a double
+            *value = map.get_value(f64::from(x), f64::from(y)) as i32;
+        }
+        true
+    }
 }
 use welt_core::erosion::erode_raw_height_region;
 use welt_core::error::WeltError;
