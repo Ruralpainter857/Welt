@@ -8,8 +8,11 @@ import org.pepsoft.worldpainter.HeightMapImageAccess;
 
 import javax.imageio.*;
 import javax.imageio.stream.ImageOutputStream;
+import javax.imageio.metadata.IIOMetadata;
+import javax.imageio.plugins.tiff.*;
 import java.awt.image.BufferedImage;
-import java.awt.image.WritableRaster;
+import java.awt.image.RenderedImage;
+import java.util.concurrent.atomic.AtomicLong;
 import java.io.File;
 import java.io.IOException;
 import java.util.Iterator;
@@ -88,9 +91,9 @@ public class HeightMapExporter {
     public boolean exportToFile(File file) {
         final String type = file.getName().substring(file.getName().lastIndexOf('.') + 1).toUpperCase();
         try {
-            final BufferedImage image;
-            final ImageWriter writer;
-            final ImageWriteParam params;
+            final ImageTypeSpecifier imageType;
+            ImageWriter writer;
+            ImageWriteParam params;
             final float scale, offset;
             final double formatMax, dimensionMax;
             // TODO fail gracefully if the world is too large because the data buffer would overflow
@@ -98,9 +101,8 @@ public class HeightMapExporter {
                 case INTEGER_LOW_RESOLUTION:
                 case INTEGER_HIGH_RESOLUTION:
                     if (bitsRequired > 16) {
-                        final ImageTypeSpecifier imageTypeSpecifier = ImageTypeSpecifiers.createGrayscale(32, TYPE_INT);
-                        image = imageTypeSpecifier.createBufferedImage(dimension.getWidth() * TILE_SIZE, dimension.getHeight() * TILE_SIZE);
-                        final Iterator<ImageWriter> writers = ImageIO.getImageWriters(imageTypeSpecifier, type);
+                        imageType = ImageTypeSpecifiers.createGrayscale(32, TYPE_INT);
+                        final Iterator<ImageWriter> writers = ImageIO.getImageWriters(imageType, type);
                         if (writers.hasNext()) {
                             writer = writers.next();
                             params = writer.getDefaultWriteParam();
@@ -114,8 +116,8 @@ public class HeightMapExporter {
                             return false;
                         }
                     } else {
-                        image = new BufferedImage(dimension.getWidth() * TILE_SIZE, dimension.getHeight() * TILE_SIZE, (bitsRequired <= 8) ? BufferedImage.TYPE_BYTE_GRAY : BufferedImage.TYPE_USHORT_GRAY);
-                        final Iterator<ImageWriter> writers = ImageIO.getImageWriters(ImageTypeSpecifier.createFromRenderedImage(image), type);
+                        imageType = ImageTypeSpecifier.createFromBufferedImageType((bitsRequired <= 8) ? BufferedImage.TYPE_BYTE_GRAY : BufferedImage.TYPE_USHORT_GRAY);
+                        final Iterator<ImageWriter> writers = ImageIO.getImageWriters(imageType, type);
                         if (writers.hasNext()) {
                             writer = writers.next();
                             params = writer.getDefaultWriteParam();
@@ -130,9 +132,8 @@ public class HeightMapExporter {
                     break;
                 case FLOAT_NORMALISED:
                 case FLOAT_ONE_TO_ONE:
-                    final ImageTypeSpecifier imageTypeSpecifier = ImageTypeSpecifiers.createGrayscale(32, TYPE_FLOAT);
-                    image = imageTypeSpecifier.createBufferedImage(dimension.getWidth() * TILE_SIZE, dimension.getHeight() * TILE_SIZE);
-                    final Iterator<ImageWriter> writers = ImageIO.getImageWriters(imageTypeSpecifier, type);
+                    imageType = ImageTypeSpecifiers.createGrayscale(32, TYPE_FLOAT);
+                    final Iterator<ImageWriter> writers = ImageIO.getImageWriters(imageType, type);
                     final ImageWriter floatingPointWriter = selectFloatingPointWriter(writers);
                     if (floatingPointWriter != null) {
                         writer = floatingPointWriter;
@@ -158,54 +159,66 @@ public class HeightMapExporter {
                         "an image, because the exported values are very small compared to the\n" +
                         "theoretical range of the image format.";
             }
-            final WritableRaster raster = image.getRaster();
-            for (Tile tile: dimension.getTiles()) {
-                final int tileOffsetX = (tile.getX() - dimension.getLowestX()) * TILE_SIZE;
-                final int tileOffsetY = (tile.getY() - dimension.getLowestY()) * TILE_SIZE;
-                if (HeightMapImageAccess.writeTile(tile, raster, tileOffsetX, tileOffsetY, format, minHeight, offset, scale)) continue;
-                switch (format) {
-                    case INTEGER_HIGH_RESOLUTION:
-                        for (int dx = 0; dx < TILE_SIZE; dx++) {
-                            for (int dy = 0; dy < TILE_SIZE; dy++) {
-                                raster.setSample(tileOffsetX + dx, tileOffsetY + dy, 0, tile.getRawHeight(dx, dy));
-                            }
-                        }
-                        break;
-                    case INTEGER_LOW_RESOLUTION:
-                        for (int dx = 0; dx < TILE_SIZE; dx++) {
-                            for (int dy = 0; dy < TILE_SIZE; dy++) {
-                                raster.setSample(tileOffsetX + dx, tileOffsetY + dy, 0, tile.getIntHeight(dx, dy) - minHeight);
-                            }
-                        }
-                        break;
-                    case FLOAT_ONE_TO_ONE:
-                        for (int dx = 0; dx < TILE_SIZE; dx++) {
-                            for (int dy = 0; dy < TILE_SIZE; dy++) {
-                                raster.setSample(tileOffsetX + dx, tileOffsetY + dy, 0, tile.getHeight(dx, dy));
-                            }
-                        }
-                        break;
-                    case FLOAT_NORMALISED:
-                        for (int dx = 0; dx < TILE_SIZE; dx++) {
-                            for (int dy = 0; dy < TILE_SIZE; dy++) {
-                                raster.setSample(tileOffsetX + dx, tileOffsetY + dy, 0, (tile.getHeight(dx, dy) - offset) / scale);
-                            }
-                        }
-                        break;
+            HeightMapRenderedImage streamed = HeightMapRenderedImage.create(dimension, imageType, writer,
+                    format, minHeight, offset, scale);
+            // TwelveMonkeys LZW output is not valid when this source exposes several tile rows.
+            // Use the standard TIFF encoder for streamed unsigned 32-bit samples, preserving the raw sample format.
+            if (streamed != null && bitsRequired > 16 && format != FLOAT_NORMALISED && format != Format.FLOAT_ONE_TO_ONE
+                    && writer.getClass().getName().equals("com.twelvemonkeys.imageio.plugins.tiff.TIFFImageWriter")) {
+                ImageWriter replacement = standardTiffWriter(imageType);
+                streamed.close();
+                if (replacement == null) streamed = null;
+                else {
+                    writer.dispose(); writer = replacement;
+                    params = writer.getDefaultWriteParam(); params.setCompressionMode(MODE_EXPLICIT);
+                    params.setCompressionType("LZW"); params.setCompressionQuality(0f);
+                    streamed = HeightMapRenderedImage.create(dimension, imageType, writer, format, minHeight, offset, scale);
                 }
             }
-            try (ImageOutputStream out = ImageIO.createImageOutputStream(file)) {
-                writer.setOutput(out);
-                writer.write(null, new IIOImage(image, null, null), params);
-                return true;
+            try {
+                final RenderedImage image;
+                if (streamed != null) image = streamed;
+                else {
+                    BufferedImage dense = imageType.createBufferedImage(dimension.getWidth() * TILE_SIZE, dimension.getHeight() * TILE_SIZE);
+                    for (Tile tile : dimension.getTiles()) {
+                        int x = (tile.getX() - dimension.getLowestX()) * TILE_SIZE;
+                        int y = (tile.getY() - dimension.getLowestY()) * TILE_SIZE;
+                        HeightMapImageAccess.writeTileSamples(tile, dense.getRaster(), x, y, format, minHeight, offset, scale);
+                    }
+                    image = dense;
+                }
+                try (ImageOutputStream out = ImageIO.createImageOutputStream(file)) {
+                    writer.setOutput(out);
+                    IIOMetadata metadata = null;
+                    if (streamed != null && imageType.getSampleModel().getDataType() == TYPE_INT
+                            && writer.getClass().getName().equals("com.sun.imageio.plugins.tiff.TIFFImageWriter")) {
+                        TIFFDirectory directory = TIFFDirectory.createFromMetadata(writer.getDefaultImageMetadata(imageType, params));
+                        directory.addTIFFField(new TIFFField(BaselineTIFFTagSet.getInstance().getTag(BaselineTIFFTagSet.TAG_SAMPLE_FORMAT),
+                                TIFFTag.TIFF_SHORT, 1, new char[]{BaselineTIFFTagSet.SAMPLE_FORMAT_UNSIGNED_INTEGER}));
+                        metadata = directory.getAsMetadata();
+                    }
+                    writer.write(null, new IIOImage(image, null, metadata), params);
+                    if (streamed != null) STREAMED_EXPORTS.incrementAndGet();
+                    return true;
+                }
             } finally {
-                writer.dispose();
+                try { writer.dispose(); }
+                finally { if (streamed != null) streamed.close(); }
             }
         } catch (IOException e) {
             throw new RuntimeException("I/O error while exporting image", e);
         }
     }
 
+    private static ImageWriter standardTiffWriter(ImageTypeSpecifier type) {
+        Iterator<ImageWriter> writers = ImageIO.getImageWriters(type, "TIFF");
+        while (writers.hasNext()) {
+            ImageWriter candidate = writers.next();
+            if (candidate.getClass().getName().equals("com.sun.imageio.plugins.tiff.TIFFImageWriter")) return candidate;
+            candidate.dispose();
+        }
+        return null;
+    }
     private static ImageWriter selectFloatingPointWriter(Iterator<ImageWriter> writers) {
         while (writers.hasNext()) {
             ImageWriter candidate = writers.next();
@@ -219,6 +232,10 @@ public class HeightMapExporter {
         }
         return null;
     }
+
+    /** Completed bounded-image writes, for parity and whole-operation benchmarks. */
+    public static long completedStreamingExports() { return STREAMED_EXPORTS.get(); }
+    private static final AtomicLong STREAMED_EXPORTS = new AtomicLong();
 
     public String getFormatDescription() {
         return formatDescription;

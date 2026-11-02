@@ -956,3 +956,9 @@ loading; use the same `-Dwio.fixtureFile=<synthetic-project>` for both modes and
 check identical digestStart values. Separate generation of the fixture from the
 measurements. Saving trades bounded compression workspace for parallelism; do
 not describe smaller files as lower project memory usage. Reports stay local.
+
+### Bounded heightmap image writing
+
+Heightmap PNG/TIFF saves can opt into a reusable 128-row source with `-Dwelt.heightmap.streaming=true`. It preserves the existing sample formulas and holes; plain dimensions and tiles with supported ImageIO encoders are eligible. Custom providers, custom tiles and unsupported widths keep the dense path. The source cache has a fixed byte budget, and rasters returned to an encoder own their pixels. Unsigned 32-bit streamed TIFF uses the JDK encoder with an explicit unsigned sample tag. This flag remains disabled by default.
+
+`HeightMapImageExportBenchmark` accepts `-Dwelt.benchmark.imageStreaming=true`: `compare` alternates the dense Java baseline and streamed native path, verifies every decoded sample, and checks both native and streamed coverage. Use release native libraries and warmups. `-Dwelt.benchmark.imageMemory=true` requires separate `java` and `rust` runs; its GC-instrumented times are not throughput measurements. Memory-pool peak sums are labelled separately from process resident memory. `HeightMapStreamingMemoryBenchmark dense|streamed` exercises a sparse large TIFF under a constrained heap and validates every pixel after writing; this cold capacity check is not a speed benchmark.

@@ -36,6 +36,32 @@ public final class HeightMapImageExportBenchmark {
         throw new AssertionError("JDK TIFF reader unavailable for raw float validation");
     }
 
+    private static long validate(File output, HeightMapExporter.Format format, Dimension dimension,
+                                 int side, float[] heightRange) throws Exception {
+        BufferedImage image = readSamples(output, format);
+        if (image == null || image.getWidth() != side * 128 || image.getHeight() != side * 128) {
+            throw new AssertionError("Invalid exported image dimensions");
+        }
+        long hash = 1;
+        var raster = image.getRaster();
+        for (int y = 0; y < image.getHeight(); y++) for (int x = 0; x < image.getWidth(); x++) {
+            Tile tile = dimension.getTile(x / 128 - side / 2, y / 128 - side / 2);
+            double expected = tile == null ? 0 : switch (format) {
+                case INTEGER_HIGH_RESOLUTION -> tile.getRawHeight(x & 127, y & 127);
+                case INTEGER_LOW_RESOLUTION -> tile.getIntHeight(x & 127, y & 127) + 64;
+                case FLOAT_ONE_TO_ONE -> tile.getHeight(x & 127, y & 127);
+                case FLOAT_NORMALISED -> (tile.getHeight(x & 127, y & 127) - heightRange[0])
+                        / (heightRange[1] - heightRange[0]);
+            };
+            double actual = raster.getSampleDouble(x, y, 0);
+            if (Double.doubleToLongBits(expected) != Double.doubleToLongBits(actual)) {
+                throw new AssertionError("Exported height mismatch at " + x + "," + y + ": expected=" + expected + ", actual=" + actual);
+            }
+            hash = hash * 31 + Double.doubleToRawLongBits(actual);
+        }
+        return hash;
+    }
+
     public static void main(String[] args) throws Exception {
         int side = Integer.getInteger("welt.benchmark.imageSide", 4);
         int warmups = Integer.getInteger("welt.benchmark.imageWarmups", 10);
@@ -67,6 +93,9 @@ public final class HeightMapImageExportBenchmark {
         long thread = Thread.currentThread().getId();
         boolean compare = args.length > 0 && args[0].equals("compare");
         boolean rust = args.length > 0 && args[0].equals("rust");
+        boolean streaming = Boolean.getBoolean("welt.benchmark.imageStreaming");
+        boolean memory = Boolean.getBoolean("welt.benchmark.imageMemory");
+        if (memory && compare) throw new IllegalArgumentException("Memory sampling requires separate java/rust processes");
         double[] javaTimes = new double[9], rustTimes = new double[9], ratios = new double[9];
         long[] javaAllocations = new long[9], rustAllocations = new long[9];
         long callsAtStart = HeightMapImageAccess.completedTiles();
@@ -81,38 +110,41 @@ public final class HeightMapImageExportBenchmark {
                     boolean nativeMode = compare ? ((trial + pass) & 1) != 0 : rust;
                     System.setProperty("wp.native.render", Boolean.toString(nativeMode));
                     System.setProperty("welt.native.heightmapImage", Boolean.toString(nativeMode));
+                    System.setProperty("welt.heightmap.streaming", Boolean.toString(streaming && nativeMode));
+                    long streamedBefore = HeightMapExporter.completedStreamingExports();
                     long callsBefore = HeightMapImageAccess.completedTiles();
+                    long heapBaseline = 0;
+                    if (memory && trial >= 0) {
+                        System.gc();
+                        heapBaseline = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed();
+                        for (var pool : ManagementFactory.getMemoryPoolMXBeans()) pool.resetPeakUsage();
+                    }
                     long before = bean.getThreadAllocatedBytes(thread), start = System.nanoTime();
                     HeightMapExporter exporter = new HeightMapExporter(dimension, format);
                     if (!exporter.exportToFile(output)) throw new AssertionError("No image writer available");
                     long elapsed = System.nanoTime() - start;
                     long allocated = bean.getThreadAllocatedBytes(thread) - before;
                     long calls = HeightMapImageAccess.completedTiles() - callsBefore;
+                    if (memory && trial >= 0) {
+                        long peakSum = ManagementFactory.getMemoryPoolMXBeans().stream()
+                                .filter(pool -> pool.getType() == java.lang.management.MemoryType.HEAP)
+                                .mapToLong(pool -> pool.getPeakUsage().getUsed()).sum();
+                        System.gc();
+                        long retained = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed();
+                        long direct = ManagementFactory.getPlatformMXBeans(java.lang.management.BufferPoolMXBean.class).stream()
+                                .filter(pool -> pool.getName().equals("direct")).mapToLong(java.lang.management.BufferPoolMXBean::getMemoryUsed).sum();
+                        System.out.printf(Locale.ROOT, "heightmapImageMemory mode=%s trial=%d heapBaselineBytes=%d heapPoolPeakSumBytes=%d heapRetainedBytes=%d directBytes=%d%n",
+                                nativeMode ? "rust" : "java", trial, heapBaseline, peakSum, retained, direct);
+                    }
                     if (nativeMode && calls != dimension.getTiles().size() || !nativeMode && calls != 0) {
                         throw new AssertionError("Unexpected native tile coverage: " + calls);
                     }
+                    long streamed = HeightMapExporter.completedStreamingExports() - streamedBefore;
+                    if (streamed != (streaming && nativeMode ? 1 : 0)) {
+                        throw new AssertionError("Unexpected streaming coverage: " + streamed);
+                    }
                     // Compare decoded samples, rather than compressed file bytes or timestamps.
-                    BufferedImage image = readSamples(output, format);
-                    if (image == null || image.getWidth() != side * 128 || image.getHeight() != side * 128) {
-                        throw new AssertionError("Invalid exported image dimensions");
-                    }
-                    long hash = 1;
-                    var raster = image.getRaster();
-                    for (int y = 0; y < image.getHeight(); y++) for (int x = 0; x < image.getWidth(); x++) {
-                        Tile tile = dimension.getTile(x / 128 - side / 2, y / 128 - side / 2);
-                        double expected = tile == null ? 0 : switch (format) {
-                            case INTEGER_HIGH_RESOLUTION -> tile.getRawHeight(x & 127, y & 127);
-                            case INTEGER_LOW_RESOLUTION -> tile.getIntHeight(x & 127, y & 127) + 64;
-                            case FLOAT_ONE_TO_ONE -> tile.getHeight(x & 127, y & 127);
-                            case FLOAT_NORMALISED -> (tile.getHeight(x & 127, y & 127) - heightRange[0])
-                                    / (heightRange[1] - heightRange[0]);
-                        };
-                        double actual = raster.getSampleDouble(x, y, 0);
-                        if (Double.doubleToLongBits(expected) != Double.doubleToLongBits(actual)) {
-                            throw new AssertionError("Exported height mismatch at " + x + "," + y + ": expected=" + expected + ", actual=" + actual);
-                        }
-                        hash = hash * 31 + Double.doubleToRawLongBits(actual);
-                    }
+                    long hash = validate(output, format, dimension, side, heightRange);
                     if (trial == -warmups) expectedHash = hash;
                     else if (hash != expectedHash) throw new AssertionError("Unstable exported samples");
                     checksum = hash;
@@ -129,8 +161,8 @@ public final class HeightMapImageExportBenchmark {
                 Arrays.sort(javaTimes); Arrays.sort(rustTimes); Arrays.sort(ratios);
                 Arrays.sort(javaAllocations); Arrays.sort(rustAllocations);
                 System.out.printf(Locale.ROOT,
-                        "heightmapImage paired format=%s side=%d javaMs=%.3f rustMs=%.3f ratio=%.3f range=%.3f..%.3f javaAllocated=%d rustAllocated=%d nativeCalls=%d%n",
-                        format, side, javaTimes[4], rustTimes[4], ratios[4], ratios[0], ratios[8],
+                        "heightmapImage paired format=%s side=%d streaming=%s javaMs=%.3f rustMs=%.3f ratio=%.3f range=%.3f..%.3f javaAllocated=%d rustAllocated=%d nativeCalls=%d%n",
+                        format, side, streaming, javaTimes[4], rustTimes[4], ratios[4], ratios[0], ratios[8],
                         javaAllocations[4], rustAllocations[4], HeightMapImageAccess.completedTiles() - callsAtStart);
             }
             if (Boolean.getBoolean("welt.native.heightmapImageProfile")) {

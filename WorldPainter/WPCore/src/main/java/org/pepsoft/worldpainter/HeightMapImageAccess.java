@@ -36,6 +36,31 @@ public final class HeightMapImageAccess {
         return new long[] {s.preparationNanos, s.nativeNanos, s.applicationNanos};
     }
 
+    /** Share the exact conversion and callback order between dense and streamed image storage. */
+    public static void writeTileSamples(Tile tile, WritableRaster raster, int x, int y,
+                                        Format format, int dimensionMin, float offset, float scale) {
+        if (writeTile(tile, raster, x, y, format, dimensionMin, offset, scale)) return;
+        switch (format) {
+            case INTEGER_HIGH_RESOLUTION:
+                for (int dx = 0; dx < 128; dx++) for (int dy = 0; dy < 128; dy++)
+                    raster.setSample(x + dx, y + dy, 0, tile.getRawHeight(dx, dy));
+                break;
+            case INTEGER_LOW_RESOLUTION:
+                for (int dx = 0; dx < 128; dx++) for (int dy = 0; dy < 128; dy++)
+                    raster.setSample(x + dx, y + dy, 0, tile.getIntHeight(dx, dy) - dimensionMin);
+                break;
+            case FLOAT_ONE_TO_ONE:
+                for (int dx = 0; dx < 128; dx++) for (int dy = 0; dy < 128; dy++)
+                    raster.setSample(x + dx, y + dy, 0, tile.getHeight(dx, dy));
+                break;
+            case FLOAT_NORMALISED:
+                for (int dx = 0; dx < 128; dx++) for (int dy = 0; dy < 128; dy++)
+                    raster.setSample(x + dx, y + dy, 0, (tile.getHeight(dx, dy) - offset) / scale);
+                break;
+            default: throw new InternalError();
+        }
+    }
+
     public static boolean writeTile(Tile tile, WritableRaster raster, int x, int y,
                                     Format format, int dimensionMin, float offset, float scale) {
         if (!Boolean.getBoolean("welt.native.heightmapImage") || !Native.isRenderEnabled()
