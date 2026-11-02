@@ -690,8 +690,23 @@ explicit display colour and SIMPLE materials with a constant surface colour.
 The terrain palette is refreshed for each tile, including edits to the existing
 `MixedMaterial` instance and replacement of a custom slot. This uses the existing
 WVR frame and the same JNI transaction as layer composition and lighting.
-Variable mixtures without a colour override, unconfigured slots and extreme
-height metadata continue through the Java renderer.
+Deterministic BLOBS and LAYERED mixtures without a colour override are included
+in WVR version 5 (normal view) and version 6 (sampled view). Both versions append
+compact WMF1 material selectors and unrounded surface heights to the existing
+frame. Layers, materials and lighting run in the same JNI transaction per tile;
+versions 1 through 4 remain supported. The normal view reuses its height cache,
+while a sampled view copies only displayed surface heights under the tile lock.
+
+WMF1 contains derived blob thresholds or run-length strata, preserving material
+priority, world seeds, fractional heights, slope mutation order and relative
+terrain anchors. Rust borrows model bytes only during JNI and reuses Perlin
+state per worker. The frame is bounded at 4 MiB and the total Perlin generator
+budget is 512 per worker transaction; inactive material workspaces are dropped.
+Java clears temporary references to material models on success and fallback.
+Malformed frames, unsupported model settings, NOISE mixtures, unconfigured
+slots and extreme height metadata continue through Java. Random mixtures keep
+the original random draw order. Model bounds and surface heights are validated
+before any output pixel is written. No saved-world format changes are involved.
 
 Run `CustomTerrainViewportParityTest` and `ViewportRenderParityTest` with
 `-Dwelt.test.requireCustomViewport=true` after building the release DLL. The tests
@@ -700,7 +715,10 @@ they also cover live palette changes, random draw order and fallback transitions
 `TileViewportBenchmark` accepts `-Dwelt.benchmark.viewportCustomTerrain=true` and
 `compare-fused` to measure complete redraws and require every tile to use Rust.
 For separate retained-memory runs, pass `-Dwelt.benchmark.viewportMemory=true`
-with the `java` or `fused` operation. Benchmark logs remain local.
+with the `java` or `fused` operation. Select `-Dwelt.benchmark.viewportMixture=blobs|layered|fixed`
+for the custom-terrain fixture and configure `welt.benchmark.viewportWarmups`
+when checking JIT sensitivity. Keep paired and separate-process results distinct;
+this optional path does not establish a general memory saving. Benchmark logs remain local.
 ### Slope graph compatibility
 
 `SlopeHeightMap.clone()` preserves vertical scaling as well as its name, seed
@@ -810,3 +828,131 @@ profiles for complete strokes plus undo/redo, with checksum mode, retained heap,
 allocation and RSS reporting. Compare independent reference/new JVMs with the
 same warm-up and parameters; keep snapshots alive or release them explicitly
 when interpreting retained-memory results. Reports stay local.
+### Bitmap leaves in composed coordinate graphs
+
+The coordinate graph route also accepts `BitmapHeightMap` leaves mixed with
+noise, arithmetic, transforms, bicubic interpolation and supported displacement
+controls. Existing standalone bitmap imports retain their specialised route.
+This remains behind `welt.native.coordinateGraphGeneration=true` and native
+procedural generation; unsupported inputs retain complete Java generation.
+
+WTGP v4 separates stable 96-byte instructions from per-transaction bitmap
+windows. Header words 36/40 contain the descriptor offset/count; words 44/48
+contain the pixel offset/length. Each 32-byte descriptor contains logical X/Y,
+width/height, sample kind, relative pixel offset, byte length and a zero reserved
+word. Opcode 15 refers to a descriptor slot. Kinds are u8, u16, i16, u32, f32 and
+f64, in that order, encoded little endian. Old native libraries reject v4 and
+fall back; v3 graphs keep their unchanged format.
+
+The Java planner follows coordinate domains conservatively and reads grouped
+raster rows into compact windows. It snapshots current pixels on every tile,
+including repeat/minimum-value edges and channel selection. A shared bitmap leaf
+gets one union window. Only a reusable row is expanded to doubles. Windows are
+limited to 262144 pixels and 4096 cells per side, with at most 3 MiB for the graph
+packet; very large or unsupported domains keep Java. Custom rasters/buffers and
+modified extent metadata also retain Java. Displacement bounds use image-format
+metadata rather than scanning the entire image for its actual range.
+
+Rust borrows typed pixels from the direct transaction for its duration. No image
+copy or pointer survives JNI; only immutable instructions and bounded bicubic
+lattice caches remain per worker. Compiler image references are cleared on both
+success and fallback, so closing a project cannot leave the source image held by
+that worker. Window/data changes invalidate lattice values for the next tile
+without rebuilding unchanged expression instructions.
+
+`GraphBitmapWindowsTest` checks the six sample precisions, wrapping, transforms,
+live edits and domain limits. `BitmapGraphGenerationParityTest` checks raw doubles
+and all tile planes, changed pixels/channels/seeds, multiple/shared sources,
+deformation, invalid packets, clean compiler reuse, image-reference release and
+Java fallback. Require it with `-Dwelt.test.requireBitmapGraph=true` after building
+the release library. Run the existing coordinate, specialised bitmap and
+procedural generation tests too. The creation benchmark accepts
+`-Dwelt.benchmark.creationSource=image-noise`; compare the complete creation
+operation and memory in separate JVMs. Additional packet/direct-buffer memory
+and allocations must be included when interpreting its measured speed tradeoff.
+
+### Lava-world creation in the grouped generation path
+
+The existing bitmap, procedural and coordinate-graph generation switches also
+support factories with `floodWithLava` under an exact `SimpleTheme`. Source
+sampling, quantisation, terrain and theme layers retain one JNI transaction per
+tile. Java applies its final lava mask with the existing whole-tile bit-layer
+operation; there are no additional JNI calls or per-cell Java material writes.
+
+The factory's original choice between batched fresh-theme initialization and
+ordinary cell edits is shared by Java creation and native planning. This matters
+for BIT_PER_CHUNK layers: ordinary edits preserve the last cell's value, while
+fresh initialization accumulates true bits. WHIM versions 6 (bitmap) and 7
+(procedural program) carry the ordinary-edit behavior. Existing versions remain
+unchanged, and older native libraries reject the new versions before mutation
+and retain Java fallback. The compact planes and native scratch are reused per
+worker; saving formats and serialized identifiers are unchanged.
+
+A SimpleTheme which itself configures FloodWithLava, custom
+implementations and unsupported sources retain their original Java path. The
+existing generation switches remain explicit; this addition enables no new
+native path by default.
+
+Run `LavaWorldGenerationParityTest` with `-Dwelt.test.requireLavaGeneration=true`
+after building the release DLL. Tests compare every height, fluid, terrain and
+layer cell, subsequent random state, theme-controlled lava and worker reuse
+between lava and water worlds. `BitmapWorldCreationBenchmark` accepts
+`-Dwelt.benchmark.creationLava=true` alongside its source and memory options;
+its whole-world checksum then includes the lava mask. Use warmed alternating
+`compare` trials for timing, separate `java`/`rust` JVMs for memory, and exclude
+timings which overlap other builds or tests. Keep paired ratios distinct from
+ratios of independent median times and do not infer an export speedup.
+
+### Advanced climate themes on lava worlds
+
+`-Dwelt.native.fancyGeneration=true` also supports lava-filled worlds with an
+exact `FancyTheme`. Its existing WHIM5 transaction evaluates the source
+neighbourhood, temperature, humidity, forest maps, terrain and climate layers
+in one JNI call per tile. The theme neither reads nor edits FloodWithLava, so
+Java applies the complete lava mask after the grouped planes using the existing
+whole-tile setter. No new native kernel, wire version, persistent field or
+serialized identifier is introduced.
+
+The same source eligibility and callback guards remain in force. Custom maps,
+overridden themes, mismatched factory/theme source identities, disabled fresh
+theme batching and unsupported coordinates keep Java. Lava, water and live
+climate changes share the worker safely; buffers remain owned by each worker.
+
+Run `FancyLavaGenerationParityTest` with
+`-Dwelt.test.requireFancyLavaGeneration=true` alongside the existing Fancy and
+simple lava parity suites. Complete images of tile data include terrain,
+heights, water, all climate layers and the lava mask. Tests also cover stock
+continents, deformed sources, snow/climate boundaries, live settings, fallback,
+random state and concurrent lava/water workers.
+
+`FancyWorldCreationBenchmark` supports `welt.benchmark.creationLava=true`,
+`welt.benchmark.fancySource=noise|stock` and separate-process
+`welt.benchmark.creationMemory=true` in `java` or `rust` mode. The complete-world
+checksum includes every present layer, including lava. Use `compare` for warmed
+alternating whole-creation trials. Gains on lava creation must not be presented
+as gains on Minecraft export or the complete application. Reports stay local.
+
+### Compatible parallel project saving
+
+WorldIO saves a single standard gzip member using bounded parallel deflate
+blocks at the same default compression level as GZIPOutputStream. Each stream
+owns its worker pool, buffers and Deflaters. At most twice the worker count of
+512 KiB blocks is in flight; each block uses the previous 32 KiB dictionary.
+The worker count is capped at eight and single-core machines use the original
+compressor. Loading uses a 64 KiB gzip input buffer. World serialization, plugin
+class loading and saved project versions remain unchanged.
+
+Set `-Dwelt.worldio.parallelGzip=false` to retain the original single-threaded
+compressor. Close releases buffers even while the closed stream remains
+referenced; a compression worker finishing after interruption/close ends its
+own Deflater exactly once. Failures close the underlying output stream.
+
+Run ParallelGzipOutputStreamTest and WorldIoRoundTripTest both with the default
+compressor and with the fallback property. They cover block boundaries, raw
+standard-gzip validation, injected worker/output failures, interrupted closure,
+old project fixtures, custom layers/materials, undo exclusion, serialized UIDs,
+and complete logical round trips. WorldIoBenchmark profiles complete saving and
+loading; use the same `-Dwio.fixtureFile=<synthetic-project>` for both modes and
+check identical digestStart values. Separate generation of the fixture from the
+measurements. Saving trades bounded compression workspace for parallelism; do
+not describe smaller files as lower project memory usage. Reports stay local.

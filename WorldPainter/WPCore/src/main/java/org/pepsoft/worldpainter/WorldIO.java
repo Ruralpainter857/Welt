@@ -63,10 +63,46 @@ public class WorldIO {
      * @throws IOException If an I/O error occurred saving the world.
      */
     public void save(OutputStream out) throws IOException {
-        try (ObjectOutputStream wrappedOut = new ObjectOutputStream(new GZIPOutputStream(out))) {
+        final OutputStream compressedOut = createGzipOutputStream(out);
+        final ObjectOutputStream wrappedOut;
+        try {
+            wrappedOut = new ObjectOutputStream(compressedOut);
+        } catch (IOException | RuntimeException e) {
+            // Release the compressor (and its threads) and the file
+            try {
+                compressedOut.close();
+            } catch (IOException e2) {
+                e.addSuppressed(e2);
+            }
+            throw e;
+        }
+        try (wrappedOut) {
             wrappedOut.writeObject(getMetadata());
             wrappedOut.writeObject(world);
         }
+    }
+
+    /**
+     * Compression dominates the time to save a world, so use several threads when available. The result is a single
+     * standard gzip member, readable by any version. {@code -Dwelt.worldio.parallelGzip=false} restores the plain
+     * single threaded {@link GZIPOutputStream}.
+     */
+    private static OutputStream createGzipOutputStream(OutputStream out) throws IOException {
+        final int threads = gzipThreads();
+        return (threads > 1) ? new ParallelGzipOutputStream(out, threads) : new GZIPOutputStream(out);
+    }
+
+    private static int gzipThreads() {
+        if ("false".equalsIgnoreCase(System.getProperty("welt.worldio.parallelGzip"))) {
+            return 1;
+        }
+        return Math.min(Runtime.getRuntime().availableProcessors(), MAX_GZIP_THREADS);
+    }
+
+    /** The save/load stream configuration, for diagnostics. */
+    static String describeIo() {
+        final int threads = gzipThreads();
+        return ((threads > 1) ? ("parallel-gzip x" + threads) : "gzip") + ", load buffer " + (LOAD_BUFFER_SIZE >> 10) + " KiB";
     }
 
     /**
@@ -112,7 +148,9 @@ public class WorldIO {
         Map<String, Object> metadata = null;
         world = null;
         try {
-            try (WPCustomObjectInputStream wrappedIn = new WPCustomObjectInputStream(new GZIPInputStream(in), PluginManager.getPluginClassLoader(), AbstractObject.class)) {
+            // The application passes unbuffered file streams; a larger buffer than the default 512 bytes saves many
+            // small reads
+            try (WPCustomObjectInputStream wrappedIn = new WPCustomObjectInputStream(new GZIPInputStream(in, LOAD_BUFFER_SIZE), PluginManager.getPluginClassLoader(), AbstractObject.class)) {
                 Object object = wrappedIn.readObject();
                 if (object instanceof Map) {
                     metadata = (Map<String, Object>) object;
@@ -247,4 +285,6 @@ public class WorldIO {
     }
 
     private World2 world;
+
+    private static final int MAX_GZIP_THREADS = 8, LOAD_BUFFER_SIZE = 64 * 1024;
 }
