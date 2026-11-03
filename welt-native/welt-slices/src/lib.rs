@@ -4388,7 +4388,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 85 || length as usize > welt_core::river_paint::MAX_BYTES {
+            if buffer.is_null() || length < 77 || length as usize > welt_core::river_paint::MAX_FRAME_BYTES {
                 return WeltError::IllegalArgument as jint;
             }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;

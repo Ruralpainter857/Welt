@@ -525,13 +525,25 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     }
 
     synchronized void copyRiverRegion(int x, int y, int width, int height, ByteBuffer data, int offset, int stride, int area) {
+        copyRiverPlanes(x, y, width, height, data, offset, stride, area, 64 + area * 4, 64 + area * 8);
+    }
+
+    /** WLRV v2: heights and water levels only; the integer heights are derived natively. */
+    synchronized void copyLargeRiverRegion(int x, int y, int width, int height, ByteBuffer data, int offset, int stride, int area) {
+        copyRiverPlanes(x, y, width, height, data, offset, stride, area, -1, 64 + area * 4);
+    }
+
+    /** @param roundedBase The plane of the rounded heights, or -1 if the frame has none. */
+    private void copyRiverPlanes(int x, int y, int width, int height, ByteBuffer data, int offset, int stride, int area,
+                                 int roundedBase, int waterBase) {
         checkHeightRegion(x, y, width, height, area, offset, stride);
         ensureReadable(tall ? TALL_HEIGHTMAP : HEIGHTMAP); ensureReadable(tall ? TALL_WATERLEVEL : WATERLEVEL);
         for (int dx = 0; dx < width; dx++) for (int dy = 0; dy < height; dy++) {
             int cell = (x + dx) | ((y + dy) << TILE_SIZE_BITS), i = offset + dx * stride + dy;
             float heightValue = (tall ? tallHeightMap[cell] : heightMap[cell] & 0xffff) / 256f + minHeight;
-            data.putFloat(64 + i * 4, heightValue).putInt(64 + area * 4 + i * 4, Math.round(heightValue))
-                    .putInt(64 + area * 8 + i * 4, (tall ? tallWaterLevel[cell] & 0xffff : waterLevel[cell] & 255) + minHeight);
+            data.putFloat(64 + i * 4, heightValue);
+            if (roundedBase >= 0) data.putInt(roundedBase + i * 4, Math.round(heightValue));
+            data.putInt(waterBase + i * 4, (tall ? tallWaterLevel[cell] & 0xffff : waterLevel[cell] & 255) + minHeight);
         }
     }
 
@@ -674,13 +686,24 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
 
     synchronized void applyRiverRegion(int x, int y, int width, int height, ByteBuffer data, int offset, int stride,
                                        int area, int level, boolean lava) {
+        applyRiverPlanes(x, y, width, height, data, offset, stride, area, 64 + area * 20, level, lava);
+    }
+
+    /** WLRV v2: the same edit, with the flags after the heights, water levels and values. */
+    synchronized void applyLargeRiverRegion(int x, int y, int width, int height, ByteBuffer data, int offset, int stride,
+                                            int area, int level, boolean lava) {
+        applyRiverPlanes(x, y, width, height, data, offset, stride, area, 64 + area * 12, level, lava);
+    }
+
+    private void applyRiverPlanes(int x, int y, int width, int height, ByteBuffer data, int offset, int stride,
+                                  int area, int flagsBase, int level, boolean lava) {
         checkHeightRegion(x, y, width, height, area, offset, stride);
         if (eventInhibitionCounter == 0) throw new IllegalStateException("River editing requires inhibited events");
         boolean heights = false, waters = false, terrains = false, lavaChanged = false;
         ensureReadable(BIT_LAYER_DATA);
         BitSet bits = bitLayerData.get(FloodWithLava.INSTANCE);
         for (int dx = 0; dx < width; dx++) for (int dy = 0; dy < height; dy++) {
-            int input = offset + dx * stride + dy, flags = data.get(64 + area * 20 + input);
+            int input = offset + dx * stride + dy, flags = data.get(flagsBase + input);
             int cell = (x + dx) | ((y + dy) << TILE_SIZE_BITS);
             if ((flags & 1) != 0) {
                 if (!heights) { ensureWriteable(tall ? TALL_HEIGHTMAP : HEIGHTMAP); heights = true; }

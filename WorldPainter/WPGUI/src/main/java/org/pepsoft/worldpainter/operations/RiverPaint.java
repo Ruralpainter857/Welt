@@ -4,6 +4,10 @@ import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.RiverAccess;
 import org.pepsoft.worldpainter.Terrain;
 import org.pepsoft.worldpainter.WorldPainterView;
+import org.pepsoft.worldpainter.brushes.BitmapBrush;
+import org.pepsoft.worldpainter.brushes.Brush;
+import org.pepsoft.worldpainter.brushes.RotatedBrush;
+import org.pepsoft.worldpainter.brushes.SymmetricBrush;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
@@ -109,6 +113,9 @@ public class RiverPaint extends AbstractBrushOperation {
     }
 
     private boolean applyNativeRiverPaint(Dimension dimension, int centreX, int centreY, int radius) {
+        if (radius > 255 && Boolean.getBoolean("welt.native.largeRiver") && Native.isGenEnabled() && NativeLoader.areSlicesAvailable()) {
+            return applyLargeNativeRiverPaint(dimension, centreX, centreY, radius);
+        }
         if (radius >= 0 && radius <= 255 && getFilter() == null && dimension.getClass() == Dimension.class
                 && (getBrush() instanceof org.pepsoft.worldpainter.brushes.SymmetricBrush
                     || getBrush() instanceof org.pepsoft.worldpainter.brushes.RotatedBrush)
@@ -194,6 +201,34 @@ public class RiverPaint extends AbstractBrushOperation {
             dimension.setEventsInhibited(false);
         }
         return true;
+    }
+
+    /**
+     * One WLRV v2 transaction for brushes with an effective radius from 256 to 511, for the stock brushes only and
+     * without a filter, on an ordinary dimension. Anything else keeps the Java traversal of {@link #tick}, without any
+     * edit or change of the drag state. Unsupported brushes, filters, dimensions, tiles and coordinates are refused
+     * before the brush is asked for any strength; a native library which refuses the frame does so after the
+     * strengths of the (pure, stock) brush have been prepared, but still before any edit.
+     */
+    private boolean applyLargeNativeRiverPaint(Dimension dimension, int centreX, int centreY, int radius) {
+        final long sideLong = 2L * radius + 1L;
+        final Brush brush = getBrush();
+        if (sideLong > RiverAccess.MAX_LARGE_SIDE || getFilter() != null || dimension.getClass() != Dimension.class
+                || ! ((brush instanceof SymmetricBrush) || (brush instanceof RotatedBrush) || ((brush != null) && (brush.getClass() == BitmapBrush.class)))) {
+            return false;
+        }
+        dimension.setEventsInhibited(true);
+        try {
+            final Integer level = RiverAccess.tryApplyLarge(dimension, (long) centreX - radius, (long) centreY - radius, (int) sideLong,
+                    (dx, dy) -> brush.getFullStrength(dx - radius, dy - radius), previousWaterLevel, depth, lava);
+            if (level == null) {
+                return false;
+            }
+            previousWaterLevel = level;
+            return true;
+        } finally {
+            dimension.setEventsInhibited(false);
+        }
     }
 
     private void ensureNativeBuffers(int area) {

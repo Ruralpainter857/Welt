@@ -497,9 +497,11 @@ public final class NativeSlices {
     }
     private static native int nativeFloodFluidRegion(ByteBuffer buffer, int length);
 
+    /** WLRV v1 (sides up to 511, 21 bytes per cell) or v2 (sides up to 1023, 13 bytes per cell); the frame checks its own length. */
     public static boolean editRiverRegion(ByteBuffer buffer) {
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable() || buffer == null || !buffer.isDirect()
-                || buffer.isReadOnly() || buffer.position() != 0 || buffer.limit() < 85 || buffer.limit() > 64 + 511 * 511 * 21) return false;
+                || buffer.isReadOnly() || buffer.position() != 0 || buffer.limit() < 64 + 13
+                || buffer.limit() > Math.max(64 + 511 * 511 * 21, 64 + 1023 * 1023 * 13)) return false;
         try { return nativeEditRiverRegion(buffer, buffer.limit()) == 0; } catch (UnsatisfiedLinkError e) { return false; }
     }
     private static native int nativeEditRiverRegion(ByteBuffer buffer, int length);
