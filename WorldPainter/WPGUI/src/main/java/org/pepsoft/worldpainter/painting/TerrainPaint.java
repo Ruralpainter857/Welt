@@ -229,6 +229,14 @@ public final class TerrainPaint extends AbstractPaint {
                                             boolean oneTile, boolean remove) {
         final long width = (long) x2 - x1 + 1L;
         final long height = (long) y2 - y1 + 1L;
+        if (width * height > 65_536L && width > 0 && height > 0 && width <= 1024 && height <= 1024
+                && Boolean.getBoolean("welt.native.largeTerrainBrush") && !remove && !dither && !filterEnabled
+                && (brush instanceof SymmetricBrush || brush.getClass() == BitmapBrush.class
+                    || brush.getClass() == RotatedBrush.class)
+                && (long) x1 + x2 == 2L * centreX && (long) y1 + y2 == 2L * centreY) {
+            return MaskedPlaneAccess.tryApplySampledTerrain(dimension, terrain, x1, y1, (int) width, (int) height,
+                    (x, y) -> dynamicLevel * brush.getFullStrength(x1 + x - centreX, y1 + y - centreY) > .75f);
+        }
         if (remove || terrain == null || dither || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
                 || dimension.getClass() != Dimension.class || !dimension.isEventsInhibited()
                 || width <= 0 || height <= 0 || width > 65_536L || height > 65_536L

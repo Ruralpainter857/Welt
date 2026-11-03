@@ -12,6 +12,62 @@ public final class MaskedPlaneAccess {
     private MaskedPlaneAccess() { }
     private static final ThreadLocal<ByteBuffer> BUFFER = ThreadLocal.withInitial(
             () -> ByteBuffer.allocateDirect(32816).order(ByteOrder.LITTLE_ENDIAN));
+    private static final ThreadLocal<SampledScratch> SAMPLED = ThreadLocal.withInitial(SampledScratch::new);
+    private static final java.util.concurrent.atomic.LongAdder SAMPLED_CALLS = new java.util.concurrent.atomic.LongAdder();
+
+    /** Completed native terrain tile transactions in the sampled path, including unchanged results. */
+    public static long completedSampledTerrainCalls() { return SAMPLED_CALLS.sum(); }
+
+    /** A pure, cached brush lookup at an offset within the whole footprint; it must not mutate the dimension. */
+    @FunctionalInterface public interface TerrainMask { boolean selected(int dx, int dy); }
+
+    /**
+     * Paint an entire footprint using one reusable tile mask and at most one native transaction per populated tile.
+     * Preflight precedes all sampling and editing. Unsupported native frames retain the Java setters for that tile.
+     * The caller must use a pure cached brush and inhibit events throughout this synchronous operation.
+     */
+    public static boolean tryApplySampledTerrain(Dimension dimension, Terrain terrain, int ox, int oy,
+                                                 int width, int height, TerrainMask selected) {
+        if (width > 1024 || height > 1024 || !canBatchTerrain(dimension, terrain, ox, oy, width, height)) return false;
+        Objects.requireNonNull(selected);
+        SampledScratch scratch = SAMPLED.get();
+        if (scratch.busy) scratch = new SampledScratch();
+        scratch.busy = true;
+        try {
+            for (int y = 0; y < height;) {
+                int wy = oy + y, ly = wy & TILE_SIZE_MASK, rh = Math.min(height - y, TILE_SIZE - ly);
+                for (int x = 0; x < width;) {
+                    int wx = ox + x, lx = wx & TILE_SIZE_MASK, rw = Math.min(width - x, TILE_SIZE - lx);
+                    Tile tile = dimension.getTile(wx >> TILE_SIZE_BITS, wy >> TILE_SIZE_BITS);
+                    if (tile != null) {
+                        boolean any = false;
+                        for (int dy = 0; dy < rh; dy++) for (int dx = 0; dx < rw; dx++) {
+                            boolean paint = selected.selected(x + dx, y + dy);
+                            scratch.mask[dy * rw + dx] = (byte) (paint ? 1 : 0);
+                            any |= paint;
+                        }
+                        if (any) {
+                            tile = dimension.getTileForEditing(wx >> TILE_SIZE_BITS, wy >> TILE_SIZE_BITS);
+                            if (tile.editMaskedRegionNative(null, terrain, 0, lx, ly, rw, rh, scratch.mask, 0, rw)) {
+                                SAMPLED_CALLS.increment();
+                            } else {
+                                for (int dy = 0; dy < rh; dy++) for (int dx = 0; dx < rw; dx++)
+                                    if (scratch.mask[dy * rw + dx] != 0) tile.setTerrain(lx + dx, ly + dy, terrain);
+                            }
+                        }
+                    }
+                    x += rw;
+                }
+                y += rh;
+            }
+            return true;
+        } finally { scratch.busy = false; }
+    }
+
+    private static final class SampledScratch {
+        final byte[] mask = new byte[TILE_SIZE * TILE_SIZE];
+        boolean busy;
+    }
 
     /** Preflight before consuming random draws or preparing a batched operation. */
     public static boolean canBatchLayer(Dimension dimension, Layer layer, int value, int ox, int oy, int width, int height) {
