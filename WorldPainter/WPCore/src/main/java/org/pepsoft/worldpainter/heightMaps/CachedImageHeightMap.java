@@ -8,6 +8,7 @@ import javax.imageio.ImageIO;
 import javax.imageio.ImageReadParam;
 import javax.imageio.ImageReader;
 import javax.imageio.ImageTypeSpecifier;
+import javax.imageio.event.IIOReadProgressListener;
 import javax.imageio.metadata.IIOMetadata;
 import javax.imageio.stream.ImageInputStream;
 import javax.swing.*;
@@ -27,6 +28,8 @@ import java.util.Arrays;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
+import java.util.function.BooleanSupplier;
 
 import static java.awt.image.DataBuffer.*;
 
@@ -99,6 +102,29 @@ public final class CachedImageHeightMap extends AbstractHeightMap implements Clo
      * @throws IOException If the image could not be read or the cache could not be written. The cache file is deleted.
      */
     public static CachedImageHeightMap capture(File file, String name) throws IOException {
+        return captureImpl(file, name, null);
+    }
+
+    /**
+     * Capture a greyscale TIFF image into a new cached height map, like {@link #capture(File, String)}, stopping early
+     * when {@code cancelled} becomes true. The thread doing the capture polls it before each band and, through a
+     * progress listener which then aborts the read, while the reader decodes one; nothing else touches the reader.
+     *
+     * @param cancelled Whether the capture is no longer wanted; once true it must stay true.
+     * @return The height map, or {@code null} if the file is not a supported image, as for
+     * {@link #capture(File, String)}.
+     * @throws IOException If the image could not be read or the cache could not be written. The cache file is deleted.
+     * @throws CancellationException If the capture was cancelled. The cache file is deleted.
+     */
+    public static CachedImageHeightMap capture(File file, String name, BooleanSupplier cancelled) throws IOException {
+        if (cancelled == null) {
+            throw new NullPointerException("cancelled");
+        }
+        return captureImpl(file, name, cancelled);
+    }
+
+    /** @param cancelled Polled during the capture, or {@code null} if it cannot be cancelled. */
+    private static CachedImageHeightMap captureImpl(File file, String name, BooleanSupplier cancelled) throws IOException {
         try (ImageInputStream in = ImageIO.createImageInputStream(file)) {
             if (in == null) {
                 return null;
@@ -146,13 +172,17 @@ public final class CachedImageHeightMap extends AbstractHeightMap implements Clo
                         || (! isBandable(reader, height, bandRows(width, height, bytesPerSample(transferType))))) {
                     return null;
                 }
+                if (cancelled != null) {
+                    checkCancelled(cancelled);
+                    reader.addIIOReadProgressListener(new AbortOnCancellation(cancelled));
+                }
                 final Path cacheFile = Files.createTempFile("welt-heightmap-", ".cache");
                 cacheFile.toFile().deleteOnExit();
                 boolean success = false;
                 CachedImageHeightMap heightMap = null;
                 try {
                     heightMap = new CachedImageHeightMap(name, file, width, height, sampleModel.getSampleSize(0), transferType, cacheFile);
-                    heightMap.write(reader);
+                    heightMap.write(reader, cancelled);
                     success = true;
                     return heightMap;
                 } finally {
@@ -241,6 +271,36 @@ public final class CachedImageHeightMap extends AbstractHeightMap implements Clo
             }
         }
         return -1;
+    }
+
+    private static void checkCancelled(BooleanSupplier cancelled) {
+        if (cancelled.getAsBoolean()) {
+            throw new CancellationException("Capture cancelled");
+        }
+    }
+
+    /** Aborts the read in progress, from the decoding thread itself, as soon as the capture is cancelled. */
+    private static final class AbortOnCancellation implements IIOReadProgressListener {
+        AbortOnCancellation(BooleanSupplier cancelled) {
+            this.cancelled = cancelled;
+        }
+
+        @Override public void imageProgress(ImageReader source, float percentageDone) {
+            if (cancelled.getAsBoolean()) {
+                source.abort();
+            }
+        }
+
+        @Override public void sequenceStarted(ImageReader source, int minIndex) {}
+        @Override public void sequenceComplete(ImageReader source) {}
+        @Override public void imageStarted(ImageReader source, int imageIndex) {}
+        @Override public void imageComplete(ImageReader source) {}
+        @Override public void thumbnailStarted(ImageReader source, int imageIndex, int thumbnailIndex) {}
+        @Override public void thumbnailProgress(ImageReader source, float percentageDone) {}
+        @Override public void thumbnailComplete(ImageReader source) {}
+        @Override public void readAborted(ImageReader source) {}
+
+        private final BooleanSupplier cancelled;
     }
 
     /** Whether bounded TIFF import is enabled ({@code -Dwelt.import.boundedTiff=true}). */
@@ -424,7 +484,7 @@ public final class CachedImageHeightMap extends AbstractHeightMap implements Clo
      * Decode the image band by band (see {@link #bandRows(int, int, int)}) into the cache file and compute the range.
      * Each band writes its rows of every block it covers. Samples are transferred in bulk in their own type.
      */
-    private void write(ImageReader reader) throws IOException {
+    private void write(ImageReader reader, BooleanSupplier cancelled) throws IOException {
         final int bandRows = bandRows(width, height, bytesPerSample);
         final int sliceRows = Math.min(bandRows, BLOCK);
         final Range range = new Range(floatingPoint, minHeight, maxHeight);
@@ -436,7 +496,14 @@ public final class CachedImageHeightMap extends AbstractHeightMap implements Clo
             for (int bandY = 0; bandY < height; bandY += bandRows) {
                 final int bandHeight = Math.min(bandRows, height - bandY);
                 param.setSourceRegion(new Rectangle(0, bandY, width, bandHeight));
+                if (cancelled != null) {
+                    checkCancelled(cancelled);
+                }
                 final Raster band = reader.read(0, param).getRaster();
+                if (cancelled != null) {
+                    // An aborted read returns a partially decoded band
+                    checkCancelled(cancelled);
+                }
                 if ((band.getWidth() != width) || (band.getHeight() != bandHeight) || (band.getTransferType() != transferType)
                         || (band.getNumDataElements() != 1) || (band.getSampleModel().getSampleSize(0) != bitDepth)) {
                     throw new IOException("Image reader returned an unexpected band");

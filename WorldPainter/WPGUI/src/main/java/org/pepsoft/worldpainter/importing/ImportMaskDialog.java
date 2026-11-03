@@ -23,7 +23,6 @@ import org.pepsoft.worldpainter.layers.*;
 import org.pepsoft.worldpainter.themes.TerrainListCellRenderer;
 import org.pepsoft.worldpainter.util.ImageUtils;
 
-import javax.imageio.ImageIO;
 import javax.swing.*;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
@@ -35,6 +34,8 @@ import java.io.File;
 import java.io.IOException;
 import java.util.List;
 import java.util.Vector;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.RejectedExecutionException;
 
 import static java.util.Arrays.asList;
 import static java.util.Comparator.comparing;
@@ -126,12 +127,17 @@ public class ImportMaskDialog extends WorldPainterDialog implements DocumentList
             loadImage();
         } else {
             selectedFile = null;
+            if (loader.isLoading()) {
+                // The field no longer shows the file being loaded
+                loader.cancel();
+                labelImageDimensions.setText(null);
+            }
         }
         setControlStates();
     }
 
     private void updatePossibleMappings() {
-        boolean fileSelected = (selectedFile != null) && selectedFile.isFile();
+        boolean fileSelected = isMaskReady();
         boolean targetSelected = (radioButtonLayer.isSelected() && (comboBoxLayer.getSelectedItem() != null)) || radioButtonTerrain.isSelected();
         if (fileSelected && targetSelected) {
             final MaskImporter.PossibleMappingsResult possibleMappings = maskImporter.getPossibleMappings();
@@ -145,13 +151,18 @@ public class ImportMaskDialog extends WorldPainterDialog implements DocumentList
         }
     }
 
+    /** Whether the selected file is loaded and ready to import: not while it is still loading. */
+    private boolean isMaskReady() {
+        return (selectedFile != null) && selectedFile.isFile() && (maskImporter != null);
+    }
+
     private void setControlStates() {
-        boolean fileSelected = (selectedFile != null) && selectedFile.isFile();
+        boolean fileSelected = isMaskReady();
         radioButtonTerrain.setEnabled(fileSelected);
-        comboBoxApplyToTerrain.setEnabled(radioButtonTerrain.isSelected());
+        comboBoxApplyToTerrain.setEnabled(fileSelected && radioButtonTerrain.isSelected());
         radioButtonLayer.setEnabled(fileSelected);
         comboBoxLayer.setEnabled(fileSelected && radioButtonLayer.isSelected());
-        comboBoxApplyToLayerValue.setEnabled(radioButtonLayer.isSelected() && (comboBoxLayer.getSelectedItem() != null) && (comboBoxApplyToLayerValue.getItemCount() > 1));
+        comboBoxApplyToLayerValue.setEnabled(fileSelected && radioButtonLayer.isSelected() && (comboBoxLayer.getSelectedItem() != null) && (comboBoxApplyToLayerValue.getItemCount() > 1));
         checkBoxRemoveExisting.setEnabled(fileSelected && radioButtonLayer.isSelected());
         boolean targetSelected = (radioButtonLayer.isSelected() && (comboBoxLayer.getSelectedItem() != null)) || radioButtonTerrain.isSelected();
         comboBoxMapping.setEnabled(fileSelected && targetSelected);
@@ -211,131 +222,190 @@ public class ImportMaskDialog extends WorldPainterDialog implements DocumentList
         pack();
     }
 
+    /** Load the selected file in the background, after releasing the current mask to make its memory available. */
     private void loadImage() {
+        image = null;
+        releaseCapture();
+        maskImporter = null;
+        labelImageDimensions.setForeground(null);
+        labelImageDimensions.setIcon(null);
+        labelImageDimensions.setText("Loading image...");
+        labelMaskRange.setVisible(false);
+        final File file = selectedFile;
+        loader.load(cancellation -> load(dimension, file, cancellation), this::maskLoaded, this::maskLoadFailed);
+    }
+
+    /**
+     * Load a mask off the event dispatch thread: captured with bounded memory if enabled and supported, otherwise
+     * completely, and analysed. Expected problems are returned as messages. A cancelled capture is not followed by a
+     * complete load.
+     */
+    private static LoadedMask load(Dimension dimension, File file, BackgroundImageLoader.Cancellation cancellation) {
+        CachedImageHeightMap capture = null;
+        boolean handedOver = false;
         try {
-            image = null; // Set image to null first to make more memory available for loading the new image
-            releaseCapture();
-            MaskImporter boundedImporter = null;
+            MaskImporter importer = null;
             if (MaskImporter.isBoundedEnabled()) {
                 try {
-                    capture = CachedImageHeightMap.capture(selectedFile, selectedFile.getName());
+                    capture = CachedImageHeightMap.capture(file, file.getName(), cancellation);
                     if (capture != null) {
-                        boundedImporter = MaskImporter.bounded(dimension, selectedFile, capture);
-                        if (boundedImporter == null) {
-                            // Not guaranteed to import identically; the dense path below takes over
-                            releaseCapture();
+                        importer = MaskImporter.bounded(dimension, file, capture);
+                        if (importer == null) {
+                            // Not guaranteed to import identically; the complete load below takes over
+                            capture.close();
+                            capture = null;
                         }
                     }
+                } catch (CancellationException e) {
+                    throw e;
                 } catch (IOException | RuntimeException e) {
-                    // The usual load below reports the problem, if it persists
-                    logger.warn("Could not capture mask " + selectedFile.getName() + " with bounded memory; loading it completely", e);
-                    boundedImporter = null;
-                    releaseCapture();
+                    // The complete load below reports the problem, if it persists
+                    logger.warn("Could not capture mask " + file.getName() + " with bounded memory; loading it completely", e);
+                    importer = null;
+                    if (capture != null) {
+                        capture.close();
+                        capture = null;
+                    }
                 }
             }
+            BufferedImage image = null;
             if (capture == null) {
-                image = ImageIO.read(selectedFile);
-            }
-            if ((image == null) && (capture == null)) {
-                labelImageDimensions.setForeground(Color.RED);
-                labelImageDimensions.setText("Not an image file, or damaged file!");
-                selectedFile = null;
-            } else if ((image != null) && image.isAlphaPremultiplied()) {
-                labelImageDimensions.setForeground(Color.RED);
-                labelImageDimensions.setText("Premultiplied alpha not supported! Please convert to non-premultiplied.");
-                selectedFile = null;
-            } else {
-                maskImporter = (capture != null) ? boundedImporter : new MaskImporter(dimension, selectedFile, image);
-                if (! maskImporter.isSupported()) {
-                    labelImageDimensions.setForeground(Color.RED);
-                    labelImageDimensions.setText(maskImporter.getUnsupportedReason());
-                    selectedFile = null;
-                    return;
+                cancellation.check();
+                image = BackgroundImageLoader.read(file, cancellation);
+                if (image == null) {
+                    return LoadedMask.error("Not an image file, or damaged file!");
+                } else if (image.isAlphaPremultiplied()) {
+                    return LoadedMask.error("Premultiplied alpha not supported! Please convert to non-premultiplied.");
                 }
-                labelImageDimensions.setForeground(null);
-                final int width = imageWidth(), height = imageHeight(), sampleSize = sampleSize();
-                maskImporter.setRemoveExistingLayer(checkBoxRemoveExisting.isSelected());
-                MaskImporter.InputType inputType = maskImporter.getInputType();
-                if (inputType == EIGHT_BIT_GREY_SCALE || inputType == SIXTEEN_BIT_GREY_SCALE || inputType == THIRTY_TWO_BIT_GREY_SCALE || inputType == FLOAT_GREY_SCALE || inputType == DOUBLE_GREY_SCALE) {
-                    SpinnerNumberModel thresholdModel = (SpinnerNumberModel) spinnerThreshold.getModel();
-                    thresholdModel.setMinimum(maskImporter.getImageLowValue());
-                    thresholdModel.setMaximum(maskImporter.getImageHighValue());
-                    thresholdModel.setValue((maskImporter.getImageLowValue() + maskImporter.getImageHighValue()) / 2);
-                    final double stepSize;
-                    if ((inputType == FLOAT_GREY_SCALE) || (inputType == DOUBLE_GREY_SCALE)) {
-                        final double range = maskImporter.getImageHighValue() - maskImporter.getImageLowValue();
-                        if (range <= 1.0) {
-                            stepSize = 0.001;
-                        } else if (range <= 10.0) {
-                            stepSize = 0.01;
-                        } else if (range <= 100.0) {
-                            stepSize = 0.1;
-                        } else {
-                            stepSize = 1.0;
-                        }
+                importer = new MaskImporter(dimension, file, image);
+            }
+            if (! importer.isSupported()) {
+                return LoadedMask.error(importer.getUnsupportedReason());
+            }
+            handedOver = true;
+            return new LoadedMask(importer, capture, image, null);
+        } catch (IOException e) {
+            logFailure(cancellation, "I/O error loading image " + file, e);
+            return LoadedMask.error(String.format("I/O error loading image (message: %s)!", e.getMessage()));
+        } catch (IllegalArgumentException e) {
+            logFailure(cancellation, "IllegalArgumentException loading image " + file, e);
+            if ("Invalid scanline stride".equals(e.getMessage())) {
+                return LoadedMask.error("Image data too large to load; try reducing dimensions or bit depth");
+            } else {
+                return LoadedMask.error("Error in image data: " + e.getMessage());
+            }
+        } finally {
+            if ((! handedOver) && (capture != null)) {
+                capture.close();
+            }
+        }
+    }
+
+    private static void logFailure(BackgroundImageLoader.Cancellation cancellation, String message, Exception e) {
+        if (cancellation.isCancelled()) {
+            logger.debug(message + " (no longer wanted)", e);
+        } else {
+            logger.error(message, e);
+        }
+    }
+
+    /** Take over a loaded mask, or show why it could not be loaded. */
+    private void maskLoaded(LoadedMask loaded) {
+        if (loaded.error != null) {
+            labelImageDimensions.setForeground(Color.RED);
+            labelImageDimensions.setText(loaded.error);
+            selectedFile = null;
+        } else {
+            // The dialog owns the mask from here
+            capture = loaded.capture;
+            image = loaded.image;
+            maskImporter = loaded.importer;
+            labelImageDimensions.setForeground(null);
+            final int width = imageWidth(), height = imageHeight(), sampleSize = sampleSize();
+            maskImporter.setRemoveExistingLayer(checkBoxRemoveExisting.isSelected());
+            MaskImporter.InputType inputType = maskImporter.getInputType();
+            if (inputType == EIGHT_BIT_GREY_SCALE || inputType == SIXTEEN_BIT_GREY_SCALE || inputType == THIRTY_TWO_BIT_GREY_SCALE || inputType == FLOAT_GREY_SCALE || inputType == DOUBLE_GREY_SCALE) {
+                SpinnerNumberModel thresholdModel = (SpinnerNumberModel) spinnerThreshold.getModel();
+                thresholdModel.setMinimum(maskImporter.getImageLowValue());
+                thresholdModel.setMaximum(maskImporter.getImageHighValue());
+                thresholdModel.setValue((maskImporter.getImageLowValue() + maskImporter.getImageHighValue()) / 2);
+                final double stepSize;
+                if ((inputType == FLOAT_GREY_SCALE) || (inputType == DOUBLE_GREY_SCALE)) {
+                    final double range = maskImporter.getImageHighValue() - maskImporter.getImageLowValue();
+                    if (range <= 1.0) {
+                        stepSize = 0.001;
+                    } else if (range <= 10.0) {
+                        stepSize = 0.01;
+                    } else if (range <= 100.0) {
+                        stepSize = 0.1;
                     } else {
                         stepSize = 1.0;
                     }
-                    thresholdModel.setStepSize(stepSize);
-                }
-                comboBoxApplyToTerrain.setSelectedItem(null);
-                if (inputType == COLOUR) {
-                    radioButtonLayer.setSelected(true);
-                    comboBoxLayer.setSelectedItem(Annotations.INSTANCE);
-                    comboBoxApplyToLayerValue.setSelectedItem(null);
                 } else {
-                    buttonGroup1.clearSelection();
-                    comboBoxLayer.setSelectedIndex(0);
+                    stepSize = 1.0;
                 }
-                labelReason.setText(null);
-
-                final String scalingNotSupportedReason = maskImporter.getScalingNotSupportedReason();
-                if (scalingNotSupportedReason != null) {
-                    spinnerScale.setValue(100.0f);
-                    spinnerScale.setEnabled(false);
-                    spinnerScale.setToolTipText(scalingNotSupportedReason);
-                    labelImageDimensions.setIcon(ICON_WARNING);
-                    labelImageDimensions.setText(scalingNotSupportedReason);
-                } else {
-                    spinnerScale.setEnabled(true);
-                    spinnerScale.setToolTipText(null);
-                    labelImageDimensions.setIcon(null);
-                    if (inputType == COLOUR) {
-                        labelImageDimensions.setText(String.format("Image size: %,d x %,d, colour, %d bits", width, height, sampleSize));
-                    } else if (inputType == ONE_BIT_GREY_SCALE) {
-                        labelImageDimensions.setText(String.format("Image size: %,d x %,d, black and white", width, height));
-                    } else if ((inputType == FLOAT_GREY_SCALE) || (inputType == DOUBLE_GREY_SCALE)) {
-                        labelImageDimensions.setText(String.format("<html>Image size: %,d x %,d, grey scale, %d bits floating point<br>Lowest value: %,f, highest value: %,f</html>", width, height, sampleSize, maskImporter.getImageLowValue(), maskImporter.getImageHighValue()));
-                    } else {
-                        labelImageDimensions.setText(String.format("<html>Image size: %,d x %,d, grey scale, %d bits integer<br>Lowest value: %,d, highest value: %,d</html>", width, height, sampleSize, Math.round(maskImporter.getImageLowValue()), Math.round(maskImporter.getImageHighValue())));
-                    }
-                }
-                if ((inputType == FLOAT_GREY_SCALE) || (inputType == DOUBLE_GREY_SCALE)) {
-                    labelMaskRange.setText(String.format("Actual mask range: %,f - %,f", maskImporter.getImageLowValue(), maskImporter.getImageHighValue()));
-                    labelMaskRange.setVisible(true);
-                } else if ((inputType != ONE_BIT_GREY_SCALE) && (inputType != COLOUR) && (inputType != UNSUPPORTED)) {
-                    labelMaskRange.setText(String.format("Actual mask range: %,d - %,d", (long) maskImporter.getImageLowValue(), (long) maskImporter.getImageHighValue()));
-                    labelMaskRange.setVisible(true);
-                } else {
-                    labelMaskRange.setVisible(false);
-                }
-                updateWorldDimensions();
+                thresholdModel.setStepSize(stepSize);
             }
-        } catch (IOException e) {
-            logger.error("I/O error loading image " + selectedFile, e);
-            labelImageDimensions.setForeground(Color.RED);
-            labelImageDimensions.setText(String.format("I/O error loading image (message: %s)!", e.getMessage()));
-            selectedFile = null;
-        } catch (IllegalArgumentException e) {
-            logger.error("IllegalArgumentException loading image " + selectedFile, e);
-            labelImageDimensions.setForeground(Color.RED);
-            if (e.getMessage().equals("Invalid scanline stride")) {
-                labelImageDimensions.setText("Image data too large to load; try reducing dimensions or bit depth");
+            comboBoxApplyToTerrain.setSelectedItem(null);
+            if (inputType == COLOUR) {
+                radioButtonLayer.setSelected(true);
+                comboBoxLayer.setSelectedItem(Annotations.INSTANCE);
+                comboBoxApplyToLayerValue.setSelectedItem(null);
             } else {
-                labelImageDimensions.setText("Error in image data: " + e.getMessage());
+                buttonGroup1.clearSelection();
+                comboBoxLayer.setSelectedIndex(0);
             }
-            selectedFile = null;
+            labelReason.setText(null);
+
+            final String scalingNotSupportedReason = maskImporter.getScalingNotSupportedReason();
+            if (scalingNotSupportedReason != null) {
+                spinnerScale.setValue(100.0f);
+                spinnerScale.setEnabled(false);
+                spinnerScale.setToolTipText(scalingNotSupportedReason);
+                labelImageDimensions.setIcon(ICON_WARNING);
+                labelImageDimensions.setText(scalingNotSupportedReason);
+            } else {
+                spinnerScale.setEnabled(true);
+                spinnerScale.setToolTipText(null);
+                labelImageDimensions.setIcon(null);
+                if (inputType == COLOUR) {
+                    labelImageDimensions.setText(String.format("Image size: %,d x %,d, colour, %d bits", width, height, sampleSize));
+                } else if (inputType == ONE_BIT_GREY_SCALE) {
+                    labelImageDimensions.setText(String.format("Image size: %,d x %,d, black and white", width, height));
+                } else if ((inputType == FLOAT_GREY_SCALE) || (inputType == DOUBLE_GREY_SCALE)) {
+                    labelImageDimensions.setText(String.format("<html>Image size: %,d x %,d, grey scale, %d bits floating point<br>Lowest value: %,f, highest value: %,f</html>", width, height, sampleSize, maskImporter.getImageLowValue(), maskImporter.getImageHighValue()));
+                } else {
+                    labelImageDimensions.setText(String.format("<html>Image size: %,d x %,d, grey scale, %d bits integer<br>Lowest value: %,d, highest value: %,d</html>", width, height, sampleSize, Math.round(maskImporter.getImageLowValue()), Math.round(maskImporter.getImageHighValue())));
+                }
+            }
+            if ((inputType == FLOAT_GREY_SCALE) || (inputType == DOUBLE_GREY_SCALE)) {
+                labelMaskRange.setText(String.format("Actual mask range: %,f - %,f", maskImporter.getImageLowValue(), maskImporter.getImageHighValue()));
+                labelMaskRange.setVisible(true);
+            } else if ((inputType != ONE_BIT_GREY_SCALE) && (inputType != COLOUR) && (inputType != UNSUPPORTED)) {
+                labelMaskRange.setText(String.format("Actual mask range: %,d - %,d", (long) maskImporter.getImageLowValue(), (long) maskImporter.getImageHighValue()));
+                labelMaskRange.setVisible(true);
+            } else {
+                labelMaskRange.setVisible(false);
+            }
+            updateWorldDimensions();
         }
+        setControlStates();
+    }
+
+    /** Report an unexpected failure to load the mask. */
+    private void maskLoadFailed(Throwable failure) {
+        selectedFile = null;
+        labelImageDimensions.setForeground(Color.RED);
+        if (failure instanceof OutOfMemoryError) {
+            logger.error("Out of memory loading image", failure);
+            labelImageDimensions.setText("Image data too large to load; try reducing dimensions or bit depth");
+        } else if (failure instanceof RejectedExecutionException) {
+            labelImageDimensions.setText("Too many images are being loaded; please select the file again");
+        } else {
+            labelImageDimensions.setText("Error loading image!");
+            ExceptionHandler.handleException(failure, this);
+        }
+        setControlStates();
     }
 
     private void updateWorldDimensions() {
@@ -373,16 +443,21 @@ public class ImportMaskDialog extends WorldPainterDialog implements DocumentList
 
     @Override
     public void dispose() {
+        // Nothing is loaded after the dialog closes; a load still in progress is discarded when it returns
+        loader.close();
         super.dispose();
-        // Cancelled in any way, including closing the window: nothing will import the captured mask. After ok() the
-        // import releases it
-        if (isCancelled()) {
-            releaseCapture();
-        }
+        // Nothing imports the mask after the dialog closes: cancelled in any way, including closing the window, or
+        // after ok(), whose import released the capture already
+        releaseCapture();
+        image = null;
+        maskImporter = null;
     }
 
     @Override
     protected void ok() {
+        if ((maskImporter == null) || loader.isLoading()) {
+            return;
+        }
         maskImporter.setThreshold((double) spinnerThreshold.getValue());
         maskImporter.setMapping((Mapping) comboBoxMapping.getSelectedItem());
         maskImporter.setRemoveExistingLayer(radioButtonLayer.isSelected() && checkBoxRemoveExisting.isSelected());
@@ -840,6 +915,34 @@ public class ImportMaskDialog extends WorldPainterDialog implements DocumentList
     /** The bounded capture of the mask instead of {@link #image}, when enabled and supported. Owned by this dialog. */
     private volatile CachedImageHeightMap capture;
     private MaskImporter maskImporter;
+    /** Loads the mask off the event dispatch thread; a result belongs to it until {@link #maskLoaded(LoadedMask)}. */
+    private final BackgroundImageLoader<LoadedMask> loader = new BackgroundImageLoader<>(LoadedMask::release);
+
+    /** A mask loaded off the event dispatch thread: an importer of a capture or of an image in memory, or an error. */
+    private static final class LoadedMask {
+        LoadedMask(MaskImporter importer, CachedImageHeightMap capture, BufferedImage image, String error) {
+            this.importer = importer;
+            this.capture = capture;
+            this.image = image;
+            this.error = error;
+        }
+
+        static LoadedMask error(String message) {
+            return new LoadedMask(null, null, null, message);
+        }
+
+        /** Release a mask which is not delivered to the dialog. */
+        void release() {
+            if (capture != null) {
+                capture.close();
+            }
+        }
+
+        final MaskImporter importer;
+        final CachedImageHeightMap capture;
+        final BufferedImage image;
+        final String error;
+    }
 
     private static final Icon ICON_WARNING = IconUtils.loadScaledIcon("org/pepsoft/worldpainter/icons/error.png");
     private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(ImportMaskDialog.class);

@@ -15,6 +15,7 @@ import org.pepsoft.util.swing.TileProvider;
 import org.pepsoft.worldpainter.biomeschemes.CustomBiomeManager;
 import org.pepsoft.worldpainter.heightMaps.*;
 import org.pepsoft.worldpainter.heightMaps.gui.ImportPresetListCellRenderer;
+import org.pepsoft.worldpainter.importing.BackgroundImageLoader;
 import org.pepsoft.worldpainter.importing.HeightMapImporter;
 import org.pepsoft.worldpainter.layers.Void;
 import org.pepsoft.worldpainter.plugins.PlatformManager;
@@ -24,7 +25,6 @@ import org.pepsoft.worldpainter.themes.Theme;
 import org.pepsoft.worldpainter.themes.impl.simple.SimpleThemeEditor;
 import org.pepsoft.worldpainter.util.ImageUtils;
 
-import javax.imageio.ImageIO;
 import javax.swing.*;
 import javax.swing.JSpinner.NumberEditor;
 import javax.swing.event.DocumentEvent;
@@ -41,6 +41,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 import java.util.Vector;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.RejectedExecutionException;
 
 import static com.google.common.primitives.Ints.asList;
 import static javax.swing.JOptionPane.*;
@@ -318,68 +320,139 @@ public class ImportHeightMapDialog extends WorldPainterDialog implements Documen
         if (file.isFile() && (! file.equals(selectedFile))) {
             selectedFile = file;
             loadImage();
+        } else if ((! file.isFile()) && ((selectedFile != null) || hasImage() || loader.isLoading())) {
+            // The field no longer shows the image: it must not be imported
+            unloadImage();
         }
-        boolean fileSelected = (selectedFile != null) && selectedFile.isFile();
+        updateControlStates();
+    }
+
+    /** Forget the selected image: cancel its load, release it and its preview. */
+    private void unloadImage() {
+        selectedFile = null;
+        loader.cancel();
+        image = null;
+        releaseCachedHeightMap();
+        tiledImageViewer2.removeTileProvider(LAYER_HEIGHT_MAP);
+        labelImageDimensions.setForeground(null);
+        labelImageDimensions.setIcon(null);
+        labelImageDimensions.setText("Image size: ? x ?, bit depth: ?, lowest value: ?, highest value: ?");
+    }
+
+    /** Enable the controls which need an image only when it is loaded: not while it is still loading. */
+    private void updateControlStates() {
+        boolean fileSelected = (selectedFile != null) && selectedFile.isFile() && hasImage();
         comboBoxPreset.setEnabled(fileSelected);
         buttonOk.setEnabled(fileSelected);
         spinnerImageLow.setEnabled(fileSelected);
         spinnerImageHigh.setEnabled(fileSelected);
     }
 
+    /**
+     * Load the selected file in the background, after releasing the current image, to make its memory available, and
+     * its preview.
+     */
     private void loadImage() {
+        image = null;
+        releaseCachedHeightMap();
+        tiledImageViewer2.removeTileProvider(LAYER_HEIGHT_MAP);
+        labelImageDimensions.setForeground(null);
+        labelImageDimensions.setIcon(null);
+        labelImageDimensions.setText("Loading image...");
+        final File file = selectedFile;
+        loader.load(cancellation -> load(file, cancellation), this::imageLoaded, this::imageLoadFailed);
+    }
+
+    /**
+     * Load an image off the event dispatch thread: captured with bounded memory if enabled and supported, otherwise
+     * completely, and analysed. Expected problems are returned as messages. A cancelled capture is not followed by a
+     * complete load.
+     */
+    private static LoadedImage load(File file, BackgroundImageLoader.Cancellation cancellation) {
         try {
-            image = null; // Set image to null first to make more memory available for loading the new image
-            releaseCachedHeightMap();
             if (CachedImageHeightMap.isEnabled()) {
+                CachedImageHeightMap cachedHeightMap = null;
                 try {
-                    cachedHeightMap = CachedImageHeightMap.capture(selectedFile, selectedFile.getName());
+                    cachedHeightMap = CachedImageHeightMap.capture(file, file.getName(), cancellation);
+                } catch (CancellationException e) {
+                    throw e;
                 } catch (IOException | RuntimeException e) {
-                    // The usual load below reports the problem, if it persists
-                    logger.warn("Could not capture image " + selectedFile.getName() + " with bounded memory; loading it completely", e);
-                    cachedHeightMap = null;
+                    // The complete load below reports the problem, if it persists
+                    logger.warn("Could not capture image " + file.getName() + " with bounded memory; loading it completely", e);
+                }
+                if (cachedHeightMap != null) {
+                    return new LoadedImage(cachedHeightMap, null, cachedHeightMap.getWidth(), cachedHeightMap.getHeight(), cachedHeightMap.getBitDepth(),
+                            cachedHeightMap.getMinHeight(), cachedHeightMap.getMaxHeight(), cachedHeightMap.getRange(), cachedHeightMap.isFloatingPoint());
                 }
             }
-            if (cachedHeightMap != null) {
-                imageLoaded(cachedHeightMap.getWidth(), cachedHeightMap.getHeight(), cachedHeightMap.getBitDepth(),
-                        cachedHeightMap.getMinHeight(), cachedHeightMap.getMaxHeight(), cachedHeightMap.getRange(), cachedHeightMap.isFloatingPoint());
-                return;
-            }
-            image = ImageIO.read(selectedFile);
-            if (! hasImage()) {
-                labelImageDimensions.setForeground(Color.RED);
-                labelImageDimensions.setIcon(ICON_WARNING);
-                labelImageDimensions.setText("Not an image file of a supported type, or damaged file!");
-                selectedFile = null;
+            cancellation.check();
+            final BufferedImage image = BackgroundImageLoader.read(file, cancellation);
+            if (image == null) {
+                return LoadedImage.error("Not an image file of a supported type, or damaged file!", true);
             } else if ((image.getType() == BufferedImage.TYPE_BYTE_BINARY) || (image.getType() == BufferedImage.TYPE_BYTE_INDEXED)) {
-                labelImageDimensions.setForeground(Color.RED);
-                labelImageDimensions.setIcon(ICON_WARNING);
-                labelImageDimensions.setText("Indexed image not supported! Please convert to non-indexed.");
-                selectedFile = null;
+                return LoadedImage.error("Indexed image not supported! Please convert to non-indexed.", true);
             } else if (image.isAlphaPremultiplied()) {
-                labelImageDimensions.setForeground(Color.RED);
-                labelImageDimensions.setIcon(ICON_WARNING);
-                labelImageDimensions.setText("Premultiplied alpha not supported! Please convert to non-premultiplied.");
-                selectedFile = null;
+                return LoadedImage.error("Premultiplied alpha not supported! Please convert to non-premultiplied.", true);
             } else {
                 final BitmapHeightMap heightMap = BitmapHeightMap.build().withImage(image).now();
-                imageLoaded(heightMap.getWidth(), heightMap.getHeight(), heightMap.getBitDepth(), heightMap.getMinHeight(),
+                return new LoadedImage(null, image, heightMap.getWidth(), heightMap.getHeight(), heightMap.getBitDepth(), heightMap.getMinHeight(),
                         heightMap.getMaxHeight(), heightMap.getRange(), heightMap.isFloatingPoint());
             }
         } catch (IOException e) {
-            logger.error("I/O error loading image " + selectedFile, e);
-            labelImageDimensions.setForeground(Color.RED);
-            labelImageDimensions.setText(String.format("I/O error loading image (message: %s)!", e.getMessage()));
-            selectedFile = null;
+            logFailure(cancellation, "I/O error loading image " + file, e);
+            return LoadedImage.error(String.format("I/O error loading image (message: %s)!", e.getMessage()), false);
         } catch (IllegalArgumentException e) {
-            logger.error("IllegalArgumentException loading image " + selectedFile, e);
-            labelImageDimensions.setForeground(Color.RED);
-            if (e.getMessage().equals("Invalid scanline stride")) {
-                labelImageDimensions.setText("Image data too large to load; try reducing dimensions or bit depth");
+            logFailure(cancellation, "IllegalArgumentException loading image " + file, e);
+            if ("Invalid scanline stride".equals(e.getMessage())) {
+                return LoadedImage.error("Image data too large to load; try reducing dimensions or bit depth", false);
             } else {
-                labelImageDimensions.setText("Error in image data: " + e.getMessage());
+                return LoadedImage.error("Error in image data: " + e.getMessage(), false);
             }
-            selectedFile = null;
         }
+    }
+
+    private static void logFailure(BackgroundImageLoader.Cancellation cancellation, String message, Exception e) {
+        if (cancellation.isCancelled()) {
+            logger.debug(message + " (no longer wanted)", e);
+        } else {
+            logger.error(message, e);
+        }
+    }
+
+    /** Take over a loaded image, or show why it could not be loaded. */
+    private void imageLoaded(LoadedImage loaded) {
+        if (loaded.error != null) {
+            labelImageDimensions.setForeground(Color.RED);
+            if (loaded.warningIcon) {
+                labelImageDimensions.setIcon(ICON_WARNING);
+            }
+            labelImageDimensions.setText(loaded.error);
+            selectedFile = null;
+        } else {
+            // The dialog owns the image from here
+            cachedHeightMap = loaded.cachedHeightMap;
+            image = loaded.image;
+            imageRange = loaded.range;
+            imageFloatingPoint = loaded.floatingPoint;
+            imageLoaded(loaded.width, loaded.height, loaded.bitDepth, loaded.minHeight, loaded.maxHeight, loaded.range, loaded.floatingPoint);
+        }
+        updateControlStates();
+    }
+
+    /** Report an unexpected failure to load the image. */
+    private void imageLoadFailed(Throwable failure) {
+        selectedFile = null;
+        labelImageDimensions.setForeground(Color.RED);
+        if (failure instanceof OutOfMemoryError) {
+            logger.error("Out of memory loading image", failure);
+            labelImageDimensions.setText("Image data too large to load; try reducing dimensions or bit depth");
+        } else if (failure instanceof RejectedExecutionException) {
+            labelImageDimensions.setText("Too many images are being loaded; please select the file again");
+        } else {
+            labelImageDimensions.setText("Error loading image!");
+            ExceptionHandler.handleException(failure, this);
+        }
+        updateControlStates();
     }
 
     /** Show the properties of a newly loaded image, in memory or captured, and update the levels and preview. */
@@ -639,16 +712,24 @@ public class ImportHeightMapDialog extends WorldPainterDialog implements Documen
 
     @Override
     public void dispose() {
+        // Nothing is loaded after the dialog closes; a load still in progress is discarded when it returns
+        loader.close();
         super.dispose();
-        // Cancelled in any way, including closing the window: nothing will import the captured image. After ok() the
-        // import releases it
+        // The previews refer to the image, and to the current dimension; getImportedWorld() does not need them
+        tiledImageViewer2.removeAllTileProviders();
+        // Cancelled in any way, including closing the window: nothing will import the image. After ok() the import
+        // (getImportedWorld() for a new world) is its last consumer and releases it
         if (isCancelled()) {
             releaseCachedHeightMap();
+            image = null;
         }
     }
 
     @Override
     protected void ok() {
+        if (loader.isLoading()) {
+            return;
+        }
         if (currentDimension != null) {
             importToDimension();
         } else if (checkBoxMasterDimension.isSelected()) {
@@ -1728,8 +1809,9 @@ public class ImportHeightMapDialog extends WorldPainterDialog implements Documen
     }//GEN-LAST:event_comboBoxPlatformActionPerformed
 
     private void checkBoxInvertActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_checkBoxInvertActionPerformed
-        if (selectedFile != null) {
-            loadImage();
+        // Shows the analysed properties again with the levels inverted; an image still loading uses the new setting
+        if ((selectedFile != null) && hasImage()) {
+            imageLoaded(imageWidth(), imageHeight(), bitDepth, imageMinHeight, imageMaxHeight, imageRange, imageFloatingPoint);
         }
     }//GEN-LAST:event_checkBoxInvertActionPerformed
 
@@ -1878,8 +1960,62 @@ public class ImportHeightMapDialog extends WorldPainterDialog implements Documen
     private volatile CachedImageHeightMap cachedHeightMap;
     private int bitDepth = 8;
     private double imageLowValue, imageHighValue = 255.0, imageMinHeight, imageMaxHeight = 255.0;
+    /** The range and type of the samples of the loaded image, as analysed when it was loaded. */
+    private double[] imageRange;
+    private boolean imageFloatingPoint;
+    /** Loads images off the event dispatch thread; a result belongs to it until {@link #imageLoaded(LoadedImage)}. */
+    private final BackgroundImageLoader<LoadedImage> loader = new BackgroundImageLoader<>(LoadedImage::release);
     private boolean programmaticChange = true;
     private Platform platform;
+
+    /** An image loaded off the event dispatch thread, captured or in memory, with its properties; or an error message. */
+    private static final class LoadedImage {
+        LoadedImage(CachedImageHeightMap cachedHeightMap, BufferedImage image, int width, int height, int bitDepth, double minHeight, double maxHeight,
+                    double[] range, boolean floatingPoint) {
+            this.cachedHeightMap = cachedHeightMap;
+            this.image = image;
+            this.width = width;
+            this.height = height;
+            this.bitDepth = bitDepth;
+            this.minHeight = minHeight;
+            this.maxHeight = maxHeight;
+            this.range = range;
+            this.floatingPoint = floatingPoint;
+            error = null;
+            warningIcon = false;
+        }
+
+        private LoadedImage(String error, boolean warningIcon) {
+            cachedHeightMap = null;
+            image = null;
+            width = height = bitDepth = 0;
+            minHeight = maxHeight = 0.0;
+            range = null;
+            floatingPoint = false;
+            this.error = error;
+            this.warningIcon = warningIcon;
+        }
+
+        static LoadedImage error(String message, boolean warningIcon) {
+            return new LoadedImage(message, warningIcon);
+        }
+
+        /** Release an image which is not delivered to the dialog. */
+        void release() {
+            if (cachedHeightMap != null) {
+                cachedHeightMap.close();
+            }
+        }
+
+        final CachedImageHeightMap cachedHeightMap;
+        final BufferedImage image;
+        final int width, height, bitDepth;
+        final double minHeight, maxHeight;
+        final double[] range;
+        final boolean floatingPoint;
+        final String error;
+        final boolean warningIcon;
+    }
 
     private static final String UPDATE_HEIGHT_MAP_PREVIEW = ImportHeightMapDialog.class.getName() + ".updateHeightMap";
     private static final Icon ICON_WARNING = IconUtils.loadScaledIcon("org/pepsoft/worldpainter/icons/error.png");
