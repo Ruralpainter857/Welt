@@ -445,10 +445,11 @@ public final class NativeSlices {
     }
     private static native int nativeImportMaskTile(ByteBuffer buffer,int length);
 
-    /** WHTB v1: compact grouped tiles retain global stroke order across their shared theme. */
+    /** WHTB v1..7: compact grouped tiles retain global stroke order across their shared theme. */
     public static boolean applyThemedHeightBrush(ByteBuffer buffer) {
         if(!Native.isGenEnabled()||!NativeLoader.areSlicesAvailable()||buffer==null||!buffer.isDirect()
-                ||buffer.isReadOnly()||buffer.position()!=0||buffer.limit()<128||buffer.limit()>4*1024*1024)return false;
+                ||buffer.isReadOnly()||buffer.position()!=0||buffer.limit()<128||buffer.limit()>16*1024*1024)return false;
+        if (buffer.limit() > 4*1024*1024 && (buffer.get(4) != 7 || buffer.get(5) != 0 || buffer.get(6) != 0 || buffer.get(7) != 0)) return false;
         try{return nativeApplyThemedHeightBrush(buffer,buffer.limit())==0;}
         catch(UnsatisfiedLinkError e){return false;}
     }

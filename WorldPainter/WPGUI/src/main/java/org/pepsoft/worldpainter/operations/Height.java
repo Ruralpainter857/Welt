@@ -6,6 +6,8 @@
 package org.pepsoft.worldpainter.operations;
 
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.brushes.BitmapBrush;
+import org.pepsoft.worldpainter.brushes.SymmetricBrush;
 import org.pepsoft.worldpainter.TerrainHeightAccess;
 import org.pepsoft.worldpainter.HeightBrushAccess;
 import org.pepsoft.worldpainter.FilteredPaintAccess;
@@ -78,12 +80,15 @@ public class Height extends AbstractBrushOperation {
             return false;
         }
         long diameterLong = 2L * radius + 1L;
-        if (radius < 0 || diameterLong > 256L) {
+        final boolean large = diameterLong > 256L;
+        if (radius < 0 || diameterLong > (getFilter() == null && Boolean.getBoolean("welt.native.largeHeightBrush") ? 1024L : 256L)) {
             return false;
         }
+        // These shapes read cached strengths. Custom callbacks must keep Java's evolving-cell traversal.
+        if (large && !(getBrush() instanceof SymmetricBrush) && getBrush().getClass() != BitmapBrush.class) return false;
         int diameter = (int) diameterLong;
         int area = diameter * diameter;
-        if (area > MAX_NATIVE_CELLS) {
+        if (area > (large ? 1024 * 1024 : MAX_NATIVE_CELLS)) {
             return false;
         }
         if (nativeStrengths == null || nativeStrengths.length != area) nativeStrengths = new float[area];
@@ -118,6 +123,8 @@ public class Height extends AbstractBrushOperation {
         if (!applyTheme && HeightBrushAccess.tryApply(dimension, centreX - radius, centreY - radius,
                 diameter, diameter, nativeStrengths, inverse ? HeightBrushAccess.LOWER : HeightBrushAccess.RAISE,
                 adjustment, minZ, maxZ)) return true;
+        // The legacy array fallback is not a grouped large stroke and may observe custom tiles in a different order.
+        if (large) return false;
         ensureNativeBuffers(area);
         TerrainHeightAccess.copy(dimension, centreX - radius, centreY - radius, diameter, diameter, nativeHeights);
 

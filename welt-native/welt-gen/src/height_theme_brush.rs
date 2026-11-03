@@ -1,6 +1,7 @@
 //! WHTB v1 through v6 group all intersecting tiles to preserve the global X/Y theme RNG order.
 //! V4 interleaves height and theme writes; earlier versions retain the bulk terrain path.
 //! V5 adds live filters. V6 adds mountain modes 6/7 with factor/scale at bytes 88/92.
+//! V7 extends ordered unfiltered height/flatten edits to 1024-square footprints and 81 tiles.
 //! The shared packed planes retain Java global X/Y mutation and random-draw order.
 //! V3 adds mode 5 (smooth), border offset/count at bytes 88/92, and reserves bytes 96..128.
 //! Border floats precede the theme: left/right are 5 x (height + 10), top/bottom width x 5,
@@ -14,7 +15,7 @@ use welt_core::{
     noise::{perlin::PerlinAxis2D, PerlinNoise},
     rng::JavaRandom,
 };
-pub const MAX_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_BYTES: usize = 16 * 1024 * 1024;
 const AREA: usize = 16384;
 fn word(d: &[u8], p: usize) -> u32 {
     u32::from_le_bytes(d[p..p + 4].try_into().unwrap())
@@ -76,7 +77,9 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     if d.len() < 128
         || d.len() > MAX_BYTES
         || word(d, 0) != 0x42544857
-        || !matches!(word(d, 4), 1..=6)
+        || !matches!(word(d, 4), 1..=7)
+        || word(d, 4) < 7 && d.len() > 4 * 1024 * 1024
+        || word(d, 4) == 7 && (word(d, 28) > 4 || d[88..128].iter().any(|&v| v != 0))
         || word(d, 8) as usize != d.len()
         || word(d, 4) < 5
             && d[if word(d, 4) >= 3 && word(d, 28) == 5 {
@@ -90,6 +93,7 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
         return Err(bad);
     }
     let filtered = word(d, 4) == 5;
+    let large = word(d, 4) == 7;
     let header = if filtered { 256 } else { 128 };
     if d.len() < header {
         return Err(bad);
@@ -122,7 +126,7 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
         0
     };
     if !(3..=64).contains(&n)
-        || nt > 9
+        || nt > if large { 81 } else { 9 }
         || word(d, 4) == 3 && mode != 5
         || mountain
             && (mode < 6
@@ -142,8 +146,8 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
             } else {
                 4
             }
-        || !(1..=256).contains(&w)
-        || !(1..=256).contains(&h)
+        || !(1..=if large { 1024 } else { 256 }).contains(&w)
+        || !(1..=if large { 1024 } else { 256 }).contains(&h)
         || !(1..=65536).contains(&(i64::from(max) - i64::from(min)))
         || !(0..=255).contains(&beach)
         || forces != header + n * 16
@@ -559,6 +563,70 @@ mod tests {
             }
         }
         d
+    }
+    fn large_frame() -> Vec<u8> {
+        let small = frame();
+        let forces = word(&small, 60) as usize;
+        let old_theme = word(&small, 64) as usize;
+        let old_start = word(&small, 68) as usize;
+        let step = word(&small, 72) as usize;
+        let theme = forces + 511 * 511 * 4;
+        let start = theme + old_start - old_theme;
+        let mut large = vec![0; start + 25 * step];
+        large[..forces].copy_from_slice(&small[..forces]);
+        large[theme..start].copy_from_slice(&small[old_theme..old_start]);
+        for (at, value) in [
+            (4, 7),
+            (8, large.len() as u32),
+            (16, 25),
+            (52, 511),
+            (56, 511),
+            (64, theme as u32),
+            (68, start as u32),
+        ] {
+            put(&mut large, at, value);
+        }
+        for x in 0..2 {
+            for y in 0..2 {
+                put(&mut large, forces + (x * 511 + y) * 4, 1f32.to_bits());
+            }
+        }
+        for tile in 0..25 {
+            let at = start + tile * step;
+            large[at..at + step].copy_from_slice(&small[old_start..old_start + step]);
+            put(&mut large, at + 256, (tile / 5) as u32);
+            put(&mut large, at + 260, (tile % 5) as u32);
+        }
+        large
+    }
+    #[test]
+    fn large_ordered_frames_preserve_global_draws_across_more_than_nine_tiles() {
+        let mut reference = frame();
+        put(&mut reference, 4, 4);
+        let mut large = large_frame();
+        apply(&mut reference, &mut BrushScratch::default()).unwrap();
+        apply(&mut large, &mut BrushScratch::default()).unwrap();
+        assert_eq!(long(&reference, 80), long(&large, 80));
+        let old_start = word(&reference, 68) as usize;
+        let start = word(&large, 68) as usize;
+        let step = word(&large, 72) as usize;
+        for x in 0..2 {
+            for y in 0..2 {
+                let a = old_start + (x * 2 + y) * step;
+                let b = start + (x * 5 + y) * step;
+                assert_eq!(reference[a..a + step], large[b..b + step]);
+            }
+        }
+    }
+    #[test]
+    fn extended_brush_limits_and_legacy_layouts_reject_without_mutation() {
+        for (at, value) in [(4, 4), (4, 8), (16, 82), (28, 5), (52, 1025), (88, 1)] {
+            let mut frame = large_frame();
+            put(&mut frame, at, value);
+            let before = frame.clone();
+            assert!(apply(&mut frame, &mut BrushScratch::default()).is_err());
+            assert_eq!(frame, before);
+        }
     }
     #[test]
     fn grouped_theme_commits_exact_global_draws_and_reuses_workspaces() {
