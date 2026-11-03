@@ -567,7 +567,11 @@ public class HeightMapTileFactory extends AbstractTileFactory {
             }
             return tile;
         } finally {
-            tile.releaseEvents();
+            try {
+                tile.compactUniformWaterLevel();
+            } finally {
+                tile.releaseEvents();
+            }
         }
     }
 

@@ -956,21 +956,22 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                     ensureWriteable(TALL_HEIGHTMAP);
                 }
                 final short rawWaterLevel = (short) (waterLevel - minHeight);
-                if (rawWaterLevel == 0) {
-                    setSharedTallWaterLevelBuffer(DEFAULT_TALL_WATERLEVEL_BUFFER);
+                final boolean sharedWater = rawWaterLevel == 0 || shareTallWaterLevels();
+                if (sharedWater) {
+                    setSharedTallWaterLevelBuffer(UNIFORM_TALL_WATERLEVEL_BUFFERS.uniform(rawWaterLevel));
                 } else {
                     ensureWriteable(TALL_WATERLEVEL);
                 }
                 if (uniformHeight) {
                     Arrays.fill(intHeights, Math.round(firstRawHeight / 256f + minHeight));
-                    if (rawWaterLevel != 0) {
+                    if (!sharedWater) {
                         Arrays.fill(tallWaterLevel, rawWaterLevel);
                     }
                 } else {
                     for (int i = 0; i < heights.length; i++) {
                         final int rawHeight = (int) ((heights[i] - minHeight) * 256);
                         tallHeightMap[i] = rawHeight;
-                        if (rawWaterLevel != 0) {
+                        if (!sharedWater) {
                             tallWaterLevel[i] = rawWaterLevel;
                         }
                         intHeights[i] = Math.round(rawHeight / 256f + minHeight);
@@ -2451,7 +2452,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
             transformedTile.tallHeightMap = isSharedUniformTallHeightMapBuffer(tallHeightMap) ? tallHeightMap : copyObject(tallHeightMap);
             transformedTile.terrain = (terrain == DEFAULT_TERRAIN_BUFFER) ? DEFAULT_TERRAIN_BUFFER : terrain.clone();
             transformedTile.waterLevel = isSharedUniformWaterLevelBuffer(waterLevel) ? waterLevel : copyObject(waterLevel);
-            transformedTile.tallWaterLevel = (tallWaterLevel == DEFAULT_TALL_WATERLEVEL_BUFFER) ? DEFAULT_TALL_WATERLEVEL_BUFFER : copyObject(tallWaterLevel);
+            transformedTile.tallWaterLevel = isSharedUniformTallWaterLevelBuffer(tallWaterLevel) ? tallWaterLevel : copyObject(tallWaterLevel);
             transformedTile.layerData = layerData.isEmpty() ? DEFAULT_LAYER_DATA_BUFFER : copyObject(layerData);
             transformedTile.bitLayerData = bitLayerData.isEmpty() ? DEFAULT_BIT_LAYER_DATA_BUFFER : copyObject(bitLayerData);
             transformedTile.init();
@@ -2898,8 +2899,8 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                         break;
                     case TALL_WATERLEVEL:
                         tallWaterLevel = editUndoBuffer(TALL_WATERLEVEL_BUFFER_KEY);
-                        if (tallWaterLevel == DEFAULT_TALL_WATERLEVEL_BUFFER) {
-                            tallWaterLevel = DEFAULT_TALL_WATERLEVEL_BUFFER.clone();
+                        if (isSharedUniformTallWaterLevelBuffer(tallWaterLevel)) {
+                            tallWaterLevel = tallWaterLevel.clone();
                             addUndoGrid(TALL_WATERLEVEL_BUFFER_KEY, tallWaterLevel, false);
                         }
                         break;
@@ -3537,7 +3538,10 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
             case WATERLEVEL:
                 return isSharedUniformWaterLevelBuffer(waterLevel);
             case TALL_WATERLEVEL:
-                return tallWaterLevel == DEFAULT_TALL_WATERLEVEL_BUFFER;
+                if (exclusiveTallWaterLevel != null && tallWaterLevel == exclusiveTallWaterLevel.get()) return false;
+                if (isSharedUniformTallWaterLevelBuffer(tallWaterLevel)) return true;
+                exclusiveTallWaterLevel = new WeakReference<>(tallWaterLevel);
+                return false;
             case LAYER_DATA:
                 return layerData == DEFAULT_LAYER_DATA_BUFFER;
             case BIT_LAYER_DATA:
@@ -3562,7 +3566,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
                 waterLevel = waterLevel.clone();
                 break;
             case TALL_WATERLEVEL:
-                tallWaterLevel = DEFAULT_TALL_WATERLEVEL_BUFFER.clone();
+                tallWaterLevel = tallWaterLevel.clone();
                 break;
             case LAYER_DATA:
                 layerData = new HashMap<>();
@@ -3612,6 +3616,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     }
 
     private void setSharedTallWaterLevelBuffer(short[] sharedBuffer) {
+        exclusiveTallWaterLevel = null;
         if (undoManager == null) {
             tallWaterLevel = sharedBuffer;
         } else {
@@ -3621,6 +3626,29 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
             readableBuffers.add(TALL_WATERLEVEL);
             writeableBuffers.add(TALL_WATERLEVEL);
         }
+    }
+
+    /** Canonicalise a completed tile without changing values, notifications or its serialized representation. */
+    synchronized void compactUniformWaterLevel() {
+        if (!tall || !shareTallWaterLevels()) return;
+        ensureReadable(TALL_WATERLEVEL);
+        short[] shared = UNIFORM_TALL_WATERLEVEL_BUFFERS.intern(tallWaterLevel);
+        exclusiveTallWaterLevel = null;
+        if (shared != tallWaterLevel) setSharedTallWaterLevelBuffer(shared);
+    }
+
+    private boolean shareTallWaterLevels() {
+        // Plugins may access protected buffers directly; retain their previous nonzero storage semantics.
+        return getClass() == Tile.class && Boolean.parseBoolean(System.getProperty("welt.tile.shareTallWater", "true"));
+    }
+
+    private static boolean isSharedUniformTallWaterLevelBuffer(short[] values) {
+        return UNIFORM_TALL_WATERLEVEL_BUFFERS.isShared(values);
+    }
+
+    private short[] internUniformTallWaterLevelBuffer(short[] values) {
+        if (shareTallWaterLevels()) return UNIFORM_TALL_WATERLEVEL_BUFFERS.intern(values);
+        return values != DEFAULT_TALL_WATERLEVEL_BUFFER && isAllZero(values) ? DEFAULT_TALL_WATERLEVEL_BUFFER : values;
     }
 
     private byte[] detachSharedLayerDataBuffer(Layer layer, byte[] buffer) {
@@ -3930,7 +3958,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
             if (isSharedUniformWaterLevelBuffer(currentWaterLevel)) {
                 waterLevel = currentWaterLevel.clone();
             }
-            if (currentTallWaterLevel == DEFAULT_TALL_WATERLEVEL_BUFFER) {
+            if (isSharedUniformTallWaterLevelBuffer(currentTallWaterLevel)) {
                 tallWaterLevel = currentTallWaterLevel.clone();
             }
             if ((currentLayerData != null) && !currentLayerData.isEmpty()) {
@@ -3959,6 +3987,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     }
 
     private void init() {
+        exclusiveTallWaterLevel = null;
         listeners = new ArrayList<>();
         HEIGHTMAP_BUFFER_KEY = new TileUndoBufferKey<>(this, HEIGHTMAP);
         TALL_HEIGHTMAP_BUFFER_KEY = new TileUndoBufferKey<>(this, TALL_HEIGHTMAP);
@@ -3988,9 +4017,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
         if (waterLevel != null) {
             waterLevel = internUniformWaterLevelBuffer(waterLevel);
         }
-        if ((tallWaterLevel != null) && (tallWaterLevel != DEFAULT_TALL_WATERLEVEL_BUFFER) && isAllZero(tallWaterLevel)) {
-            tallWaterLevel = DEFAULT_TALL_WATERLEVEL_BUFFER;
-        }
+        if (tallWaterLevel != null) tallWaterLevel = internUniformTallWaterLevelBuffer(tallWaterLevel);
         if ((layerData == null) || layerData.isEmpty()) {
             layerData = DEFAULT_LAYER_DATA_BUFFER;
         } else {
@@ -4033,6 +4060,8 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     private transient Set<TileBuffer> readableBuffers;
     private transient Set<TileBuffer> writeableBuffers;
     private transient UndoManager undoManager;
+    /** Weak negative cache avoids per-cell map lookups without retaining old undo/height-conversion planes. */
+    private transient WeakReference<short[]> exclusiveTallWaterLevel;
     /** The editable layer data version in the undo manager, when compact history storage is in use. */
     private transient Object layerDataVersion;
     private transient List<Layer> cachedLayers;
@@ -4058,6 +4087,7 @@ public class Tile extends InstanceKeeper implements Serializable, UndoListener, 
     private static final Map<Layer, BitSet> DEFAULT_BIT_LAYER_DATA_BUFFER = Collections.emptyMap();
     private static final byte[] DEFAULT_WATERLEVEL_BUFFER = new byte[TILE_SIZE * TILE_SIZE];
     private static final short[] DEFAULT_TALL_WATERLEVEL_BUFFER = new short[TILE_SIZE * TILE_SIZE];
+    private static final UniformShortPlaneCache UNIFORM_TALL_WATERLEVEL_BUFFERS = new UniformShortPlaneCache(DEFAULT_TALL_WATERLEVEL_BUFFER, 64);
     // Height-map sharing retains at most one non-zero buffer per tile height format.
     private static final Object UNIFORM_HEIGHTMAP_BUFFER_LOCK = new Object();
     private static final Set<short[]> SHARED_HEIGHTMAP_BUFFERS =
