@@ -8,6 +8,8 @@ package org.pepsoft.worldpainter.operations;
 import org.pepsoft.util.DesktopUtils;
 import org.pepsoft.util.IconUtils;
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.brushes.BitmapBrush;
+import org.pepsoft.worldpainter.brushes.SymmetricBrush;
 import org.pepsoft.worldpainter.TerrainHeightAccess;
 import org.pepsoft.worldpainter.HeightBrushAccess;
 import org.pepsoft.worldpainter.FilteredPaintAccess;
@@ -123,9 +125,13 @@ public class Flatten extends AbstractBrushOperation {
         }
         long diameterLong = 2L * radius + 1L;
         long areaLong = diameterLong * diameterLong;
-        if (radius < 0 || diameterLong > 256L || areaLong > MAX_NATIVE_CELLS) {
+        final boolean large = diameterLong > 256L;
+        final int maximumSide = getFilter() == null && Boolean.getBoolean("welt.native.largeHeightBrush") ? 1024 : 256;
+        if (radius < 0 || diameterLong > maximumSide || areaLong > (large ? 1024 * 1024 : MAX_NATIVE_CELLS)) {
             return false;
         }
+        // Only cached stock strengths can be prepared before the evolving height/theme traversal.
+        if (large && !(getBrush() instanceof SymmetricBrush) && getBrush().getClass() != BitmapBrush.class) return false;
         int area = (int) areaLong;
         if (nativeStrengths == null || nativeStrengths.length != area) nativeStrengths = new float[area];
         final int diameter = (int) diameterLong;
@@ -162,6 +168,8 @@ public class Flatten extends AbstractBrushOperation {
         if (!applyTheme && HeightBrushAccess.tryApply(dimension, centreX - radius, centreY - radius,
                 diameter, diameter, nativeStrengths, nativeMode + HeightBrushAccess.FLATTEN,
                 targetHeight, dimension.getMinHeight(), dimension.getMaxHeight() - 1)) return true;
+        // Keep unsupported large strokes on the complete Java path, including custom tile callbacks.
+        if (large) return false;
         ensureNativeBuffers(radius, area);
         TerrainHeightAccess.copy(dimension, centreX - radius, centreY - radius, diameter, diameter, nativeHeights);
         if (!NativeSlices.applyFlattenBrush(nativeMode, targetHeight,
