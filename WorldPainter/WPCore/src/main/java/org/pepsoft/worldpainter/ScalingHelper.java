@@ -158,8 +158,17 @@ public class ScalingHelper {
             return null;
         }
         final Tile scaledTile = scaledTileFactory.createTile(tileX, tileY);
-        if (ScalingTileAccess.scale(scaledTile, unscaledTiles, additionalTiles,
-                unscaledTileFactory, scale, nativeLayers)) return scaledTile;
+        if (! ScalingTileAccess.scale(scaledTile, unscaledTiles, additionalTiles,
+                unscaledTileFactory, scale, nativeLayers)) {
+            scaleInJava(scaledTile, tileX, tileY);
+        }
+        // Writing the sampled water levels detaches the generated tile's shared plane; share it again when it is
+        // still uniform. This changes storage only, not values, notifications or the serialized form
+        scaledTile.compactUniformWaterLevel();
+        return scaledTile;
+    }
+
+    private void scaleInJava(Tile scaledTile, int tileX, int tileY) {
         final int[] notPresentBlocksPerChunk = new int[64];
         Tile cachedUnscaledTile = null;
         int cachedTileX = Integer.MIN_VALUE, cachedTileY = Integer.MIN_VALUE;
@@ -223,7 +232,6 @@ public class ScalingHelper {
             }
         }
         // TODO seeds
-        return scaledTile;
     }
 
     public Set<Tile> getAllScaledTiles(ProgressReceiver progressReceiver) throws OperationCancelled {
