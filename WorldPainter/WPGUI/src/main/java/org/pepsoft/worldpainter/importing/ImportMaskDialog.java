@@ -17,6 +17,7 @@ import org.pepsoft.util.swing.ProgressTask;
 import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.*;
 import org.pepsoft.worldpainter.biomeschemes.CustomBiomeManager;
+import org.pepsoft.worldpainter.heightMaps.CachedImageHeightMap;
 import org.pepsoft.worldpainter.layers.Void;
 import org.pepsoft.worldpainter.layers.*;
 import org.pepsoft.worldpainter.themes.TerrainListCellRenderer;
@@ -213,17 +214,38 @@ public class ImportMaskDialog extends WorldPainterDialog implements DocumentList
     private void loadImage() {
         try {
             image = null; // Set image to null first to make more memory available for loading the new image
-            image = ImageIO.read(selectedFile);
-            if (image == null) {
+            releaseCapture();
+            MaskImporter boundedImporter = null;
+            if (MaskImporter.isBoundedEnabled()) {
+                try {
+                    capture = CachedImageHeightMap.capture(selectedFile, selectedFile.getName());
+                    if (capture != null) {
+                        boundedImporter = MaskImporter.bounded(dimension, selectedFile, capture);
+                        if (boundedImporter == null) {
+                            // Not guaranteed to import identically; the dense path below takes over
+                            releaseCapture();
+                        }
+                    }
+                } catch (IOException | RuntimeException e) {
+                    // The usual load below reports the problem, if it persists
+                    logger.warn("Could not capture mask " + selectedFile.getName() + " with bounded memory; loading it completely", e);
+                    boundedImporter = null;
+                    releaseCapture();
+                }
+            }
+            if (capture == null) {
+                image = ImageIO.read(selectedFile);
+            }
+            if ((image == null) && (capture == null)) {
                 labelImageDimensions.setForeground(Color.RED);
                 labelImageDimensions.setText("Not an image file, or damaged file!");
                 selectedFile = null;
-            } else if (image.isAlphaPremultiplied()) {
+            } else if ((image != null) && image.isAlphaPremultiplied()) {
                 labelImageDimensions.setForeground(Color.RED);
                 labelImageDimensions.setText("Premultiplied alpha not supported! Please convert to non-premultiplied.");
                 selectedFile = null;
             } else {
-                maskImporter = new MaskImporter(dimension, selectedFile, image);
+                maskImporter = (capture != null) ? boundedImporter : new MaskImporter(dimension, selectedFile, image);
                 if (! maskImporter.isSupported()) {
                     labelImageDimensions.setForeground(Color.RED);
                     labelImageDimensions.setText(maskImporter.getUnsupportedReason());
@@ -231,7 +253,7 @@ public class ImportMaskDialog extends WorldPainterDialog implements DocumentList
                     return;
                 }
                 labelImageDimensions.setForeground(null);
-                int width = image.getWidth(), height = image.getHeight();
+                final int width = imageWidth(), height = imageHeight(), sampleSize = sampleSize();
                 maskImporter.setRemoveExistingLayer(checkBoxRemoveExisting.isSelected());
                 MaskImporter.InputType inputType = maskImporter.getInputType();
                 if (inputType == EIGHT_BIT_GREY_SCALE || inputType == SIXTEEN_BIT_GREY_SCALE || inputType == THIRTY_TWO_BIT_GREY_SCALE || inputType == FLOAT_GREY_SCALE || inputType == DOUBLE_GREY_SCALE) {
@@ -279,13 +301,13 @@ public class ImportMaskDialog extends WorldPainterDialog implements DocumentList
                     spinnerScale.setToolTipText(null);
                     labelImageDimensions.setIcon(null);
                     if (inputType == COLOUR) {
-                        labelImageDimensions.setText(String.format("Image size: %,d x %,d, colour, %d bits", width, height, image.getSampleModel().getSampleSize(0)));
+                        labelImageDimensions.setText(String.format("Image size: %,d x %,d, colour, %d bits", width, height, sampleSize));
                     } else if (inputType == ONE_BIT_GREY_SCALE) {
                         labelImageDimensions.setText(String.format("Image size: %,d x %,d, black and white", width, height));
                     } else if ((inputType == FLOAT_GREY_SCALE) || (inputType == DOUBLE_GREY_SCALE)) {
-                        labelImageDimensions.setText(String.format("<html>Image size: %,d x %,d, grey scale, %d bits floating point<br>Lowest value: %,f, highest value: %,f</html>", width, height, image.getSampleModel().getSampleSize(0), maskImporter.getImageLowValue(), maskImporter.getImageHighValue()));
+                        labelImageDimensions.setText(String.format("<html>Image size: %,d x %,d, grey scale, %d bits floating point<br>Lowest value: %,f, highest value: %,f</html>", width, height, sampleSize, maskImporter.getImageLowValue(), maskImporter.getImageHighValue()));
                     } else {
-                        labelImageDimensions.setText(String.format("<html>Image size: %,d x %,d, grey scale, %d bits integer<br>Lowest value: %,d, highest value: %,d</html>", width, height, image.getSampleModel().getSampleSize(0), Math.round(maskImporter.getImageLowValue()), Math.round(maskImporter.getImageHighValue())));
+                        labelImageDimensions.setText(String.format("<html>Image size: %,d x %,d, grey scale, %d bits integer<br>Lowest value: %,d, highest value: %,d</html>", width, height, sampleSize, Math.round(maskImporter.getImageLowValue()), Math.round(maskImporter.getImageHighValue())));
                     }
                 }
                 if ((inputType == FLOAT_GREY_SCALE) || (inputType == DOUBLE_GREY_SCALE)) {
@@ -318,7 +340,45 @@ public class ImportMaskDialog extends WorldPainterDialog implements DocumentList
 
     private void updateWorldDimensions() {
         float scale = (float) spinnerScale.getValue();
-        labelWorldDimensions.setText(String.format("Scaled size: %,d x %,d blocks", Math.round(image.getWidth() * (scale / 100)), Math.round(image.getHeight() * (scale / 100))));
+        labelWorldDimensions.setText(String.format("Scaled size: %,d x %,d blocks", Math.round(imageWidth() * (scale / 100)), Math.round(imageHeight() * (scale / 100))));
+    }
+
+    private boolean hasImage() {
+        return (image != null) || (capture != null);
+    }
+
+    private int imageWidth() {
+        final CachedImageHeightMap capture = this.capture;
+        return (capture != null) ? capture.getWidth() : image.getWidth();
+    }
+
+    private int imageHeight() {
+        final CachedImageHeightMap capture = this.capture;
+        return (capture != null) ? capture.getHeight() : image.getHeight();
+    }
+
+    private int sampleSize() {
+        final CachedImageHeightMap capture = this.capture;
+        return (capture != null) ? capture.getBitDepth() : image.getSampleModel().getSampleSize(0);
+    }
+
+    /** Close the bounded capture of the mask, if any, deleting its cache file. */
+    private void releaseCapture() {
+        final CachedImageHeightMap capture = this.capture;
+        this.capture = null;
+        if (capture != null) {
+            capture.close();
+        }
+    }
+
+    @Override
+    public void dispose() {
+        super.dispose();
+        // Cancelled in any way, including closing the window: nothing will import the captured mask. After ok() the
+        // import releases it
+        if (isCancelled()) {
+            releaseCapture();
+        }
     }
 
     @Override
@@ -330,18 +390,23 @@ public class ImportMaskDialog extends WorldPainterDialog implements DocumentList
         maskImporter.setxOffset((Integer) spinnerOffsetX.getValue());
         maskImporter.setyOffset((Integer) spinnerOffsetY.getValue());
         try {
-            ProgressDialog.executeTask(this, new ProgressTask<Void>() {
-                @Override
-                public String getName() {
-                    return "Importing mask";
-                }
+            try {
+                ProgressDialog.executeTask(this, new ProgressTask<Void>() {
+                    @Override
+                    public String getName() {
+                        return "Importing mask";
+                    }
 
-                @Override
-                public Void execute(ProgressReceiver progressReceiver) throws ProgressReceiver.OperationCancelled {
-                    maskImporter.doImport(progressReceiver);
-                    return null;
-                }
-            });
+                    @Override
+                    public Void execute(ProgressReceiver progressReceiver) throws ProgressReceiver.OperationCancelled {
+                        maskImporter.doImport(progressReceiver);
+                        return null;
+                    }
+                });
+            } finally {
+                // The import is the last consumer of the captured mask, whether it completed, failed or was cancelled
+                releaseCapture();
+            }
             Configuration.getInstance().setMasksDirectory(selectedFile.getParentFile());
             dimension.armSavePoint();
             super.ok();
@@ -674,19 +739,19 @@ public class ImportMaskDialog extends WorldPainterDialog implements DocumentList
     }//GEN-LAST:event_buttonOkActionPerformed
 
     private void spinnerScaleStateChanged(javax.swing.event.ChangeEvent evt) {//GEN-FIRST:event_spinnerScaleStateChanged
-        if (image != null) {
+        if (hasImage()) {
             updateWorldDimensions();
         }
     }//GEN-LAST:event_spinnerScaleStateChanged
 
     private void spinnerOffsetXStateChanged(javax.swing.event.ChangeEvent evt) {//GEN-FIRST:event_spinnerOffsetXStateChanged
-        if (image != null) {
+        if (hasImage()) {
             updateWorldDimensions();
         }
     }//GEN-LAST:event_spinnerOffsetXStateChanged
 
     private void spinnerOffsetYStateChanged(javax.swing.event.ChangeEvent evt) {//GEN-FIRST:event_spinnerOffsetYStateChanged
-        if (image != null) {
+        if (hasImage()) {
             updateWorldDimensions();
         }
     }//GEN-LAST:event_spinnerOffsetYStateChanged
@@ -772,6 +837,8 @@ public class ImportMaskDialog extends WorldPainterDialog implements DocumentList
     private final CustomBiomeManager customBiomeManager;
     private File selectedFile, masksDir;
     private volatile BufferedImage image;
+    /** The bounded capture of the mask instead of {@link #image}, when enabled and supported. Owned by this dialog. */
+    private volatile CachedImageHeightMap capture;
     private MaskImporter maskImporter;
 
     private static final Icon ICON_WARNING = IconUtils.loadScaledIcon("org/pepsoft/worldpainter/icons/error.png");

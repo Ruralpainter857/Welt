@@ -14,16 +14,24 @@ import org.pepsoft.worldpainter.MaskImportAccess;
 import org.pepsoft.worldpainter.Terrain;
 import org.pepsoft.worldpainter.Tile;
 import org.pepsoft.worldpainter.heightMaps.BitmapHeightMap;
+import org.pepsoft.worldpainter.heightMaps.CachedImageHeightMap;
 import org.pepsoft.worldpainter.history.HistoryEntry;
 import org.pepsoft.worldpainter.layers.Annotations;
 import org.pepsoft.worldpainter.layers.Layer;
 
+import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.ImageTypeSpecifier;
+import javax.imageio.stream.ImageInputStream;
 import java.awt.*;
 import java.awt.color.ColorSpace;
 import java.awt.image.BufferedImage;
+import java.awt.image.ColorModel;
 import java.awt.image.IndexColorModel;
 import java.awt.image.Raster;
 import java.io.File;
+import java.io.IOException;
+import java.util.Iterator;
 import java.util.Set;
 
 import static java.awt.image.BufferedImage.*;
@@ -156,6 +164,85 @@ outer:          for (int x = 0; x < width; x++) {
         }
     }
 
+    private MaskImporter(Dimension dimension, File imageFile, CachedImageHeightMap capture, InputType inputType, double imageMaxValue,
+                         double imageLowValue, double imageHighValue) {
+        this.dimension = dimension;
+        this.imageFile = imageFile;
+        this.capture = capture;
+        this.inputType = inputType;
+        this.imageMaxValue = imageMaxValue;
+        this.imageLowValue = imageLowValue;
+        this.imageHighValue = imageHighValue;
+        unsupportedReason = null;
+    }
+
+    /**
+     * Create an importer of a greyscale TIFF mask captured with bounded memory, which imports exactly what an importer
+     * of the image as {@link javax.imageio.ImageIO#read(File)} loads it would import. The capture is only borrowed: the
+     * caller owns it and closes it after the import.
+     *
+     * @return The importer, or {@code null} if the result is not guaranteed to be identical, in which case the caller
+     * should load the image the usual way: if the colour space of the image is not grey, for signed 16 bit images
+     * (whose range a mask computes from unsigned samples) and for floating point images reaching the bounds of the
+     * type (where the range of a mask stops at other values than that of a height map).
+     */
+    public static MaskImporter bounded(Dimension dimension, File imageFile, CachedImageHeightMap capture) {
+        if ((capture == null) || capture.isClosed() || (! isGreyScale(imageFile))) {
+            return null;
+        }
+        final double[] range = capture.getRange();
+        if (capture.isFloatingPoint()) {
+            // Below Float.MAX_VALUE neither the range of the capture nor that of a mask stops early, and both keep the
+            // first of equal values in the same order, so they are the same
+            if ((capture.getBitDepth() != 32) || (range[1] >= Float.MAX_VALUE)) {
+                return null;
+            }
+            return new MaskImporter(dimension, imageFile, capture, FLOAT_GREY_SCALE, Float.MAX_VALUE, range[0], range[1]);
+        } else if (capture.isSigned()) {
+            return null;
+        }
+        // Integer ranges are exact and a mask only stops at the bounds of the type, but starts from the int bounds
+        final double low = Math.min(Integer.MAX_VALUE, range[0]), high = Math.max(Integer.MIN_VALUE, range[1]);
+        return switch (capture.getBitDepth()) {
+            case 8 -> new MaskImporter(dimension, imageFile, capture, EIGHT_BIT_GREY_SCALE, 255.0, low, high);
+            case 16 -> new MaskImporter(dimension, imageFile, capture, SIXTEEN_BIT_GREY_SCALE, 65535.0, low, high);
+            case 32 -> new MaskImporter(dimension, imageFile, capture, THIRTY_TWO_BIT_GREY_SCALE, 4294967295.0, low, high);
+            default -> null;
+        };
+    }
+
+    /** Whether bounded TIFF mask import is enabled ({@code -Dwelt.import.boundedMaskTiff=true}). */
+    public static boolean isBoundedEnabled() {
+        return Boolean.getBoolean("welt.import.boundedMaskTiff");
+    }
+
+    /** Whether the image {@code ImageIO.read} would load from a file has a grey colour space, judging by its first type. */
+    private static boolean isGreyScale(File file) {
+        try (ImageInputStream in = ImageIO.createImageInputStream(file)) {
+            if (in == null) {
+                return false;
+            }
+            final Iterator<ImageReader> readers = ImageIO.getImageReaders(in);
+            if (! readers.hasNext()) {
+                return false;
+            }
+            final ImageReader reader = readers.next();
+            try {
+                reader.setInput(in, false, true);
+                final Iterator<ImageTypeSpecifier> types = reader.getImageTypes(0);
+                if ((types == null) || (! types.hasNext())) {
+                    return false;
+                }
+                final ColorModel colourModel = types.next().getColorModel();
+                return (colourModel != null) && (colourModel.getColorSpace().getType() == ColorSpace.TYPE_GRAY);
+            } finally {
+                reader.dispose();
+            }
+        } catch (IOException | RuntimeException e) {
+            return false;
+        }
+    }
+
     public void doImport(ProgressReceiver progressReceiver) throws ProgressReceiver.OperationCancelled {
         if ((! applyToTerrain) && (applyToLayer == null)) {
             throw new IllegalStateException("Target not set");
@@ -178,12 +265,13 @@ outer:          for (int x = 0; x < width; x++) {
         final HeightMap scaledHeightMap;
         final HeightMap nativeSamplingMap;
         boolean clampSamples=false;
-        final int oldWidth = image.getWidth(), oldHeight = image.getHeight();
+        final int oldWidth = (capture != null) ? capture.getWidth() : image.getWidth(), oldHeight = (capture != null) ? capture.getHeight() : image.getHeight();
         final int width = Math.round(oldWidth * scale), height = Math.round(oldHeight * scale);
         if ((width == oldWidth) && (height == oldHeight)) {
             // No scaling necessary
             scaledImage = image;
-            scaledHeightMap = BitmapHeightMap.build().withImage(image).now();
+            // The capture samples exactly like a bitmap of the image
+            scaledHeightMap = (capture != null) ? capture : BitmapHeightMap.build().withImage(image).now();
             nativeSamplingMap = scaledHeightMap;
         } else if (colour) {
             // We are mapping a colour image. Colour images might need dithering, which we have to do via the image. For
@@ -204,7 +292,7 @@ outer:          for (int x = 0; x < width; x++) {
             scaledHeightMap = null;
             nativeSamplingMap = null;
         } else {
-            HeightMap heightMap = BitmapHeightMap.build().withImage(image).now();
+            HeightMap heightMap = (capture != null) ? capture : BitmapHeightMap.build().withImage(image).now();
             if ((! bitmask) && (! discrete)) {
                 heightMap = heightMap.smoothed();
             }
@@ -219,6 +307,7 @@ outer:          for (int x = 0; x < width; x++) {
         MaskImportAccess nativeImport=MaskImportAccess.prepare(mapping.nativePlan(),applyToLayer,nativeSamplingMap,
                 colour?scaledImage:null,discrete,clampSamples,imageLowValue,imageHighValue,imageMaxValue,threshold);
         image = null; // The original image is no longer necessary, so allow it to be garbage collected to make more space available for the import
+        capture = null; // Only borrowed; the samplers prepared above keep what they need
 
         if (dimension.getWorld() != null) {
             dimension.getWorld().addHistoryEntry(HistoryEntry.WORLD_MASK_IMPORTED_TO_DIMENSION, dimension.getName(), imageFile, mapping.getAspect());
@@ -333,6 +422,10 @@ outer:          for (int x = 0; x < width; x++) {
     }
 
     public String getScalingNotSupportedReason() {
+        if (capture != null) {
+            // A greyscale capture is never indexed
+            return null;
+        }
         final int imageType = image.getType();
         if ((image.getColorModel() instanceof IndexColorModel) && (imageType != TYPE_BYTE_BINARY) && (imageType != TYPE_BYTE_INDEXED)) {
             return "Scaling not supported for indexed images of type " + imageType;
@@ -617,6 +710,8 @@ outer:          for (int x = 0; x < width; x++) {
     private final File imageFile;
     private final String unsupportedReason;
     private BufferedImage image;
+    /** The bounded capture of the image instead of {@link #image}, borrowed from the caller. */
+    private CachedImageHeightMap capture;
     private boolean applyToTerrain, removeExistingLayer;
     private Layer applyToLayer;
     private Mapping mapping;
