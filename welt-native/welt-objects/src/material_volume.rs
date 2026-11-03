@@ -405,6 +405,10 @@ mod fused_transform_tests {
 
 /// Decode legacy IDs and metadata directly into a transformed immutable palette plane.
 /// A zero low ID byte is absent even when AddBlocks contributes a nonzero high nibble.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the JNI legacy volume arguments"
+)]
 pub fn legacy_transform(
     blocks: &[u8],
     data: &[u8],

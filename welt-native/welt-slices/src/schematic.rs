@@ -95,8 +95,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let len: Length = std::mem::transmute(function(env, GET_ARRAY_LENGTH));
             let same: Same = std::mem::transmute(function(env, 24));
             let palette = len(env, flags);
-            if palette < 1
-                || palette > 65536
+            if !(1..=65536).contains(&palette)
                 || len(env, summary) != 8
                 || same(env, flags, output) != 0
                 || !bytes.is_null() && same(env, bytes, output) != 0

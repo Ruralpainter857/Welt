@@ -504,7 +504,7 @@ pub fn import(d: &mut [u8], s: &mut ImportScratch) -> Result<(), WeltError> {
             } else {
                 default
             };
-            d[plane.base..plane.base + length(plane.kind) as usize].fill(value);
+            d[plane.base..plane.base + length(plane.kind)].fill(value);
         }
     }
     s.heights.resize(AREA, 0);

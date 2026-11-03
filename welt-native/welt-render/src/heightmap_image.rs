@@ -15,8 +15,8 @@ pub fn convert(data: &mut [u8]) -> Result<(), &'static str> {
     let dimension_min = word(20) as i32;
     let offset = f32::from_bits(word(24));
     let scale = f32::from_bits(word(28));
-    for cell in data[32..].chunks_exact_mut(4) {
-        let raw = i32::from_le_bytes(cell.try_into().unwrap());
+    for cell in data[32..].as_chunks_mut::<4>().0 {
+        let raw = i32::from_le_bytes(*cell);
         let value = raw as f32 / 256.0 + tile_min as f32;
         let output = match mode {
             0 => raw as u32,
@@ -25,7 +25,7 @@ pub fn convert(data: &mut [u8]) -> Result<(), &'static str> {
             3 => ((value - offset) / scale).to_bits(),
             _ => unreachable!(),
         };
-        cell.copy_from_slice(&output.to_le_bytes());
+        *cell = output.to_le_bytes();
     }
     Ok(())
 }

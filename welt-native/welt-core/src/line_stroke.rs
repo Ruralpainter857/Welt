@@ -160,7 +160,7 @@ mod tests {
             (52, 0.73f32.to_bits() as i32),
             (56, undo),
             (60, 3),
-            (64, meta as i32),
+            (64, meta),
         ] {
             d[p..p + 4].copy_from_slice(&v.to_le_bytes());
         }

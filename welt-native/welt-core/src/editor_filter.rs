@@ -241,7 +241,8 @@ impl Program {
                 feather,
                 slope,
             } => {
-                if !(strength > 0.0)
+                if strength.is_nan()
+                    || strength <= 0.0
                     || (*selection == 1 && !cell.selected())
                     || (*selection == -1 && cell.selected())
                 {

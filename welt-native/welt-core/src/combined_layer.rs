@@ -43,7 +43,10 @@ fn plane_bytes(bits: u32) -> Option<usize> {
 fn needs_draw(data: &[u8], source: usize, d: usize, cell: usize) -> bool {
     let value = strength(data, source, cell);
     match word(data, d) {
-        1 => !(bit_strength(value, f32::from_bits(word(data, d + 8))) > 0.95),
+        1 => {
+            let s = bit_strength(value, f32::from_bits(word(data, d + 8)));
+            s.is_nan() || s <= 0.95
+        }
         2 | 3 => value > 0 && (value as f32 / 15.0) < 0.5,
         _ => false,
     }
@@ -234,7 +237,8 @@ mod tests {
         let plane = source + AREA / 2;
         let rng = plane + plane_bytes(bits).unwrap();
         let needs = if role == 1 {
-            !(bit_strength(value, factor) > 0.95)
+            let s = bit_strength(value, factor);
+            s.is_nan() || s <= 0.95
         } else {
             role >= 2 && value > 0 && value < 8
         };

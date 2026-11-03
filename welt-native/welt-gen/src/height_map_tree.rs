@@ -60,7 +60,7 @@ pub enum HeightMapTreeError {
 }
 
 enum NoiseMapEvaluator {
-    Legacy(NoiseHeightMapBulk),
+    Legacy(Box<NoiseHeightMapBulk>),
     FastNoiseLite(FastNoiseLiteHeightMapBulk),
 }
 
@@ -376,7 +376,7 @@ fn fill_height_map_tree_with_scratch(
                 }
                 let noise_index = noise_map_count;
                 let map = NoiseHeightMapBulk::new(d_height, scale, octaves, effective_seed)?;
-                let evaluator = NoiseMapEvaluator::Legacy(map);
+                let evaluator = NoiseMapEvaluator::Legacy(Box::new(map));
                 if noise_index == noise_maps.len() {
                     noise_maps.push(evaluator);
                 } else {
@@ -698,7 +698,7 @@ fn fill_height_map_tree_points_with_scratch(
             } => {
                 let noise_index = noise_map_count;
                 let map = NoiseHeightMapBulk::new(d_height, scale, octaves, effective_seed)?;
-                let evaluator = NoiseMapEvaluator::Legacy(map);
+                let evaluator = NoiseMapEvaluator::Legacy(Box::new(map));
                 if noise_index == noise_maps.len() {
                     noise_maps.push(evaluator);
                 } else {

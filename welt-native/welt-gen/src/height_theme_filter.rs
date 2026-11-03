@@ -131,6 +131,10 @@ impl PreparedFilter {
     pub(super) fn palette_count(&self) -> usize {
         self.count
     }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors the Java filter strength inputs"
+    )]
     pub(super) fn strength(
         &self,
         data: &[u8],

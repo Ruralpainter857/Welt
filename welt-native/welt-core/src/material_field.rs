@@ -29,6 +29,10 @@ pub fn round(value: f32) -> i32 {
     (value as f64 + 0.5).floor() as i32
 }
 /// Match Java's double intermediate followed by a float store after each mutation.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the Java material layer parameters"
+)]
 pub fn layered_index(
     mut z: f32,
     variation: Option<(f64, i32)>,

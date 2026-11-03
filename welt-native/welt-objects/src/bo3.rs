@@ -87,8 +87,8 @@ pub fn frame(bytes: &[u8]) -> Option<Vec<u8>> {
             }
             let mut args = Vec::new();
             let mut at = open + 1;
-            for i in open + 1..close {
-                if line[i] == b',' {
+            for (i, &byte) in line.iter().enumerate().take(close).skip(open + 1) {
+                if byte == b',' {
                     args.push([(base + at) as u32, (i - at) as u32]);
                     at = i + 1;
                 }

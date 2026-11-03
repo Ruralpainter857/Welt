@@ -30,8 +30,8 @@ mod tests {
                 .collect();
             let mut data: Vec<u8> = words.iter().flat_map(|v| v.to_be_bytes()).collect();
             assert!(decode(&mut data));
-            for (bytes, word) in data.chunks_exact(4).zip(words) {
-                assert_eq!(i32::from_le_bytes(bytes.try_into().unwrap()), word);
+            for (bytes, word) in data.as_chunks::<4>().0.iter().zip(words) {
+                assert_eq!(i32::from_le_bytes(*bytes), word);
             }
         }
     }

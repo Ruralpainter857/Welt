@@ -145,6 +145,10 @@ mod tests {
 /// Integer row stripes may reduce extrema in their native type when stop bounds
 /// cover that type. The final seed comparisons keep the caller's historical seeds.
 /// The conversion must be monotonic in T; the integer JNI dispatch guarantees this.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the JNI image range scan arguments"
+)]
 pub fn scan_integer<T: Copy + Ord>(
     source: &[T],
     layout: Layout,

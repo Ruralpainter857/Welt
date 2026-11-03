@@ -4,8 +4,8 @@
 
 pub mod abi;
 pub mod auto_biome;
-pub mod erosion;
 pub mod editor_filter;
+pub mod erosion;
 pub mod filtered_paint;
 pub use filtered_paint as filtered_terrain;
 pub mod error;
@@ -20,15 +20,15 @@ pub mod jni_export;
 pub mod jni_gen;
 pub mod layer_edit;
 pub mod line_raster;
-pub mod mountain;
 pub mod material_field;
+pub mod mountain;
 pub mod nibble_paint;
 pub mod noise;
-pub mod paint_mask;
 pub mod paint_flood;
+pub mod paint_mask;
 pub mod pencil_snap;
-pub mod raise_pyramid;
 pub mod pyramid_region;
+pub mod raise_pyramid;
 pub mod river_paint;
 pub mod rng;
 pub mod scaling;
@@ -41,8 +41,8 @@ pub mod vertical_resize;
 
 pub mod glyph_paint;
 
-pub mod height_statistics;
 pub mod combined_layer;
+pub mod height_statistics;
 
 pub mod line_stroke;
 

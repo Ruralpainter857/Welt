@@ -114,7 +114,11 @@ pub const MAX_BYTES: usize = 64 + 511 * 511 * 21;
 pub const MAX_V2_SIDE: usize = 1023;
 pub const MAX_V2_BYTES: usize = 64 + MAX_V2_SIDE * MAX_V2_SIDE * 13;
 /// The largest frame of any version, for the JNI entry point.
-pub const MAX_FRAME_BYTES: usize = if MAX_V2_BYTES > MAX_BYTES { MAX_V2_BYTES } else { MAX_BYTES };
+pub const MAX_FRAME_BYTES: usize = if MAX_V2_BYTES > MAX_BYTES {
+    MAX_V2_BYTES
+} else {
+    MAX_BYTES
+};
 const MAGIC: i32 = 0x56524c57;
 /// Input classes of a v2 cell, in the mask byte before the edit.
 const CLASS_NONE: u8 = 0;
@@ -402,7 +406,9 @@ mod compact_tests {
         put(&mut v2, 4, 2);
         let mut state = seed;
         let mut next = || {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (state >> 33) as u32
         };
         let centre = (side / 2) as f32;
@@ -411,9 +417,18 @@ mod compact_tests {
                 let i = x * side + y;
                 let missing = next() % 41 == 0;
                 // Heights are multiples of 1/256 as in tiles, or the missing tile sentinel
-                let height = if missing { -f32::MAX } else { (next() % 40000) as f32 / 256.0 - 64.0 };
-                let water = if missing { i32::MIN } else { 20 + (next() % 60) as i32 };
-                let distance = ((x as f32 - centre).powi(2) + (y as f32 - centre).powi(2)).sqrt() / (centre + 1.0);
+                let height = if missing {
+                    -f32::MAX
+                } else {
+                    (next() % 40000) as f32 / 256.0 - 64.0
+                };
+                let water = if missing {
+                    i32::MIN
+                } else {
+                    20 + (next() % 60) as i32
+                };
+                let distance = ((x as f32 - centre).powi(2) + (y as f32 - centre).powi(2)).sqrt()
+                    / (centre + 1.0);
                 let mut strength = (1.0 - distance).max(0.0);
                 match next() % 53 {
                     0 => strength = f32::NAN,
@@ -423,12 +438,18 @@ mod compact_tests {
                     _ => {}
                 }
                 let slope = if strength > 0.0 && strength <= 0.25 {
-                    ((-(strength as f64) * std::f64::consts::TAU + std::f64::consts::FRAC_PI_2).tan() / std::f64::consts::TAU) as f32
+                    ((-(strength as f64) * std::f64::consts::TAU + std::f64::consts::FRAC_PI_2)
+                        .tan()
+                        / std::f64::consts::TAU) as f32
                 } else {
                     0.0
                 };
                 put(&mut v1, 64 + i * 4, height.to_bits());
-                put(&mut v1, 64 + area * 4 + i * 4, super::java_round(height) as u32);
+                put(
+                    &mut v1,
+                    64 + area * 4 + i * 4,
+                    super::java_round(height) as u32,
+                );
                 put(&mut v1, 64 + area * 8 + i * 4, water as u32);
                 put(&mut v1, 64 + area * 12 + i * 4, strength.to_bits());
                 put(&mut v1, 64 + area * 16 + i * 4, slope.to_bits());
@@ -450,14 +471,28 @@ mod compact_tests {
 
     #[test]
     fn v2_frames_match_v1_on_the_same_cells() {
-        for (side, previous, lava, seed) in [(1, 65, false, 1), (3, 40, true, 2), (31, 62, false, 3), (101, 45, true, 4), (101, 70, false, 5)] {
+        for (side, previous, lava, seed) in [
+            (1, 65, false, 1),
+            (3, 40, true, 2),
+            (31, 62, false, 3),
+            (101, 45, true, 4),
+            (101, 70, false, 5),
+        ] {
             let (mut v1, mut v2) = frames(side, previous, 7.5, lava, seed);
             super::edit_compact(&mut v1).unwrap();
             super::edit_compact(&mut v2).unwrap();
             let area = side * side;
             assert_eq!(&v1[12..16], &v2[12..16], "level, side {side}");
-            assert_eq!(&v1[64..64 + area * 4], &v2[64..64 + area * 4], "heights, side {side}");
-            assert_eq!(&v1[64 + area * 20..], &v2[64 + area * 12..], "flags, side {side}");
+            assert_eq!(
+                &v1[64..64 + area * 4],
+                &v2[64..64 + area * 4],
+                "heights, side {side}"
+            );
+            assert_eq!(
+                &v1[64 + area * 20..],
+                &v2[64 + area * 12..],
+                "flags, side {side}"
+            );
         }
     }
 
@@ -472,13 +507,16 @@ mod compact_tests {
     fn invalid_v2_frames_are_refused_without_changes() {
         let (_, valid) = frames(31, 62, 3.0, false, 7);
         let area = 31 * 31;
-        let cases: Vec<Box<dyn Fn(&mut Vec<u8>)>> = vec![
+        type Corruption = Box<dyn Fn(&mut Vec<u8>)>;
+        let cases: Vec<Corruption> = vec![
             Box::new(|data| put(data, 4, 3)),
             Box::new(|data| put(data, 8, 30)),
             Box::new(|data| put(data, 8, 1025)),
             Box::new(|data| put(data, 20, 2)),
             Box::new(|data| data[40] = 1),
-            Box::new(|data| { data.pop(); }),
+            Box::new(|data| {
+                data.pop();
+            }),
             Box::new(|data| data.push(0)),
             Box::new(move |data| data[64 + area * 12 + area - 1] = 3),
             Box::new(move |data| data[64 + area * 12] = 4),
@@ -513,8 +551,8 @@ mod compact_tests {
             (-f32::MAX, i32::MIN),
             (f32::INFINITY, i32::MAX),
             (f32::NAN, 0),
-            (62.00390625, 62),
-            (-63.99609375, -64),
+            (62.0 + 1.0 / 256.0, 62),
+            (-64.0 + 1.0 / 256.0, -64),
         ] {
             assert_eq!(super::java_round(value), expected, "{value}");
         }

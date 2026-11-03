@@ -190,9 +190,7 @@ mod tests {
         assert_eq!(word(&d, 36), 64 * 128);
         assert_eq!(word(&d, 40), 63 * 128);
         assert_eq!(d[64 + 127], 42);
-        for i in 36..64 {
-            d[i] = 0;
-        }
+        d[36..64].fill(0);
         d[64 + area..64 + area * 2].fill(1);
         d[64 + area * 2..].fill(0);
         d[64 + area * 2 + 127 / 8] = 1 << (127 & 7);

@@ -172,7 +172,7 @@ fn fill_resource_materials_into_impl<const PROFILE: bool>(
     dirt_materials: &[u8],
     chances: &[f32],
     output: &mut [i8],
-    mut profile: Option<&mut [u64]>,
+    profile: Option<&mut [u64]>,
 ) -> Result<(), ResourceNoiseError> {
     let height = i64::from(max_z) - i64::from(min_z) + 1;
     if height <= 0 || height > 4096 || tiny_x.is_empty() || tiny_x.len() > 256 || seeds.len() > 64 {
@@ -299,7 +299,7 @@ fn fill_resource_materials_into_impl<const PROFILE: bool>(
                 let chance = chances[material * 16 + resource_value];
                 let material_start_y = start_y.max(material_min_z[material]);
                 let material_end_y = end_y.min(material_max_z[material]);
-                if !(chance <= 0.5) || material_start_y > material_end_y {
+                if chance.is_nan() || chance > 0.5 || material_start_y > material_end_y {
                     continue;
                 }
 
@@ -336,7 +336,7 @@ fn fill_resource_materials_into_impl<const PROFILE: bool>(
                 }
             }
         }
-        if let Some(profile) = profile.as_deref_mut() {
+        if let Some(profile) = profile {
             profile[0] = setup_nanos;
             profile[1] = scan_start
                 .map(|start| start.elapsed().as_nanos().min(u64::MAX as u128) as u64)
@@ -387,7 +387,8 @@ mod tests {
             for y in (start_y..=end_y).rev() {
                 for material in 0..seeds.len() {
                     let chance = chances[material * 16 + resource_values[column] as usize];
-                    if !(chance <= 0.5)
+                    if chance.is_nan()
+                        || chance > 0.5
                         || y < material_min_z[material]
                         || y > material_max_z[material]
                     {

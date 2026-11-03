@@ -284,8 +284,8 @@ mod tests {
             600, 600, 600, 600, 600, 600, 600, 600, 600, 600, 600, 600, 600, 600, 600, 600, 600,
             600, 600, 600, 600, 600, 600, 600, 600,
         ];
-        heights[1 * 5 + 1] = 500;
-        heights[1 * 5 + 2] = 400;
+        heights[5 + 1] = 500;
+        heights[5 + 2] = 400;
         heights[2 * 5 + 1] = 400;
         let controls = [
             1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -294,10 +294,10 @@ mod tests {
         let write_count =
             erode_raw_height_region(1, &mut heights, &controls, &mut write_log).unwrap();
         assert_eq!(write_count, 4);
-        assert_eq!(heights[1 * 5 + 1], 461);
+        assert_eq!(heights[5 + 1], 461);
         assert_eq!(heights[2 * 5 + 1], 439);
         assert_eq!(&write_log[..4], &[6, 461, 11, 439]);
-        assert_eq!(heights[1 * 5 + 2], 400);
+        assert_eq!(heights[5 + 2], 400);
     }
 
     #[test]

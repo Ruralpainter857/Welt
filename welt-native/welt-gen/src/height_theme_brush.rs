@@ -368,7 +368,7 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
                 f.strength(d, &s.tiles[..nt], tile, i, wx, wy, raw_force)
             });
             let t = &mut s.tiles[tile];
-            if !mountain && !(force > 0.0) {
+            if !mountain && (force.is_nan() || force <= 0.0) {
                 continue;
             }
             let current = t.planes[0].get(d, i) as i32 as f32 / 256.0 + min as f32;
@@ -399,12 +399,7 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
                     .as_ref()
                     .unwrap()
                     .get_perlin_noise_2d_prepared(s.mountain_x[x], s.mountain_y[y]);
-                let mut strength = force + noise * variation * force;
-                if strength < 0.0 {
-                    strength = 0.0;
-                } else if strength > 1.0 {
-                    strength = 1.0;
-                }
+                let strength = (force + noise * variation * force).clamp(0.0, 1.0);
                 let range = (max - 1 - min) as f32;
                 if mode == 7 {
                     java_max(range - (range - value) * factor * strength, 0.0) + min as f32

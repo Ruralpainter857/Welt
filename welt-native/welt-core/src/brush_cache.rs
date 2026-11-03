@@ -148,8 +148,8 @@ mod bitmap_tests {
         ] {
             let mut output = vec![42; 256];
             scale_bitmap(&source, level, &mut output).unwrap();
-            for i in 0..256 {
-                assert_eq!(output[i], ((i as f32 * level) as i32).clamp(0, 255) as u8);
+            for (i, &value) in output.iter().enumerate().take(256) {
+                assert_eq!(value, ((i as f32 * level) as i32).clamp(0, 255) as u8);
             }
         }
     }

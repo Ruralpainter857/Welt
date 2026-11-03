@@ -116,7 +116,9 @@ pub fn fill_fancy_theme_tile(
             let height = tile_heights[index];
             let mut water_near = false;
             // Match Java's lazy shoreline branch; steep and inland cells need no water scan.
-            if !(slope > 1.5) && !(height < below_water_threshold) && height < above_water_threshold
+            if (slope.is_nan() || slope <= 1.5)
+                && height.partial_cmp(&below_water_threshold) != Some(std::cmp::Ordering::Less)
+                && height < above_water_threshold
             {
                 'water: for dy in -(border as isize)..=border as isize {
                     let row = (center_y as isize + dy) as usize * neighborhood_width;
@@ -161,7 +163,7 @@ pub fn fill_fancy_theme_tile(
             };
             output[plane(index, 0)] = terrain;
 
-            if !(slope > 2.0) && height > below_water_threshold && forest > 0.35 {
+            if (slope.is_nan() || slope <= 2.0) && height > below_water_threshold && forest > 0.35 {
                 if temperature > 20.0 {
                     if humidity > 55.0 {
                         if height < above_water_threshold {

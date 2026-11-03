@@ -1100,8 +1100,10 @@ mod tests {
             let output = int(&valid, 64) as usize;
             render(&mut valid).unwrap();
             assert!(valid[output..]
-                .chunks_exact(4)
-                .all(|p| u32::from_le_bytes(p.try_into().unwrap()) == 0xff123456));
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| u32::from_le_bytes(*p) == 0xff123456));
         }
     }
 
@@ -1239,7 +1241,7 @@ mod tests {
             (92, -1),
             (96, -256),
             (100, 128),
-            (104, shift as i32),
+            (104, shift),
             (132, plane as i32),
             (208, 0x123456),
         ] {

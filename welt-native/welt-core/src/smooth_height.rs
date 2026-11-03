@@ -197,7 +197,7 @@ mod compact_tests {
                     for sx in x..=x + 10 {
                         for sy in y..=y + 10 {
                             let value = input[sx * ih + sy];
-                            if (value != -f32::MAX) {
+                            if value != -f32::MAX {
                                 total += value;
                                 count += 1;
                             }

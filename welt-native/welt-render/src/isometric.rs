@@ -73,7 +73,7 @@ pub fn render(data: &mut [u8]) -> Result<(), &'static str> {
             && (offset < tops
                 || offset > output
                 || count > (output - offset) / 4
-                || offset % 4 != 0)
+                || !offset.is_multiple_of(4))
         {
             return Err(bad);
         }

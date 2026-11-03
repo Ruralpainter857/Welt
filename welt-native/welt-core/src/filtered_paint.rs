@@ -471,7 +471,7 @@ fn edit_heights(
                     },
                     strength,
                 );
-            if !(filtered > 0.0) {
+            if filtered.is_nan() || filtered <= 0.0 {
                 continue;
             }
             let target = match mode {

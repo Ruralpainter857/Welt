@@ -9,65 +9,126 @@ use std::slice;
 /// The writable direct frame is borrowed exclusively for this call.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeRenderIsometricTile(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
-    unsafe { jni_catch(env, || {
-        if buffer.is_null() || length < 524352 || length as usize > welt_render::isometric::MAX_BYTES { return WeltError::IllegalArgument as jint; }
-        type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
-        type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
-        let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
-        let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
-        let pointer = address(env, buffer);
-        if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
-        let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
-        match welt_render::isometric::render(data) { Ok(()) => WeltError::Ok as jint, Err(_) => WeltError::IllegalArgument as jint }
-    }) }
+    unsafe {
+        jni_catch(env, || {
+            if buffer.is_null()
+                || length < 524352
+                || length as usize > welt_render::isometric::MAX_BYTES
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
+            type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
+            let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
+            let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
+            let pointer = address(env, buffer);
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
+            let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
+            match welt_render::isometric::render(data) {
+                Ok(()) => WeltError::Ok as jint,
+                Err(_) => WeltError::IllegalArgument as jint,
+            }
+        })
+    }
 }
 
 /// # Safety
 /// The writable direct frame is borrowed exclusively for this call.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFillBitmapPreview(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
-    unsafe { jni_catch(env, || {
-        if buffer.is_null() || length < 128 || length as usize > welt_gen::bitmap_preview::MAX_BYTES { return WeltError::IllegalArgument as jint; }
-        type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
-        type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
-        let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
-        let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
-        let pointer = address(env, buffer);
-        if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
-        let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
-        match welt_gen::bitmap_preview::fill(data) { Ok(()) => WeltError::Ok as jint, Err(_) => WeltError::IllegalArgument as jint }
-    }) }
+    unsafe {
+        jni_catch(env, || {
+            if buffer.is_null()
+                || length < 128
+                || length as usize > welt_gen::bitmap_preview::MAX_BYTES
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
+            type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
+            let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
+            let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
+            let pointer = address(env, buffer);
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
+            let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
+            match welt_gen::bitmap_preview::fill(data) {
+                Ok(()) => WeltError::Ok as jint,
+                Err(_) => WeltError::IllegalArgument as jint,
+            }
+        })
+    }
 }
 /// # Safety
 /// The writable direct frame is borrowed exclusively for this call.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeRenderViewportTile(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
-    unsafe { jni_catch(env, || {
-        if buffer.is_null() || length < 128 || length as usize > welt_render::viewport::MAX_BYTES { return WeltError::IllegalArgument as jint; }
-        type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
-        type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
-        let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
-        let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
-        let pointer = address(env, buffer);
-        if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
-        let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
-        thread_local! { static VIEWPORT: RefCell<welt_render::viewport::Workspace> = RefCell::new(Default::default()); }
-        VIEWPORT.with(|worker| match welt_render::viewport::render_with_noise(data, &mut worker.borrow_mut(), Some(&ViewportNoise)) {
-            Ok(()) => WeltError::Ok as jint, Err(_) => WeltError::IllegalArgument as jint
+    unsafe {
+        jni_catch(env, || {
+            if buffer.is_null()
+                || length < 128
+                || length as usize > welt_render::viewport::MAX_BYTES
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
+            type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
+            let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
+            let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
+            let pointer = address(env, buffer);
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
+            let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
+            thread_local! { static VIEWPORT: RefCell<welt_render::viewport::Workspace> = RefCell::new(Default::default()); }
+            VIEWPORT.with(|worker| {
+                match welt_render::viewport::render_with_noise(
+                    data,
+                    &mut worker.borrow_mut(),
+                    Some(&ViewportNoise),
+                ) {
+                    Ok(()) => WeltError::Ok as jint,
+                    Err(_) => WeltError::IllegalArgument as jint,
+                }
+            })
         })
-    }) }
+    }
 }
 /// Tunnel roof noise for viewport intersection frames: Java's `NoiseHeightMap.getHeight(int, int)` cast to int.
 struct ViewportNoise;
 impl welt_render::viewport::NoiseSource for ViewportNoise {
-    fn fill(&self, params: &welt_render::viewport::NoiseParams, origin_x: i32, origin_y: i32, width: usize, shift: u32, output: &mut [i32]) -> bool {
-        let Ok(map) = NoiseHeightMapBulk::new(params.d_height, params.scale, params.octaves, params.seed) else { return false; };
+    fn fill(
+        &self,
+        params: &welt_render::viewport::NoiseParams,
+        origin_x: i32,
+        origin_y: i32,
+        width: usize,
+        shift: u32,
+        output: &mut [i32],
+    ) -> bool {
+        let Ok(map) =
+            NoiseHeightMapBulk::new(params.d_height, params.scale, params.octaves, params.seed)
+        else {
+            return false;
+        };
         for (cell, value) in output.iter_mut().enumerate() {
             let x = origin_x.wrapping_add(((cell % width) << shift) as i32);
             let y = origin_y.wrapping_add(((cell / width) << shift) as i32);
@@ -109,42 +170,27 @@ use welt_gen::theme_terrain::{SimpleThemeTerrainBulk, SimpleThemeTerrainScratch}
 use welt_nbt::packed_array::{pack_indices, unpack_indices};
 use welt_render::shade::{shade_pixels, shade_pixels_compact};
 
-mod schematic;
 mod chunk_buffer;
-mod map_surface;
 mod fluid_flow;
+mod map_surface;
 mod resource_palette;
+mod schematic;
 
 /// # Safety
 /// The direct Java buffer must be writable and exclusively owned during this call.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativePaintFilteredTerrain(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
-) -> jint {
-    unsafe { jni_catch(env, || {
-        if buffer.is_null() || length < 160 || length as usize > welt_core::filtered_terrain::MAX_BYTES {
-            return WeltError::IllegalArgument as jint;
-        }
-        type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
-        type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
-        let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
-        let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
-        let pointer = address(env, buffer);
-        if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
-        let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
-        match welt_core::filtered_terrain::paint(data) { Ok(()) => WeltError::Ok as jint, Err(e) => e as jint }
-    }) }
-}
-
-/// # Safety
-/// Le tampon direct doit rester accessible en écriture et exclusif pendant cet appel.
-#[no_mangle]
-pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeSmoothCompactRegion(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 541 || length as usize > welt_core::smooth_height::COMPACT_MAX_BYTES {
+            if buffer.is_null()
+                || length < 160
+                || length as usize > welt_core::filtered_terrain::MAX_BYTES
+            {
                 return WeltError::IllegalArgument as jint;
             }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
@@ -152,10 +198,47 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
             let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer);
-            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
+            let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
+            match welt_core::filtered_terrain::paint(data) {
+                Ok(()) => WeltError::Ok as jint,
+                Err(e) => e as jint,
+            }
+        })
+    }
+}
+
+/// # Safety
+/// Le tampon direct doit rester accessible en écriture et exclusif pendant cet appel.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeSmoothCompactRegion(
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if buffer.is_null()
+                || length < 541
+                || length as usize > welt_core::smooth_height::COMPACT_MAX_BYTES
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
+            type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
+            let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
+            let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
+            let pointer = address(env, buffer);
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
             let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
             match welt_core::smooth_height::edit_compact(data) {
-                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+                Ok(()) => WeltError::Ok as jint,
+                Err(error) => error as jint,
             }
         })
     }
@@ -165,11 +248,17 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// Le tampon direct doit rester accessible en écriture et exclusif pendant cet appel.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeErodeCompactRegion(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 89 || length as usize > welt_core::erosion::COMPACT_MAX_BYTES {
+            if buffer.is_null()
+                || length < 89
+                || length as usize > welt_core::erosion::COMPACT_MAX_BYTES
+            {
                 return WeltError::IllegalArgument as jint;
             }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
@@ -177,10 +266,13 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
             let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer);
-            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
             let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
             match welt_core::erosion::erode_compact(data) {
-                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+                Ok(()) => WeltError::Ok as jint,
+                Err(error) => error as jint,
             }
         })
     }
@@ -190,11 +282,17 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// Le tampon direct Java doit rester accessible en écriture et exclusif pendant l'appel.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeEditMaskedPlane(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 48 || length as usize > welt_core::layer_edit::MASKED_MAX_BYTES {
+            if buffer.is_null()
+                || length < 48
+                || length as usize > welt_core::layer_edit::MASKED_MAX_BYTES
+            {
                 return WeltError::IllegalArgument as jint;
             }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
@@ -202,10 +300,13 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
             let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer);
-            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
             let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
             match welt_core::layer_edit::edit_masked(data) {
-                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+                Ok(()) => WeltError::Ok as jint,
+                Err(error) => error as jint,
             }
         })
     }
@@ -215,11 +316,17 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// Le tampon direct Java doit rester accessible en écriture et exclusif pendant l'appel.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeEditNibbleBrush(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 8240 || length as usize > welt_core::nibble_paint::COMPACT_MAX_BYTES {
+            if buffer.is_null()
+                || length < 8240
+                || length as usize > welt_core::nibble_paint::COMPACT_MAX_BYTES
+            {
                 return WeltError::IllegalArgument as jint;
             }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
@@ -227,10 +334,13 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
             let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer);
-            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
             let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
             match welt_core::nibble_paint::edit_compact(data) {
-                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+                Ok(()) => WeltError::Ok as jint,
+                Err(error) => error as jint,
             }
         })
     }
@@ -240,11 +350,17 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// Le tampon direct Java doit rester accessible en écriture et exclusif pendant l'appel.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeEditFluidBrush(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 64 || length as usize > welt_core::fluid_brush::MAX_BYTES {
+            if buffer.is_null()
+                || length < 64
+                || length as usize > welt_core::fluid_brush::MAX_BYTES
+            {
                 return WeltError::IllegalArgument as jint;
             }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
@@ -252,10 +368,13 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
             let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer);
-            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
             let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
             match welt_core::fluid_brush::edit(data) {
-                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+                Ok(()) => WeltError::Ok as jint,
+                Err(error) => error as jint,
             }
         })
     }
@@ -265,20 +384,31 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// Le tampon direct Java doit être accessible en écriture et exclusif pendant cet appel.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeEditHeightPlane(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 40 || length as usize > welt_core::height_edit::COMPACT_MAX_BYTES { return WeltError::IllegalArgument as jint; }
+            if buffer.is_null()
+                || length < 40
+                || length as usize > welt_core::height_edit::COMPACT_MAX_BYTES
+            {
+                return WeltError::IllegalArgument as jint;
+            }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
             type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
             let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer);
-            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
             let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
             match welt_core::height_edit::edit_compact_tile(data) {
-                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+                Ok(()) => WeltError::Ok as jint,
+                Err(error) => error as jint,
             }
         })
     }
@@ -288,11 +418,15 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// Le tampon direct Java doit rester accessible en écriture et exclusif pendant l'appel.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeEditLayerPlanes(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 40 || length as usize > welt_core::layer_edit::MAX_BYTES {
+            if buffer.is_null() || length < 40 || length as usize > welt_core::layer_edit::MAX_BYTES
+            {
                 return WeltError::IllegalArgument as jint;
             }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
@@ -300,10 +434,13 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
             let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer);
-            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
             let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
             match welt_core::layer_edit::edit(data) {
-                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+                Ok(()) => WeltError::Ok as jint,
+                Err(error) => error as jint,
             }
         })
     }
@@ -313,11 +450,15 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// Le tampon direct Java doit être accessible en écriture et exclusif pendant cet appel.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeBakeAutoBiomes(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() { return WeltError::IllegalArgument as jint; }
+            if buffer.is_null() {
+                return WeltError::IllegalArgument as jint;
+            }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
             type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
@@ -326,9 +467,11 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             if pointer.is_null() || capacity(env, buffer) < welt_core::auto_biome::BYTES as jlong {
                 return WeltError::IllegalArgument as jint;
             }
-            let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), welt_core::auto_biome::BYTES);
+            let data =
+                slice::from_raw_parts_mut(pointer.cast::<u8>(), welt_core::auto_biome::BYTES);
             match welt_core::auto_biome::bake(data) {
-                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+                Ok(()) => WeltError::Ok as jint,
+                Err(error) => error as jint,
             }
         })
     }
@@ -338,22 +481,30 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// Le tampon direct Java doit rester accessible en écriture et exclusif pendant cet appel.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeResizeVerticalTile(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() { return WeltError::IllegalArgument as jint; }
+            if buffer.is_null() {
+                return WeltError::IllegalArgument as jint;
+            }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
             type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
             let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer);
-            if pointer.is_null() || capacity(env, buffer) < welt_core::vertical_resize::BYTES as jlong {
+            if pointer.is_null()
+                || capacity(env, buffer) < welt_core::vertical_resize::BYTES as jlong
+            {
                 return WeltError::IllegalArgument as jint;
             }
-            let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), welt_core::vertical_resize::BYTES);
+            let data =
+                slice::from_raw_parts_mut(pointer.cast::<u8>(), welt_core::vertical_resize::BYTES);
             match welt_core::vertical_resize::resize(data) {
-                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+                Ok(()) => WeltError::Ok as jint,
+                Err(error) => error as jint,
             }
         })
     }
@@ -365,11 +516,15 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// Java owns a writable direct buffer for the call and must exclude concurrent access.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeResampleTile(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 2104 || length as usize > welt_core::scaling::MAX_BYTES {
+            if buffer.is_null() || length < 2104 || length as usize > welt_core::scaling::MAX_BYTES
+            {
                 return WeltError::IllegalArgument as jint;
             }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
@@ -377,10 +532,13 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
             let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer);
-            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
             let data = std::slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
             match welt_core::scaling::resample(data) {
-                Ok(()) => WeltError::Ok as jint, Err(_) => WeltError::IllegalArgument as jint,
+                Ok(()) => WeltError::Ok as jint,
+                Err(_) => WeltError::IllegalArgument as jint,
             }
         })
     }
@@ -398,7 +556,9 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() { return WeltError::IllegalArgument as jint; }
+            if buffer.is_null() {
+                return WeltError::IllegalArgument as jint;
+            }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
             type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
@@ -407,7 +567,8 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             if pointer.is_null() || capacity(env, buffer) != welt_core::selection::LENGTH as jlong {
                 return WeltError::IllegalArgument as jint;
             }
-            let data = std::slice::from_raw_parts_mut(pointer.cast::<u8>(), welt_core::selection::LENGTH);
+            let data =
+                std::slice::from_raw_parts_mut(pointer.cast::<u8>(), welt_core::selection::LENGTH);
             match welt_core::selection::edit(data) {
                 Ok(()) => WeltError::Ok as jint,
                 Err(_) => WeltError::IllegalArgument as jint,
@@ -430,7 +591,10 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 16 || length as usize > welt_core::tile_rotation::MAX_BYTES {
+            if buffer.is_null()
+                || length < 16
+                || length as usize > welt_core::tile_rotation::MAX_BYTES
+            {
                 return WeltError::IllegalArgument as jint;
             }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
@@ -847,7 +1011,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 peak_factor,
                 inverse != 0,
                 noise_scale,
-                noise_seed as i64,
+                noise_seed,
                 &mut height_values,
                 &strength_values,
                 &mut modified_values,
@@ -1307,13 +1471,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 return WeltError::IllegalArgument as jint;
             }
             let mut output = vec![0_i32; coordinate_length as usize];
-            let point_count = match rasterize_line_centers(
-                x1,
-                y1,
-                x2,
-                y2,
-                &mut output,
-            ) {
+            let point_count = match rasterize_line_centers(x1, y1, x2, y2, &mut output) {
                 Ok(point_count) => point_count,
                 Err(_) => return WeltError::IllegalArgument as jint,
             };
@@ -1624,7 +1782,13 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 fn unpack_fast_noise_lite_settings(packed: i32) -> (i32, i32, i32) {
     welt_gen::height_map_program::unpack_fast_noise_lite_settings(packed)
 }
-fn decode_height_map_node(opcode: i32, value: f64, scale: f64, octaves: i32, seed: i64) -> Option<HeightMapNode> {
+fn decode_height_map_node(
+    opcode: i32,
+    value: f64,
+    scale: f64,
+    octaves: i32,
+    seed: i64,
+) -> Option<HeightMapNode> {
     welt_gen::height_map_program::decode_height_map_node(opcode, value, scale, octaves, seed)
 }
 
@@ -2403,11 +2567,26 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// All array references must be valid JNI references from this JVM frame.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFillHeightMapTree(
-    env: *mut JNIEnv, class: jclass, origin_x: jint, origin_y: jint, width: jint, height: jint,
-    node_count: jint, opcodes: jobject, values: jobject, scales: jobject, octaves: jobject, seeds: jobject, output: jobject,
+    env: *mut JNIEnv,
+    class: jclass,
+    origin_x: jint,
+    origin_y: jint,
+    width: jint,
+    height: jint,
+    node_count: jint,
+    opcodes: jobject,
+    values: jobject,
+    scales: jobject,
+    octaves: jobject,
+    seeds: jobject,
+    output: jobject,
 ) -> jint {
-    unsafe { fill_height_map_tree_jni(env, class, origin_x, origin_y, width, height, None, None, None,
-        node_count, opcodes, values, scales, octaves, seeds, output) }
+    unsafe {
+        fill_height_map_tree_jni(
+            env, class, origin_x, origin_y, width, height, None, None, None, node_count, opcodes,
+            values, scales, octaves, seeds, output,
+        )
+    }
 }
 
 /// Evaluate the base map and slope in one transition, without a Java halo buffer.
@@ -2415,12 +2594,42 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// All array references must be valid JNI references from this JVM frame.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFillSlopeHeightMapTree(
-    env: *mut JNIEnv, class: jclass, origin_x: jint, origin_y: jint, width: jint, height: jint,
-    shift: jint, vertical_scaling: f32, node_count: jint, opcodes: jobject, values: jobject,
-    scales: jobject, octaves: jobject, seeds: jobject, output: jobject,
+    env: *mut JNIEnv,
+    class: jclass,
+    origin_x: jint,
+    origin_y: jint,
+    width: jint,
+    height: jint,
+    shift: jint,
+    vertical_scaling: f32,
+    node_count: jint,
+    opcodes: jobject,
+    values: jobject,
+    scales: jobject,
+    octaves: jobject,
+    seeds: jobject,
+    output: jobject,
 ) -> jint {
-    unsafe { fill_height_map_tree_jni(env, class, origin_x, origin_y, width, height, Some((shift, vertical_scaling)), None, None,
-        node_count, opcodes, values, scales, octaves, seeds, output) }
+    unsafe {
+        fill_height_map_tree_jni(
+            env,
+            class,
+            origin_x,
+            origin_y,
+            width,
+            height,
+            Some((shift, vertical_scaling)),
+            None,
+            None,
+            node_count,
+            opcodes,
+            values,
+            scales,
+            octaves,
+            seeds,
+            output,
+        )
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2428,12 +2637,42 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// # Safety
 /// All arrays must be valid JNI references from this JVM frame.
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFillAffineHeightMapTree(
-    env: *mut JNIEnv, class: jclass, origin_x: jint, origin_y: jint, width: jint, height: jint,
-    shift: jint, matrix: jobject, node_count: jint, opcodes: jobject, values: jobject,
-    scales: jobject, octaves: jobject, seeds: jobject, output: jobject,
+    env: *mut JNIEnv,
+    class: jclass,
+    origin_x: jint,
+    origin_y: jint,
+    width: jint,
+    height: jint,
+    shift: jint,
+    matrix: jobject,
+    node_count: jint,
+    opcodes: jobject,
+    values: jobject,
+    scales: jobject,
+    octaves: jobject,
+    seeds: jobject,
+    output: jobject,
 ) -> jint {
-    unsafe { fill_height_map_tree_jni(env, class, origin_x, origin_y, width, height, None, Some((shift, matrix)), None,
-        node_count, opcodes, values, scales, octaves, seeds, output) }
+    unsafe {
+        fill_height_map_tree_jni(
+            env,
+            class,
+            origin_x,
+            origin_y,
+            width,
+            height,
+            None,
+            Some((shift, matrix)),
+            None,
+            node_count,
+            opcodes,
+            values,
+            scales,
+            octaves,
+            seeds,
+            output,
+        )
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2441,12 +2680,43 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// # Safety
 /// All arrays must be valid JNI references from this JVM frame.
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFillDisplacementHeightMapTree(
-    env: *mut JNIEnv, class: jclass, origin_x: jint, origin_y: jint, width: jint, height: jint,
-    shift: jint, angle_count: jint, distance_count: jint, node_count: jint, opcodes: jobject,
-    values: jobject, scales: jobject, octaves: jobject, seeds: jobject, output: jobject,
+    env: *mut JNIEnv,
+    class: jclass,
+    origin_x: jint,
+    origin_y: jint,
+    width: jint,
+    height: jint,
+    shift: jint,
+    angle_count: jint,
+    distance_count: jint,
+    node_count: jint,
+    opcodes: jobject,
+    values: jobject,
+    scales: jobject,
+    octaves: jobject,
+    seeds: jobject,
+    output: jobject,
 ) -> jint {
-    unsafe { fill_height_map_tree_jni(env, class, origin_x, origin_y, width, height, None, None,
-        Some((shift, angle_count, distance_count)), node_count, opcodes, values, scales, octaves, seeds, output) }
+    unsafe {
+        fill_height_map_tree_jni(
+            env,
+            class,
+            origin_x,
+            origin_y,
+            width,
+            height,
+            None,
+            None,
+            Some((shift, angle_count, distance_count)),
+            node_count,
+            opcodes,
+            values,
+            scales,
+            octaves,
+            seeds,
+            output,
+        )
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2487,15 +2757,26 @@ unsafe fn fill_height_map_tree_jni(
             if slope.is_some_and(|(shift, _)| !(0..=31).contains(&shift) || area > 16384) {
                 return WeltError::IllegalArgument as jint;
             }
-            if displacement.is_some_and(|(shift, a, d)| !(0..=31).contains(&shift) || area > 16384
-                || a <= 0 || d <= 0 || i64::from(a) + i64::from(d) >= i64::from(node_count)) {
+            if displacement.is_some_and(|(shift, a, d)| {
+                !(0..=31).contains(&shift)
+                    || area > 16384
+                    || a <= 0
+                    || d <= 0
+                    || i64::from(a) + i64::from(d) >= i64::from(node_count)
+            }) {
                 return WeltError::IllegalArgument as jint;
             }
             type GetArrayLength = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jint;
             let get_array_length: GetArrayLength =
                 std::mem::transmute(function(env, GET_ARRAY_LENGTH));
-            if affine.is_some_and(|(shift, matrix)| !(0..=31).contains(&shift) || area > 16384
-                || matrix.is_null() || get_array_length(env, matrix) != 6) { return WeltError::IllegalArgument as jint; }
+            if affine.is_some_and(|(shift, matrix)| {
+                !(0..=31).contains(&shift)
+                    || area > 16384
+                    || matrix.is_null()
+                    || get_array_length(env, matrix) != 6
+            }) {
+                return WeltError::IllegalArgument as jint;
+            }
             if node_count <= 0
                 || node_count as usize > MAX_PROGRAM_NODES
                 || get_array_length(env, opcodes) < node_count
@@ -2532,7 +2813,9 @@ unsafe fn fill_height_map_tree_jni(
             get_ints(env, octaves, 0, node_count, raw_octaves.as_mut_ptr());
             get_longs(env, seeds, 0, node_count, raw_seeds.as_mut_ptr());
             let mut affine_matrix = [0.0_f64; 6];
-            if let Some((_, matrix)) = affine { get_doubles(env, matrix, 0, 6, affine_matrix.as_mut_ptr()); }
+            if let Some((_, matrix)) = affine {
+                get_doubles(env, matrix, 0, 6, affine_matrix.as_mut_ptr());
+            }
             let mut nodes = Vec::with_capacity(count);
             for index in 0..count {
                 nodes.push(match raw_opcodes[index] {
@@ -2597,17 +2880,52 @@ unsafe fn fill_height_map_tree_jni(
                 length: area,
             };
             let failed = if let Some((shift, scaling)) = slope {
-                welt_gen::height_map_slope::fill_slope_height_map_tree(&nodes, origin_x, origin_y,
-                    width as usize, height as usize, shift as u32, scaling, output_values.as_mut_slice()).is_err()
+                welt_gen::height_map_slope::fill_slope_height_map_tree(
+                    &nodes,
+                    origin_x,
+                    origin_y,
+                    width as usize,
+                    height as usize,
+                    shift as u32,
+                    scaling,
+                    output_values.as_mut_slice(),
+                )
+                .is_err()
             } else if let Some((shift, _)) = affine {
-                welt_gen::height_map_affine::fill_affine_height_map_tree(&nodes, origin_x, origin_y,
-                    width as usize, height as usize, shift as u32, &affine_matrix, output_values.as_mut_slice()).is_err()
+                welt_gen::height_map_affine::fill_affine_height_map_tree(
+                    &nodes,
+                    origin_x,
+                    origin_y,
+                    width as usize,
+                    height as usize,
+                    shift as u32,
+                    &affine_matrix,
+                    output_values.as_mut_slice(),
+                )
+                .is_err()
             } else if let Some((shift, a, d)) = displacement {
-                welt_gen::height_map_displacement::fill_displacement_height_map_tree(&nodes, a as usize, d as usize,
-                    origin_x, origin_y, width as usize, height as usize, shift as u32, output_values.as_mut_slice()).is_err()
+                welt_gen::height_map_displacement::fill_displacement_height_map_tree(
+                    &nodes,
+                    a as usize,
+                    d as usize,
+                    origin_x,
+                    origin_y,
+                    width as usize,
+                    height as usize,
+                    shift as u32,
+                    output_values.as_mut_slice(),
+                )
+                .is_err()
             } else {
-                fill_height_map_tree(&nodes, origin_x, origin_y, width as usize, height as usize,
-                    output_values.as_mut_slice()).is_err()
+                fill_height_map_tree(
+                    &nodes,
+                    origin_x,
+                    origin_y,
+                    width as usize,
+                    height as usize,
+                    output_values.as_mut_slice(),
+                )
+                .is_err()
             };
             drop(output_values);
             if failed {
@@ -4359,11 +4677,17 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// Le tampon direct doit rester exclusif et accessible pendant cet appel.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeShapePyramidRegion(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 37 || length as usize > welt_core::pyramid_region::MAX_BYTES {
+            if buffer.is_null()
+                || length < 37
+                || length as usize > welt_core::pyramid_region::MAX_BYTES
+            {
                 return WeltError::IllegalArgument as jint;
             }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
@@ -4371,10 +4695,13 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
             let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer);
-            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
             let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
             match welt_core::pyramid_region::edit(data) {
-                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+                Ok(()) => WeltError::Ok as jint,
+                Err(error) => error as jint,
             }
         })
     }
@@ -4384,11 +4711,17 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// Le tampon direct Java doit rester exclusif et accessible pendant cet appel.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeEditRiverRegion(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 77 || length as usize > welt_core::river_paint::MAX_FRAME_BYTES {
+            if buffer.is_null()
+                || length < 77
+                || length as usize > welt_core::river_paint::MAX_FRAME_BYTES
+            {
                 return WeltError::IllegalArgument as jint;
             }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
@@ -4396,10 +4729,13 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
             let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer);
-            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
             let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
             match welt_core::river_paint::edit_compact(data) {
-                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+                Ok(()) => WeltError::Ok as jint,
+                Err(error) => error as jint,
             }
         })
     }
@@ -4413,11 +4749,17 @@ thread_local! {
 /// Le tampon Java direct doit rester exclusif et accessible pendant cet appel.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFloodFluidRegion(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 74 || length as usize > welt_core::fluid_flood::MAX_BYTES {
+            if buffer.is_null()
+                || length < 74
+                || length as usize > welt_core::fluid_flood::MAX_BYTES
+            {
                 return WeltError::IllegalArgument as jint;
             }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
@@ -4425,10 +4767,15 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
             let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer);
-            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
             let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
-            REGION_FLOOD_QUEUE.with(|queue| match welt_core::fluid_flood::edit(data, &mut queue.borrow_mut()) {
-                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+            REGION_FLOOD_QUEUE.with(|queue| {
+                match welt_core::fluid_flood::edit(data, &mut queue.borrow_mut()) {
+                    Ok(()) => WeltError::Ok as jint,
+                    Err(error) => error as jint,
+                }
             })
         })
     }
@@ -4438,19 +4785,32 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// The writable direct buffer must remain exclusive and valid during this call.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeCopySelectionPlanes(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 64 || length as usize > welt_core::selection_copy::MAX_BYTES { return WeltError::IllegalArgument as jint; }
+            if buffer.is_null()
+                || length < 64
+                || length as usize > welt_core::selection_copy::MAX_BYTES
+            {
+                return WeltError::IllegalArgument as jint;
+            }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
             type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
             let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer);
-            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
             let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
-            match welt_core::selection_copy::copy(data) { Ok(()) => WeltError::Ok as jint, Err(error) => error as jint }
+            match welt_core::selection_copy::copy(data) {
+                Ok(()) => WeltError::Ok as jint,
+                Err(error) => error as jint,
+            }
         })
     }
 }
@@ -4459,20 +4819,33 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// Le tampon direct Java doit rester exclusif et accessible pendant cet appel.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFloodHeightRegion(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || (length as usize != welt_core::height_flood::MAX_BYTES && length as usize != welt_core::height_flood::HEIGHT_ONLY_BYTES) { return WeltError::IllegalArgument as jint; }
+            if buffer.is_null()
+                || (length as usize != welt_core::height_flood::MAX_BYTES
+                    && length as usize != welt_core::height_flood::HEIGHT_ONLY_BYTES)
+            {
+                return WeltError::IllegalArgument as jint;
+            }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
             type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
             let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer);
-            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
             let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
-            REGION_FLOOD_QUEUE.with(|queue| match welt_core::height_flood::edit(data, &mut queue.borrow_mut()) {
-                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+            REGION_FLOOD_QUEUE.with(|queue| {
+                match welt_core::height_flood::edit(data, &mut queue.borrow_mut()) {
+                    Ok(()) => WeltError::Ok as jint,
+                    Err(error) => error as jint,
+                }
             })
         })
     }
@@ -4482,11 +4855,17 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// Le tampon direct Java doit rester exclusif et accessible pendant cet appel.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeFloodPaintRegion(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 66 || length as usize > welt_core::paint_flood::MAX_BYTES {
+            if buffer.is_null()
+                || length < 66
+                || length as usize > welt_core::paint_flood::MAX_BYTES
+            {
                 return WeltError::IllegalArgument as jint;
             }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
@@ -4494,10 +4873,15 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
             let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer);
-            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
             let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
-            REGION_FLOOD_QUEUE.with(|queue| match welt_core::paint_flood::edit(data, &mut queue.borrow_mut()) {
-                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+            REGION_FLOOD_QUEUE.with(|queue| {
+                match welt_core::paint_flood::edit(data, &mut queue.borrow_mut()) {
+                    Ok(()) => WeltError::Ok as jint,
+                    Err(error) => error as jint,
+                }
             })
         })
     }
@@ -4511,11 +4895,17 @@ thread_local! {
 /// The writable direct buffer must remain exclusive and valid during this call.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeImportHeightMapTile(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 256 || length as usize > welt_gen::height_map_import::MAX_BYTES {
+            if buffer.is_null()
+                || length < 256
+                || length as usize > welt_gen::height_map_import::MAX_BYTES
+            {
                 return WeltError::IllegalArgument as jint;
             }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
@@ -4523,10 +4913,15 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
             let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer);
-            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
             let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
-            HEIGHT_MAP_IMPORT.with(|scratch| match welt_gen::height_map_import::import(data, &mut scratch.borrow_mut()) {
-                Ok(()) => WeltError::Ok as jint, Err(error) => error as jint,
+            HEIGHT_MAP_IMPORT.with(|scratch| {
+                match welt_gen::height_map_import::import(data, &mut scratch.borrow_mut()) {
+                    Ok(()) => WeltError::Ok as jint,
+                    Err(error) => error as jint,
+                }
             })
         })
     }
@@ -4536,11 +4931,17 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// The writable direct buffer must remain exclusive and valid during this call.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativePaintGlyphTile(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 256 || length as usize > welt_core::glyph_paint::MAX_BYTES {
+            if buffer.is_null()
+                || length < 256
+                || length as usize > welt_core::glyph_paint::MAX_BYTES
+            {
                 return WeltError::IllegalArgument as jint;
             }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
@@ -4548,9 +4949,14 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
             let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer);
-            if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
             let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
-            match welt_core::glyph_paint::paint(data) { Ok(()) => WeltError::Ok as jint, Err(error) => error as jint }
+            match welt_core::glyph_paint::paint(data) {
+                Ok(()) => WeltError::Ok as jint,
+                Err(error) => error as jint,
+            }
         })
     }
 }
@@ -4559,19 +4965,34 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// The writable direct frame stays exclusive and alive throughout the call.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeImportMaskTile(
-    env:*mut JNIEnv,_class:jclass,buffer:jobject,length:jint,
-)->jint{
-    unsafe{jni_catch(env,||{
-        if buffer.is_null()||length<256||length as usize>welt_gen::mask_import::MAX_BYTES{return WeltError::IllegalArgument as jint;}
-        type Address=unsafe extern "system" fn(*mut JNIEnv,jobject)->*mut c_void;
-        type Capacity=unsafe extern "system" fn(*mut JNIEnv,jobject)->jlong;
-        let address:Address=std::mem::transmute(function(env,GET_DIRECT_BUFFER_ADDRESS));
-        let capacity:Capacity=std::mem::transmute(function(env,GET_DIRECT_BUFFER_CAPACITY));
-        let pointer=address(env,buffer);
-        if pointer.is_null()||capacity(env,buffer)<length as jlong{return WeltError::IllegalArgument as jint;}
-        let data=slice::from_raw_parts_mut(pointer.cast::<u8>(),length as usize);
-        match welt_gen::mask_import::import(data){Ok(())=>WeltError::Ok as jint,Err(error)=>error as jint}
-    })}
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if buffer.is_null()
+                || length < 256
+                || length as usize > welt_gen::mask_import::MAX_BYTES
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
+            type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
+            let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
+            let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
+            let pointer = address(env, buffer);
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
+            let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
+            match welt_gen::mask_import::import(data) {
+                Ok(()) => WeltError::Ok as jint,
+                Err(error) => error as jint,
+            }
+        })
+    }
 }
 
 thread_local! {
@@ -4581,21 +5002,36 @@ thread_local! {
 /// The writable direct frame must stay exclusive and alive throughout this call.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeApplyThemedHeightBrush(
-    env:*mut JNIEnv,_class:jclass,buffer:jobject,length:jint,
-)->jint {
-    unsafe {jni_catch(env,|| {
-        if buffer.is_null()||length<128||length as usize>welt_gen::height_theme_brush::MAX_BYTES{return WeltError::IllegalArgument as jint;}
-        type Address=unsafe extern "system" fn(*mut JNIEnv,jobject)->*mut c_void;
-        type Capacity=unsafe extern "system" fn(*mut JNIEnv,jobject)->jlong;
-        let address:Address=std::mem::transmute(function(env,GET_DIRECT_BUFFER_ADDRESS));
-        let capacity:Capacity=std::mem::transmute(function(env,GET_DIRECT_BUFFER_CAPACITY));
-        let pointer=address(env,buffer);
-        if pointer.is_null()||capacity(env,buffer)<length as jlong{return WeltError::IllegalArgument as jint;}
-        let data=slice::from_raw_parts_mut(pointer.cast::<u8>(),length as usize);
-        HEIGHT_THEME_BRUSH.with(|scratch| match welt_gen::height_theme_brush::apply(data,&mut scratch.borrow_mut()) {
-            Ok(())=>WeltError::Ok as jint,Err(error)=>error as jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
+) -> jint {
+    unsafe {
+        jni_catch(env, || {
+            if buffer.is_null()
+                || length < 128
+                || length as usize > welt_gen::height_theme_brush::MAX_BYTES
+            {
+                return WeltError::IllegalArgument as jint;
+            }
+            type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
+            type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
+            let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
+            let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
+            let pointer = address(env, buffer);
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
+            let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
+            HEIGHT_THEME_BRUSH.with(|scratch| {
+                match welt_gen::height_theme_brush::apply(data, &mut scratch.borrow_mut()) {
+                    Ok(()) => WeltError::Ok as jint,
+                    Err(error) => error as jint,
+                }
+            })
         })
-    })}
+    }
 }
 
 /// # Safety
@@ -4693,11 +5129,17 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// The validated direct transaction must remain exclusively writable throughout this call.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeCombinedLayer(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 32 || length as usize > welt_core::combined_layer::MAX_BYTES {
+            if buffer.is_null()
+                || length < 32
+                || length as usize > welt_core::combined_layer::MAX_BYTES
+            {
                 return WeltError::IllegalArgument as jint;
             }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
@@ -4762,11 +5204,17 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// The writable direct frame stays exclusive and alive throughout this call.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativePaintLineStrokeTile(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || length < 256 || length as usize > welt_core::line_stroke::MAX_BYTES {
+            if buffer.is_null()
+                || length < 256
+                || length as usize > welt_core::line_stroke::MAX_BYTES
+            {
                 return WeltError::IllegalArgument as jint;
             }
             type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
@@ -4774,9 +5222,14 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
             let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
             let pointer = address(env, buffer);
-            if pointer.is_null() || capacity(env, buffer) < length as jlong {return WeltError::IllegalArgument as jint;}
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
             let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
-            match welt_core::line_stroke::paint(data) {Ok(()) => WeltError::Ok as jint, Err(error) => error as jint}
+            match welt_core::line_stroke::paint(data) {
+                Ok(()) => WeltError::Ok as jint,
+                Err(error) => error as jint,
+            }
         })
     }
 }
@@ -4786,19 +5239,30 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// The JVM supplies the environment and a direct buffer valid throughout the call.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeDecodeRegionHeader(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            if buffer.is_null() || !matches!(length,4096 | 8192) {return WeltError::IllegalArgument as jint;}
-            type Address=unsafe extern "system" fn(*mut JNIEnv,jobject)->*mut c_void;
-            type Capacity=unsafe extern "system" fn(*mut JNIEnv,jobject)->jlong;
-            let address:Address=std::mem::transmute(function(env,GET_DIRECT_BUFFER_ADDRESS));
-            let capacity:Capacity=std::mem::transmute(function(env,GET_DIRECT_BUFFER_CAPACITY));
-            let pointer=address(env,buffer);
-            if pointer.is_null() || capacity(env,buffer)<length as jlong {return WeltError::IllegalArgument as jint;}
-            let data=slice::from_raw_parts_mut(pointer.cast::<u8>(),length as usize);
-            if welt_nbt::region_header::decode(data) {WeltError::Ok as jint} else {WeltError::IllegalArgument as jint}
+            if buffer.is_null() || !matches!(length, 4096 | 8192) {
+                return WeltError::IllegalArgument as jint;
+            }
+            type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
+            type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
+            let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
+            let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
+            let pointer = address(env, buffer);
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
+            let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
+            if welt_nbt::region_header::decode(data) {
+                WeltError::Ok as jint
+            } else {
+                WeltError::IllegalArgument as jint
+            }
         })
     }
 }
@@ -4811,11 +5275,17 @@ thread_local! {
 /// The input and output arrays are valid JVM references and exclusive during this call.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeIndexChunkNbt(
-    env: *mut JNIEnv, _class: jclass, input: jobject, length: jint, output: jobject,
+    env: *mut JNIEnv,
+    _class: jclass,
+    input: jobject,
+    length: jint,
+    output: jobject,
 ) -> jint {
     unsafe {
         jni_catch(env, || {
-            use welt_nbt::nbt_index::{index, HEADER_WORDS, MAGIC, MAX_BYTES, NODE_WORDS, OUTPUT_WORDS};
+            use welt_nbt::nbt_index::{
+                index, HEADER_WORDS, MAGIC, MAX_BYTES, NODE_WORDS, OUTPUT_WORDS,
+            };
             if input.is_null() || output.is_null() || length < 1 || length as usize > MAX_BYTES {
                 return WeltError::IllegalArgument as jint;
             }
@@ -4823,7 +5293,9 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             type Read = unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *mut i8);
             type Write = unsafe extern "system" fn(*mut JNIEnv, jobject, jint, jint, *const i32);
             let array_length: Length = std::mem::transmute(function(env, GET_ARRAY_LENGTH));
-            if array_length(env, input) < length || array_length(env, output) != OUTPUT_WORDS as jint {
+            if array_length(env, input) < length
+                || array_length(env, output) != OUTPUT_WORDS as jint
+            {
                 return WeltError::IllegalArgument as jint;
             }
             let read: Read = std::mem::transmute(function(env, 200)); // GetByteArrayRegion
@@ -4833,10 +5305,18 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
                 let (bytes, nodes) = &mut *scratch;
                 bytes.resize(length as usize, 0);
                 read(env, input, 0, length, bytes.as_mut_ptr().cast());
-                let Some(consumed) = index(bytes, nodes) else {return WeltError::IllegalArgument as jint;};
-                let header = [MAGIC, 1, (nodes.len()/NODE_WORDS) as i32, consumed as i32];
+                let Some(consumed) = index(bytes, nodes) else {
+                    return WeltError::IllegalArgument as jint;
+                };
+                let header = [MAGIC, 1, (nodes.len() / NODE_WORDS) as i32, consumed as i32];
                 write(env, output, 0, HEADER_WORDS as jint, header.as_ptr());
-                write(env, output, HEADER_WORDS as jint, nodes.len() as jint, nodes.as_ptr());
+                write(
+                    env,
+                    output,
+                    HEADER_WORDS as jint,
+                    nodes.len() as jint,
+                    nodes.as_ptr(),
+                );
                 WeltError::Ok as jint
             })
         })
@@ -4847,19 +5327,31 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
 /// The direct frame is writable and exclusively borrowed for the duration of this call.
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlices_nativeConvertHeightmapImage(
-    env: *mut JNIEnv, _class: jclass, buffer: jobject, length: jint,
+    env: *mut JNIEnv,
+    _class: jclass,
+    buffer: jobject,
+    length: jint,
 ) -> jint {
-    unsafe { jni_catch(env, || {
-        if buffer.is_null() || length as usize != welt_render::heightmap_image::BYTES { return WeltError::IllegalArgument as jint; }
-        type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
-        type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
-        let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
-        let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
-        let pointer = address(env, buffer);
-        if pointer.is_null() || capacity(env, buffer) < length as jlong { return WeltError::IllegalArgument as jint; }
-        let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
-        match welt_render::heightmap_image::convert(data) { Ok(()) => WeltError::Ok as jint, Err(_) => WeltError::IllegalArgument as jint }
-    }) }
+    unsafe {
+        jni_catch(env, || {
+            if buffer.is_null() || length as usize != welt_render::heightmap_image::BYTES {
+                return WeltError::IllegalArgument as jint;
+            }
+            type Address = unsafe extern "system" fn(*mut JNIEnv, jobject) -> *mut c_void;
+            type Capacity = unsafe extern "system" fn(*mut JNIEnv, jobject) -> jlong;
+            let address: Address = std::mem::transmute(function(env, GET_DIRECT_BUFFER_ADDRESS));
+            let capacity: Capacity = std::mem::transmute(function(env, GET_DIRECT_BUFFER_CAPACITY));
+            let pointer = address(env, buffer);
+            if pointer.is_null() || capacity(env, buffer) < length as jlong {
+                return WeltError::IllegalArgument as jint;
+            }
+            let data = slice::from_raw_parts_mut(pointer.cast::<u8>(), length as usize);
+            match welt_render::heightmap_image::convert(data) {
+                Ok(()) => WeltError::Ok as jint,
+                Err(_) => WeltError::IllegalArgument as jint,
+            }
+        })
+    }
 }
 
 mod structure;

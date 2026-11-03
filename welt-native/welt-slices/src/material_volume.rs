@@ -20,8 +20,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let len: Length = std::mem::transmute(function(env, GET_ARRAY_LENGTH));
             let count = len(env, indices);
             let bytes = len(env, output);
-            if count < 1
-                || count > 16 * 1024 * 1024
+            if !(1..=16 * 1024 * 1024).contains(&count)
                 || bytes != count * if palette <= 256 { 1 } else { 2 }
             {
                 return error;
@@ -78,12 +77,9 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let n = len(env, source);
             let maps = len(env, mapping);
             let bytes = len(env, output);
-            if n < 1
-                || n > 32 * 1024 * 1024
-                || maps < 1
-                || maps > 65536
-                || bytes < 1
-                || bytes > 32 * 1024 * 1024
+            if !(1..=32 * 1024 * 1024).contains(&n)
+                || !(1..=65536).contains(&maps)
+                || !(1..=32 * 1024 * 1024).contains(&bytes)
                 || !packed.is_null() && same(env, packed, output) != 0
             {
                 return error;
@@ -152,8 +148,7 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let same: Same = std::mem::transmute(function(env, 24));
             let bytes = len(env, source);
             let n = len(env, parameters);
-            if bytes < 1
-                || bytes > 32 * 1024 * 1024
+            if !(1..=32 * 1024 * 1024).contains(&bytes)
                 || len(env, output) != bytes
                 || !(4..=68).contains(&n)
                 || same(env, source, output) != 0
@@ -225,12 +220,9 @@ pub unsafe extern "system" fn Java_org_pepsoft_worldpainter_nativeapi_NativeSlic
             let n = len(env, source);
             let maps = len(env, mapping);
             let bytes = len(env, output);
-            if n < 1
-                || n > 32 * 1024 * 1024
-                || maps < 1
-                || maps > 65536
-                || bytes < 1
-                || bytes > 32 * 1024 * 1024
+            if !(1..=32 * 1024 * 1024).contains(&n)
+                || !(1..=65536).contains(&maps)
+                || !(1..=32 * 1024 * 1024).contains(&bytes)
                 || !packed.is_null() && same(env, packed, output) != 0
             {
                 return error;

@@ -93,13 +93,7 @@ pub fn raise_mountain(
 }
 
 fn clamp_java_strength(value: f32) -> f32 {
-    if value < 0.0 {
-        0.0
-    } else if value > 1.0 {
-        1.0
-    } else {
-        value
-    }
+    value.clamp(0.0, 1.0)
 }
 
 fn java_max(left: f32, right: f32) -> f32 {

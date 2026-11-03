@@ -8,5 +8,4 @@ pub mod nbt_index;
 
 pub mod schematic;
 
-
 pub mod structure;

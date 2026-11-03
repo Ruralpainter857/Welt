@@ -13,7 +13,8 @@ impl CriticalArray {
     pub(super) unsafe fn acquire(env: *mut JNIEnv, array: jobject, mode: jint) -> Option<Self> {
         type Get = unsafe extern "system" fn(*mut JNIEnv, jobject, *mut u8) -> *mut c_void;
         let get: Get = unsafe { std::mem::transmute(function(env, 222)) };
-        let release = unsafe { std::mem::transmute(function(env, 223)) };
+        type Release = unsafe extern "system" fn(*mut JNIEnv, jobject, *mut c_void, jint);
+        let release = unsafe { std::mem::transmute::<*const c_void, Release>(function(env, 223)) };
         let pointer = unsafe { get(env, array, std::ptr::null_mut()) };
         if pointer.is_null() {
             None

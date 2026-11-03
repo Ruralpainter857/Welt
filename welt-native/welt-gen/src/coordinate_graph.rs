@@ -36,7 +36,7 @@ enum Node {
     Mandelbrot,
     Bitmap(usize),
     Bicubic(usize, [i32; 7], std::cell::RefCell<LatticeCache>),
-    Noise(NoiseHeightMapBulk),
+    Noise(Box<NoiseHeightMapBulk>),
     FastNoise(fastnoise_lite::FastNoiseLite, f64),
     Binary(i32, usize, usize),
     Translate(usize, i32, i32),
@@ -105,7 +105,7 @@ impl Program {
             return Ok(());
         }
         let mut nodes = Vec::with_capacity(records.len() / STRIDE);
-        for (index, r) in records.chunks_exact(STRIDE).enumerate() {
+        for (index, r) in records.as_chunks::<STRIDE>().0.iter().enumerate() {
             let op = word(r, 0);
             let left = word(r, 4);
             let right = word(r, 8);
@@ -127,7 +127,7 @@ impl Program {
                     if !height.is_finite() || !scale.is_finite() || scale <= 0.0 {
                         return Err(WeltError::IllegalArgument);
                     }
-                    Node::Noise(
+                    Node::Noise(Box::new(
                         NoiseHeightMapBulk::new(
                             height,
                             scale,
@@ -135,7 +135,7 @@ impl Program {
                             i64::from_le_bytes(r[32..40].try_into().unwrap()),
                         )
                         .map_err(|_| WeltError::IllegalArgument)?,
-                    )
+                    ))
                 }
                 12 => {
                     let first = word(r, 40);
@@ -659,7 +659,9 @@ mod tests {
         let p = Program {
             bytes: vec![],
             nodes: vec![
-                Node::Noise(NoiseHeightMapBulk::new(130.0, 0.7, 3, 17).unwrap()),
+                Node::Noise(Box::new(
+                    NoiseHeightMapBulk::new(130.0, 0.7, 3, 17).unwrap(),
+                )),
                 Node::Constant(13.0),
                 Node::FixedDisplacement(0, 1, 0.37_f64.sin(), 0.37_f64.cos()),
             ],
