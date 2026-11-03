@@ -3,6 +3,7 @@ package org.pepsoft.worldpainter;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
+import java.util.concurrent.atomic.LongAdder;
 import org.pepsoft.worldpainter.layers.Layer;
 import org.pepsoft.worldpainter.layers.Biome;
 import org.pepsoft.worldpainter.nativeapi.NativeSlices;
@@ -11,6 +12,65 @@ import static org.pepsoft.worldpainter.Constants.*;
 public final class NibbleBrushAccess {
     private NibbleBrushAccess() { }
     private static final ThreadLocal<Scratch> BUFFER = ThreadLocal.withInitial(Scratch::new);
+    private static final LongAdder COMPLETED_NATIVE_CALLS = new LongAdder();
+
+    /** Accepted native tile transactions, including unchanged results. */
+    public static long completedNativeCalls() { return COMPLETED_NATIVE_CALLS.sum(); }
+
+    /** Pure cached brush sampling; full selects the level-independent shape. */
+    @FunctionalInterface
+    public interface StrengthSampler { float strength(int worldX, int worldY, boolean full); }
+
+    /**
+     * Complete intensity/terrain/biome edits using tile-sized reusable inputs and the existing native transactions.
+     * The caller serializes edits, inhibits events and supplies a pure brush without a filter or random draws.
+     * Mode is selected from the whole brush footprint, not from each tile intersection.
+     */
+    public static boolean tryApplySampled(Dimension dimension, Layer layer, Terrain terrain, int biome,
+                                           int ox, int oy, int width, int height, float dynamicLevel,
+                                           StrengthSampler sampler, int mode) {
+        if (width < 1 || height < 1 || width > 1024 || height > 1024
+                || (long) ox + width - 1 > Integer.MAX_VALUE || (long) oy + height - 1 > Integer.MAX_VALUE
+                || !Float.isFinite(dynamicLevel) || dynamicLevel < 0 || dynamicLevel > 1
+                || mode < 0 || mode > 2 || terrain != null && mode != 0 || biome < -1 || biome > 255
+                || layer.dataSize != Layer.DataSize.NIBBLE || layer.getDefaultValue() < 0 || layer.getDefaultValue() > 15
+                || !TileRegionAccess.canBatch(dimension, ox, oy, width, height)) return false;
+        boolean combined = terrain != null || biome >= 0;
+        Scratch scratch = BUFFER.get();
+        if (scratch.sampledStrengths == null) scratch.sampledStrengths = new float[TILE_SIZE * TILE_SIZE];
+        if (combined && scratch.sampledMask == null) scratch.sampledMask = new byte[TILE_SIZE * TILE_SIZE];
+        float[] strengths = scratch.sampledStrengths;
+        byte[] mask = scratch.sampledMask;
+        for (int y = 0; y < height;) {
+            int wy = oy + y, ly = wy & TILE_SIZE_MASK, rh = Math.min(height - y, TILE_SIZE - ly);
+            for (int x = 0; x < width;) {
+                int wx = ox + x, lx = wx & TILE_SIZE_MASK, rw = Math.min(width - x, TILE_SIZE - lx);
+                if (dimension.getTile(wx >> TILE_SIZE_BITS, wy >> TILE_SIZE_BITS) != null) {
+                    boolean touched = false;
+                    for (int dy = 0; dy < rh; dy++) for (int dx = 0; dx < rw; dx++) {
+                        int index = dy * rw + dx;
+                        float strength = dynamicLevel * sampler.strength(wx + dx, wy + dy, mode != 0);
+                        strengths[index] = strength;
+                        touched |= strength != 0f;
+                        if (combined) {
+                            mask[index] = (byte) (dynamicLevel * sampler.strength(wx + dx, wy + dy, true) > .75f ? 1 : 0);
+                            touched |= mask[index] != 0;
+                        }
+                    }
+                    if (touched) {
+                        Tile tile = dimension.getTileForEditing(wx >> TILE_SIZE_BITS, wy >> TILE_SIZE_BITS);
+                        if (tile != null) {
+                            if (combined) tile.editCombinedNibbleRegion(layer, terrain, biome, lx, ly, rw, rh, strengths, mask, 0, rw, mode);
+                            else tile.editNibbleRegion(layer, lx, ly, rw, rh, strengths, 0, rw, mode);
+                        }
+                    }
+                }
+                x += rw;
+            }
+            y += rh;
+        }
+        return true;
+    }
 
     public static boolean tryApplyCombined(Dimension dimension, Layer layer, Terrain terrain, int biome, int ox, int oy,
                                            int width, int height, float[] strengths, byte[] mask, int mode) {
@@ -83,7 +143,7 @@ public final class NibbleBrushAccess {
         scratch.strengths.clear().position(8240 / 4).limit(8240 / 4 + width * height);
         for (int dy = 0; dy < height; dy++) scratch.strengths.put(strengths, offset + dy * stride, width);
         buffer.position(0);
-        return NativeSlices.editNibbleBrush(buffer) ? buffer : null;
+        return accepted(buffer);
     }
 
     // ABI WLBP v2 : intensité, terrain et biome facultatifs, forces et masque dans le même tampon.
@@ -110,11 +170,19 @@ public final class NibbleBrushAccess {
         buffer.position(maskOffset);
         for (int dy = 0; dy < height; dy++) buffer.put(mask, offset + dy * stride, width);
         buffer.position(0);
-        return NativeSlices.editNibbleBrush(buffer) ? buffer : null;
+        return accepted(buffer);
+    }
+
+    private static ByteBuffer accepted(ByteBuffer buffer) {
+        if (!NativeSlices.editNibbleBrush(buffer)) return null;
+        COMPLETED_NATIVE_CALLS.increment();
+        return buffer;
     }
 
     private static final class Scratch {
         final ByteBuffer buffer = ByteBuffer.allocateDirect(122944).order(ByteOrder.LITTLE_ENDIAN);
         final FloatBuffer strengths = buffer.asFloatBuffer();
+        float[] sampledStrengths;
+        byte[] sampledMask;
     }
 }

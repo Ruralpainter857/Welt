@@ -161,6 +161,13 @@ public class NibbleLayerPaint extends LayerPaint {
                                            boolean oneTile, int mode) {
         final long widthLong = (long) x2 - x1 + 1L;
         final long heightLong = (long) y2 - y1 + 1L;
+        if (widthLong * heightLong > 65536 && getClass() == NibbleLayerPaint.class && !filterEnabled
+                && Boolean.getBoolean("welt.native.largeLayerBrush")
+                && (brush instanceof SymmetricBrush || brush instanceof RotatedBrush || brush.getClass() == BitmapBrush.class)) {
+            if (widthLong > 1024 || heightLong > 1024 || widthLong < 1 || heightLong < 1) return false;
+            return NibbleBrushAccess.tryApplySampled(dimension, layer, null, -1, x1, y1, (int) widthLong, (int) heightLong,
+                    dynamicLevel, (x, y, full) -> full ? getFullStrength(centreX, centreY, x, y) : getStrength(centreX, centreY, x, y), mode);
+        }
         if (!Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
                 || dimension.getClass() != Dimension.class || !dimension.isEventsInhibited()
                 || widthLong <= 0 || heightLong <= 0 || widthLong > 65_536L

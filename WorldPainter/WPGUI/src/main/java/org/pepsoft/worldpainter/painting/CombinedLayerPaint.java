@@ -9,6 +9,9 @@ import org.pepsoft.worldpainter.layers.CombinedLayer;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.nativeapi.NativeSlices;
+import org.pepsoft.worldpainter.brushes.BitmapBrush;
+import org.pepsoft.worldpainter.brushes.RotatedBrush;
+import org.pepsoft.worldpainter.brushes.SymmetricBrush;
 
 import java.awt.*;
 
@@ -327,6 +330,25 @@ public final class CombinedLayerPaint extends NibbleLayerPaint {
 
     private boolean applyNativeCombinedBrush(Dimension dimension, int centreX, int centreY, float dynamicLevel, boolean remove) {
         CombinedLayer combined = (CombinedLayer) layer;
+        if (Boolean.getBoolean("welt.native.largeLayerBrush") && brush.getRadius() != 0 && !dither && filter == null
+                && (brush instanceof SymmetricBrush || brush instanceof RotatedBrush || brush.getClass() == BitmapBrush.class)) {
+            Rectangle bounds = brush.getBoundingBox();
+            long width = bounds.width, height = bounds.height;
+            if (width * height > 65536) {
+                long x = (long) centreX + bounds.x, y = (long) centreY + bounds.y;
+                if (width > 1024 || height > 1024 || x < Integer.MIN_VALUE || y < Integer.MIN_VALUE
+                        || x > Integer.MAX_VALUE || y > Integer.MAX_VALUE) return false;
+                Terrain terrain = combined.isApplyTerrainAndBiomeOnExport() ? null : combined.getTerrain();
+                int biome = combined.isApplyTerrainAndBiomeOnExport() ? -1 : combined.getBiome();
+                if (remove && terrain != null) return false;
+                boolean oneTile = (x >> TILE_SIZE_BITS) == ((x + width - 1) >> TILE_SIZE_BITS)
+                        && (y >> TILE_SIZE_BITS) == ((y + height - 1) >> TILE_SIZE_BITS);
+                return NibbleBrushAccess.tryApplySampled(dimension, layer, terrain, remove && biome >= 0 ? 255 : biome,
+                        (int) x, (int) y, (int) width, (int) height, dynamicLevel,
+                        (wx, wy, full) -> full ? getFullStrength(centreX, centreY, wx, wy) : getStrength(centreX, centreY, wx, wy),
+                        remove ? (oneTile ? 1 : 2) : 0);
+            }
+        }
         if (combined.isApplyTerrainAndBiomeOnExport() || brush.getRadius() == 0 || dither || filter != null
                 || !Native.isGenEnabled() || !NativeLoader.areSlicesAvailable()
                 || dimension.getClass() != Dimension.class || !dimension.isEventsInhibited()) return false;
