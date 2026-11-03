@@ -12,6 +12,10 @@ import org.pepsoft.worldpainter.WorldPainterView;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
+import org.pepsoft.worldpainter.brushes.BitmapBrush;
+import org.pepsoft.worldpainter.brushes.Brush;
+import org.pepsoft.worldpainter.brushes.RotatedBrush;
+import org.pepsoft.worldpainter.brushes.SymmetricBrush;
 
 import javax.swing.*;
 
@@ -73,6 +77,15 @@ public class Sponge extends AbstractBrushOperation {
     private boolean applyNativeSponge(Dimension dimension, int centreX, int centreY,
                                       int radius, boolean inverse, int waterHeight) {
         final long diameterLong = 2L * radius + 1L;
+        if (diameterLong > 255 && diameterLong <= 1024 && radius >= 0
+                && getClass() == Sponge.class && Boolean.getBoolean("welt.native.largeFluidBrush") && getFilter() == null) {
+            Brush brush = getBrush();
+            if (!(brush instanceof SymmetricBrush || brush instanceof RotatedBrush || brush.getClass() == BitmapBrush.class)
+                    || (long) centreX - radius < Integer.MIN_VALUE || (long) centreY - radius < Integer.MIN_VALUE) return false;
+            return FluidBrushAccess.tryApplySampled(dimension, centreX - radius, centreY - radius,
+                    (int) diameterLong, (int) diameterLong,
+                    (x, y) -> getStrength(centreX, centreY, x, y), inverse, waterHeight);
+        }
         if (radius < 0 || diameterLong > 255L || !Native.isGenEnabled()
                 || !NativeLoader.areSlicesAvailable()) {
             return false;

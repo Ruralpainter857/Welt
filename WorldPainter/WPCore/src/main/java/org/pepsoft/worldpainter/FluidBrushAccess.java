@@ -5,6 +5,7 @@ import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.nio.ShortBuffer;
 import java.util.BitSet;
+import java.util.concurrent.atomic.LongAdder;
 import org.pepsoft.worldpainter.layers.FloodWithLava;
 import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import static org.pepsoft.worldpainter.Constants.*;
@@ -12,6 +13,51 @@ import static org.pepsoft.worldpainter.Constants.*;
 public final class FluidBrushAccess {
     private FluidBrushAccess() { }
     private static final ThreadLocal<Scratch> BUFFER = ThreadLocal.withInitial(Scratch::new);
+    private static final LongAdder COMPLETED_NATIVE_CALLS = new LongAdder();
+
+    /** Number of accepted tile transactions, including unchanged results; used to verify native coverage. */
+    public static long completedNativeCalls() { return COMPLETED_NATIVE_CALLS.sum(); }
+
+    /** Pure stock brush sampling; callbacks which observe edits must retain the scalar path. */
+    @FunctionalInterface
+    public interface StrengthSampler { float strength(int worldX, int worldY); }
+
+    /**
+     * Samples and edits one tile at a time. The caller must supply a pure brush without a filter and inhibit events.
+     * All tile implementations and coordinate bounds are checked before sampling or changing anything.
+     */
+    public static boolean tryApplySampled(Dimension dimension, int ox, int oy, int width, int height,
+                                          StrengthSampler sampler, boolean reset, int waterHeight) {
+        if (width < 1 || height < 1 || width > 1024 || height > 1024
+                || (long) ox + width - 1 > Integer.MAX_VALUE || (long) oy + height - 1 > Integer.MAX_VALUE
+                || !TileRegionAccess.canBatch(dimension, ox, oy, width, height)) return false;
+        if (reset && waterHeight == -1) return true;
+        Scratch scratch = BUFFER.get();
+        if (scratch.sampledStrengths == null) scratch.sampledStrengths = new float[TILE_SIZE * TILE_SIZE];
+        float[] strengths = scratch.sampledStrengths;
+        int level = reset ? waterHeight : dimension.getMinHeight();
+        for (int x = 0; x < width;) {
+            int wx = ox + x, lx = wx & TILE_SIZE_MASK, rw = Math.min(width - x, TILE_SIZE - lx);
+            for (int y = 0; y < height;) {
+                int wy = oy + y, ly = wy & TILE_SIZE_MASK, rh = Math.min(height - y, TILE_SIZE - ly);
+                if (dimension.getTile(wx >> TILE_SIZE_BITS, wy >> TILE_SIZE_BITS) != null) {
+                    boolean touched = false;
+                    for (int dx = 0; dx < rw; dx++) for (int dy = 0; dy < rh; dy++) {
+                        float strength = sampler.strength(wx + dx, wy + dy);
+                        strengths[dx * rh + dy] = strength;
+                        touched |= strength != 0f;
+                    }
+                    if (touched) {
+                        Tile tile = dimension.getTileForEditing(wx >> TILE_SIZE_BITS, wy >> TILE_SIZE_BITS);
+                        tile.editFluidRegion(lx, ly, rw, rh, strengths, 0, rh, reset, level);
+                    }
+                }
+                y += rh;
+            }
+            x += rw;
+        }
+        return true;
+    }
 
     public static void apply(Dimension dimension, int ox, int oy, int width, int height,
                              float[] strengths, boolean reset, int waterHeight) {
@@ -73,13 +119,16 @@ public final class FluidBrushAccess {
             }
         }
         buffer.position(0);
-        return NativeSlices.editFluidBrush(buffer) ? scratch : null;
+        if (!NativeSlices.editFluidBrush(buffer)) return null;
+        COMPLETED_NATIVE_CALLS.increment();
+        return scratch;
     }
 
     static final class Scratch {
         final ByteBuffer buffer = ByteBuffer.allocateDirect(100416).order(ByteOrder.LITTLE_ENDIAN);
         final FloatBuffer strengths = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN).position(64).limit(64 + 65536).asFloatBuffer();
         final ShortBuffer shorts = buffer.asShortBuffer();
+        float[] sampledStrengths;
 
         void copyWater(int x, int y, int width, int height, byte[] water, short[] tallWater) {
             int offset = buffer.getInt(44);
