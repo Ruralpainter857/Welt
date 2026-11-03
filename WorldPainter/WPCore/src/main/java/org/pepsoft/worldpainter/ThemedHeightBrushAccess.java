@@ -1,7 +1,6 @@
 package org.pepsoft.worldpainter;
 
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.util.Arrays;
 import java.util.ArrayList;
@@ -21,7 +20,7 @@ final class ThemedHeightBrushAccess {
     private static final java.util.concurrent.atomic.AtomicLong COMPLETED=new java.util.concurrent.atomic.AtomicLong();
     static long completedCalls(){return COMPLETED.get();}
     private static final ThreadLocal<Scratch> SCRATCH=ThreadLocal.withInitial(Scratch::new);
-    private static final class Scratch {ByteBuffer data;final Tile[] tiles=new Tile[LARGE_MAX_TILES];}
+    private static final class Scratch {boolean busy;final Tile[] tiles=new Tile[LARGE_MAX_TILES];}
     /** Copy only the border: interior heights already belong to the shared packed tile planes. */
     private static void copyBorder(Dimension dimension,int ox,int oy,int width,int height,FloatBuffer out,int offset){
         for(int x=0;x<width;){
@@ -101,7 +100,10 @@ final class ThemedHeightBrushAccess {
                     layer.dataSize==Layer.DataSize.BIT?3:4;
             offsets[p]=bytes;bytes+=SelectionCopyAccess.length(kinds[p]);
         }
-        Scratch scratch=SCRATCH.get();Arrays.fill(scratch.tiles,null);try {int count=0;
+        Scratch scratch=SCRATCH.get();
+        // Tile callbacks can synchronously invoke another tool on the same worker.
+        if(scratch.busy)scratch=new Scratch();
+        scratch.busy=true;Arrays.fill(scratch.tiles,null);try {int count=0;
         for(int tx=ox>>7;tx<=((ox+width-1)>>7);tx++)for(int ty=oy>>7;ty<=((oy+height-1)>>7);ty++) {
             Tile t=dimension.getTile(tx,ty);if(t!=null){if(count >= (large ? LARGE_MAX_TILES : 9) || t.getMinHeight()!=dimension.getMinHeight()||t.getMaxHeight()!=dimension.getMaxHeight())return false;scratch.tiles[count++]=t;}
         }
@@ -111,8 +113,8 @@ final class ThemedHeightBrushAccess {
         int programBase=borderBase+borderCount*4,paletteBase=programBase+(filter==null?0:filter.encodedBytes());
         int themeBase=paletteBase+(filter==null?0:40+TERRAINS.length*8),start=themeBase+plan.bytes(),step=288+bytes;
         long sizeLong=(long)start+(long)step*count;if(sizeLong>(large ? LARGE_MAX_BYTES : MAX_BYTES))return false;int size=(int)sizeLong;
-        ByteBuffer d=scratch.data;if(d==null||d.capacity()<size){d=ByteBuffer.allocateDirect(size).order(ByteOrder.LITTLE_ENDIAN);scratch.data=d;}
-        d.clear().limit(size);for(int i=0;i<header;i+=8)d.putLong(i,0);
+        try(var lease=EditorBufferPool.acquire(size)) {
+        ByteBuffer d=lease.buffer();for(int i=0;i<header;i+=8)d.putLong(i,0);
         d.putInt(0,0x42544857).putInt(4,large?(mode>=6?9:mode==5?8:7):mode>=6?6:filter!=null?5:Boolean.getBoolean("welt.native.interleavedTheme")?4:mode==5?3:mode<2?1:2).putInt(8,size).putInt(12,n).putInt(16,count)
                 .putInt(20,dimension.getMinHeight()).putInt(24,dimension.getMaxHeight()).putInt(28,mode).putFloat(32,value)
                 .putFloat(36,low).putFloat(40,high).putInt(44,ox).putInt(48,oy).putInt(52,width).putInt(56,height)
@@ -163,6 +165,7 @@ final class ThemedHeightBrushAccess {
             tile.applyOrderedPlanes(tileFrame,256,layers,roles,kinds,offsets);d.limit(size);
         }
         return true;
-        }finally{Arrays.fill(scratch.tiles,null);}
+        }
+        }finally{Arrays.fill(scratch.tiles,null);scratch.busy=false;}
     }
 }
