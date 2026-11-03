@@ -54,6 +54,10 @@ impl NoiseHeightMapBulk {
 
     #[inline]
     fn get_value_normalized(&self, x: f64, y: f64) -> f64 {
+        // Java divides an empty sum by zero. Keep this NaN explicit on every target/compiler.
+        if self.octaves == 0 {
+            return f64::NAN;
+        }
         if self.octaves == 1 {
             return (f64::from(self.perlin.get_perlin_noise_2d(x, y)) + 0.5) * self.d_height;
         }
@@ -147,6 +151,10 @@ impl NoiseHeightMapBulk {
         height: usize,
         output: &mut [f64],
     ) -> Result<(), NoiseHeightMapError> {
+        if self.octaves == 0 {
+            output.fill(f64::NAN);
+            return Ok(());
+        }
         let prepared_count = if self.octaves == 1 {
             1
         } else {
@@ -222,6 +230,32 @@ mod tests {
             checked += 1;
         }
         assert_eq!(checked, 512, "unexpected Java golden sample count");
+    }
+
+    #[test]
+    fn non_positive_octaves_preserve_java_nan_and_empty_sum() {
+        for octaves in [0, -3, i32::MIN] {
+            let map = NoiseHeightMapBulk::new(128.0, 0.75, octaves, 197).unwrap();
+            let scalar = map.get_value(-19.0, 23.0);
+            let mut bulk = [17.0; 35];
+            map.fill_bulk(-19, 23, 5, 7, &mut bulk).unwrap();
+            let mut sampled = [17.0; 35];
+            map.fill_sampled_bulk(-19, 23, 5, 7, 3, &mut sampled)
+                .unwrap();
+            if octaves == 0 {
+                assert!(scalar.is_nan());
+                assert!(bulk
+                    .iter()
+                    .chain(sampled.iter())
+                    .all(|value| value.is_nan()));
+            } else {
+                assert_eq!(scalar.to_bits(), 64.0_f64.to_bits());
+                assert!(bulk
+                    .iter()
+                    .chain(sampled.iter())
+                    .all(|value| value.to_bits() == scalar.to_bits()));
+            }
+        }
     }
 
     #[test]
