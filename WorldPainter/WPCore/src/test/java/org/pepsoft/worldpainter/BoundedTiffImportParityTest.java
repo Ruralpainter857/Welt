@@ -482,17 +482,17 @@ public class BoundedTiffImportParityTest {
 
     @Test
     public void veryWideImagesAreDecodedInThinnerBands() throws Exception {
-        // 66000 columns: a band of 256 rows would exceed the band budget of 16 MiB, so it is decoded in bands of 128
-        // rows, which fill the blocks in two steps. Images of moderate width (the other tests) use bands of several
-        // rows of blocks
-        final int width = 66000;
-        final File file = fixture("wide", TYPE_BYTE, width, 300);
+        // 70000 columns of 16 bits: a band of one row of blocks (128 rows) would exceed the band budget of 16 MiB, so it
+        // is decoded in bands of 64 rows, which fill the blocks in two steps, across a row of blocks boundary. Images of
+        // moderate width (the other tests) use bands of several rows of blocks
+        final int width = 70000;
+        final File file = fixture("wide", TYPE_USHORT, width, 200);
         final BitmapHeightMap dense = BitmapHeightMap.build().withImage(ImageIO.read(file)).now();
         try (CachedImageHeightMap cached = CachedImageHeightMap.capture(file, file.getName())) {
             assertNotNull(cached);
             assertArrayEquals(dense.getRange(), cached.getRange(), 0.0);
             final double[] row = new double[width];
-            for (int y = 0; y < 300; y++) {
+            for (int y = 0; y < 200; y++) {
                 cached.readRegion(0, y, width, 1, row, 0, width);
                 for (int x = 0; x < width; x++) {
                     if (row[x] != dense.getHeight(x, y)) {

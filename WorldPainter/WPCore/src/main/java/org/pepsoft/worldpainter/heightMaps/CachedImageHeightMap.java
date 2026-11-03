@@ -36,7 +36,7 @@ import static java.awt.image.DataBuffer.*;
  *
  * <p>{@link #capture(File, String)} decodes the image once, in full width bands of bounded size, with the same reader
  * that {@code ImageIO.read} would use, and stores the exact samples in a private cache file in the temporary directory,
- * in blocks of 256x256 samples. The range of the heights is computed during the capture. The original file is not read
+ * in blocks of 128x128 samples. The range of the heights is computed during the capture. The original file is not read
  * again afterwards, so the height map is a stable snapshot, like an image loaded in memory. Heights are then read from
  * the cache file through a bounded cache of decoded blocks.
  *
@@ -682,7 +682,13 @@ public final class CachedImageHeightMap extends AbstractHeightMap implements Clo
     private transient boolean owner;
     private double[] range;
 
-    private static final int BLOCK = 256, MAX_BLOCKS = 32, MAX_SIDE = 1 << 20, MAX_BAND_BYTES = 16 << 20;
+    /**
+     * The side of a block, and the number of decoded blocks cached (16 MiB). A decoded block of 128x128 doubles (128 KiB)
+     * stays well below half a G1 region of 1 MiB, the smallest region size: a larger one would be a humongous object
+     * taking a whole region, doubling the real cost of the cache on heaps up to 2 GiB.
+     */
+    private static final int BLOCK = 128, MAX_BLOCKS = 128;
+    private static final int MAX_SIDE = 1 << 20, MAX_BAND_BYTES = 16 << 20;
     /** The TIFF reader whose region reads were verified to return the samples of a complete read. */
     private static final String VERIFIED_READER = "com.twelvemonkeys.imageio.plugins.tiff.TIFFImageReader";
     private static final String TIFF_METADATA_FORMAT = "com_sun_media_imageio_plugins_tiff_image_1.0";
@@ -846,7 +852,7 @@ public final class CachedImageHeightMap extends AbstractHeightMap implements Clo
         double[] spare;
         ByteBuffer buffer;
         Object scratch;
-        /** Decoded blocks, least recently used first; at most {@link #MAX_BLOCKS} (16 MiB). */
+        /** Decoded blocks, least recently used first; at most {@link #MAX_BLOCKS}. */
         final Map<Integer, double[]> blocks = new LinkedHashMap<>(MAX_BLOCKS * 2, 0.75f, true) {
             @Override
             protected boolean removeEldestEntry(Map.Entry<Integer, double[]> eldest) {
