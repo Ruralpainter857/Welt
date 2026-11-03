@@ -63,6 +63,9 @@ jobs:
   java:
     name: Java 17, Maven tests, Java golden verification
     runs-on: ubuntu-latest
+    env:
+      # Bound the build JVM explicitly, including assembly of the shared test-fixture JAR.
+      MAVEN_OPTS: -Xmx1g
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
@@ -70,14 +73,15 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: maven
+      - uses: dtolnay/rust-toolchain@stable
       - name: Configure the Maven JDK 17 toolchain
         shell: bash
         run: |
           mkdir -p "$HOME/.m2"
           printf '<toolchains><toolchain><type>jdk</type><provides><version>17</version></provides><configuration><jdkHome>%s</jdkHome></configuration></toolchain></toolchains>\n' "$JAVA_HOME" > "$HOME/.m2/toolchains.xml"
-      - name: Build and test WPCore
+      - name: Build native libraries and test WPCore
         working-directory: WorldPainter
-        run: mvn --batch-mode --no-transfer-progress -pl WPCore -am test
+        run: mvn --batch-mode --no-transfer-progress -Pnative -pl WPCore -am test
       - name: Verify checked-in Java goldens
         shell: bash
         run: |
@@ -96,6 +100,8 @@ jobs:
   java-native:
     name: Java 17 ↔ Rust JNI integration / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    env:
+      MAVEN_OPTS: -Xmx1g
     strategy:
       fail-fast: false
       matrix:
