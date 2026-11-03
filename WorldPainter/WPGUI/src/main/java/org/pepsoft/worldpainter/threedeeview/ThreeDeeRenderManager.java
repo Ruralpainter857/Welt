@@ -37,7 +37,9 @@ public class ThreeDeeRenderManager {
         if (jobQueue == null) {
             startThreads();
         }
-        jobQueue.scheduleJobIfNotScheduled(new Tile3DRenderJob(tile));
+        if (jobQueue.scheduleJobIfNotScheduled(new Tile3DRenderJob(tile))) {
+            pendingJobs++;
+        }
     }
     
     /**
@@ -56,11 +58,10 @@ public class ThreeDeeRenderManager {
      * Blocks until all tiles currently on the queue are rendered.
      */
     public synchronized void renderAllTiles() throws InterruptedException {
-        if (jobQueue != null) {
-            jobQueue.drain();
-            for (Background3DTileRenderer renderThread: renderThreads) {
-                renderThread.waitToIdle();
-            }
+        // wait() releases this monitor so workers can publish their results.
+        // Count both queued and already claimed jobs; an empty queue alone is insufficient.
+        while (pendingJobs > 0) {
+            wait();
         }
     }
     
@@ -71,12 +72,22 @@ public class ThreeDeeRenderManager {
             }
         }
         renderThreads = null;
+        if (jobQueue != null) jobQueue.clear();
         jobQueue = null;
+        pendingJobs = 0;
         results.clear();
+        notifyAll();
     }
 
-    synchronized void tileFinished(RenderResult renderResult) {
-        results.add(renderResult);
+    synchronized void tileFinished(UniqueJobQueue<Tile3DRenderJob> source, RenderResult renderResult) {
+        // A stopped worker may finish after the manager has started a new queue.
+        if (source != jobQueue) return;
+        if (renderResult != null) {
+            Tile tile = renderResult.getTile();
+            if (dimension.getTile(tile.getX(), tile.getY()) == tile) results.add(renderResult);
+        }
+        pendingJobs--;
+        notifyAll();
     }
 
     public void setLayerVisibility(LayerVisibilityMode layerVisibility) {
@@ -104,6 +115,7 @@ public class ThreeDeeRenderManager {
     private HashSet<RenderResult> results = new HashSet<>();
     private Background3DTileRenderer[] renderThreads;
     private UniqueJobQueue<Tile3DRenderJob> jobQueue;
+    private int pendingJobs;
     private LayerVisibilityMode layerVisibility;
     private Set<Layer> hiddenLayers;
 }

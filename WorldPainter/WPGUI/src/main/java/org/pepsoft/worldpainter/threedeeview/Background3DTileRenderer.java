@@ -12,7 +12,6 @@ import org.pepsoft.worldpainter.biomeschemes.CustomBiomeManager;
 import org.pepsoft.worldpainter.layers.Layer;
 import org.pepsoft.worldpainter.threedeeview.Tile3DRenderer.LayerVisibilityMode;
 
-import java.awt.image.BufferedImage;
 import java.util.Set;
 
 /**
@@ -36,10 +35,16 @@ public class Background3DTileRenderer extends Thread {
         }
         try {
             while (running) {
-                synchronized (this) {
-                    Tile3DRenderJob job = jobQueue.takeJob();
+                // Do not hold the worker monitor while blocking on an empty queue.
+                Tile3DRenderJob job = jobQueue.takeJob();
+                synchronized (renderLock) {
                     Tile tile = job.getTile();
-                    renderTile(tile);
+                    RenderResult result = null;
+                    try {
+                        if (running) result = renderTile(tile);
+                    } finally {
+                        threeDeeRenderManager.tileFinished(jobQueue, running ? result : null);
+                    }
                 }
             }
         } catch (InterruptedException e) {
@@ -60,24 +65,29 @@ public class Background3DTileRenderer extends Thread {
     /**
      * Blocks until the thread is idle (not rendering a tile)
      */
-    public synchronized void waitToIdle() {
-        // Do nothing (the synchronized takes care of it)
+    public void waitToIdle() {
+        synchronized (renderLock) {
+            // Acquiring the render lock waits for a current draw, without blocking Thread.join().
+        }
     }
     
-    private void renderTile(Tile tile) {
+    private RenderResult renderTile(Tile tile) {
         if (logger.isTraceEnabled()) {
             logger.trace("Rendering 3D view of tile " + tile);
         }
-        BufferedImage image = renderer.render(tile);
-        if (running) {
-            threeDeeRenderManager.tileFinished(new RenderResult(tile, image));
+        try {
+            return new RenderResult(tile, renderer.render(tile));
+        } catch (RuntimeException e) {
+            logger.error("Could not render 3D tile {},{}", tile.getX(), tile.getY(), e);
+            return new RenderResult(tile, ThreeDeeView.TILE_NOT_RENDERABLE);
         }
     }
     
     private final UniqueJobQueue<Tile3DRenderJob> jobQueue;
     private final ThreeDeeRenderManager threeDeeRenderManager;
     private final Tile3DRenderer renderer;
-    private volatile boolean running = true, rendering;
+    private final Object renderLock = new Object();
+    private volatile boolean running = true;
     
     private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(Background3DTileRenderer.class);
 }

@@ -268,15 +268,15 @@ public class ThreeDeeView extends JComponent implements Dimension.Listener, Tile
     public void tilesRemoved(Dimension dimension, Set<Tile> tiles) {
         for (Tile tile: tiles) {
             tile.removeListener(this);
+            renderedTiles.remove(tile);
+            dirtyTiles.remove(tile);
+            tilesWaitingToBeRendered.removeIf(queued -> queued == tile);
+            if (centreTile == tile) centreTile = null;
             final Rectangle tileBaseBounds = getTileBounds(tile.getX(), tile.getY(), 0, 0, 0);
             if (zSortedTiles.containsKey(tileBaseBounds.y)) {
                 zSortedTiles.get(tileBaseBounds.y).remove(tileBaseBounds.x);
             }
         }
-//        renderedTiles.remove(new Point(tile.getX(), tile.getY()));
-        // TODO: the tile will be re-added if it was on the render queue, but
-        // since this can currently never happen anyway we will deal with that
-        // when it becomes necessary
     }
 
     @Override public void overlayAdded(Dimension dimension, int index, Overlay overlay) {}
@@ -338,9 +338,13 @@ public class ThreeDeeView extends JComponent implements Dimension.Listener, Tile
                 timer = new Timer(250, this);
                 timer.start();
             } else {
-                timer.stop();
+                if (timer != null) timer.stop();
                 timer = null;
                 threeDeeRenderManager.stop();
+                renderedTiles.clear();
+                dirtyTiles.clear();
+                tilesWaitingToBeRendered.clear();
+                centreTile = null;
                 for (Tile tile : dimension.getTiles()) {
                     tile.removeListener(this);
                 }
@@ -364,6 +368,8 @@ public class ThreeDeeView extends JComponent implements Dimension.Listener, Tile
         Rectangle repaintArea = null;
         for (RenderResult renderResult : renderResults) {
             final Tile tile = renderResult.getTile();
+            // A result may have been collected just before this tile was removed or replaced.
+            if (dimension.getTile(tile.getX(), tile.getY()) != tile) continue;
             renderedTiles.put(tile, renderResult.getImage());
             dirtyTiles.remove(tile);
             final Rectangle tileBounds = zoom(getTileBounds(tile));
@@ -497,6 +503,7 @@ public class ThreeDeeView extends JComponent implements Dimension.Listener, Tile
             return;
         }
         doOnEventThread(() -> {
+            if (dimension.getTile(tile.getX(), tile.getY()) != tile) return;
             final Rectangle visibleArea = parent.getViewRect();
             final Rectangle tileBounds = zoom(getTileBounds(tile));
             if (tileBounds.intersects(visibleArea)) {

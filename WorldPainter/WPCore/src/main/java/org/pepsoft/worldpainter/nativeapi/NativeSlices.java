@@ -1910,5 +1910,18 @@ public final class NativeSlices {
     }
     private static native int nativeWidenMaterialIndices(byte[] source, char[] output);
 
+    /** Rasterise a complete isometric tile from compact columns in one borrowed direct frame. */
+    private static volatile boolean isometricSymbolUnavailable;
+    public static boolean isIsometricAvailable() {
+        return !isometricSymbolUnavailable && Native.isRenderEnabled() && NativeLoader.areSlicesAvailable();
+    }
+    public static boolean renderIsometricTile(ByteBuffer buffer) {
+        if (!isIsometricAvailable() || buffer == null || !buffer.isDirect()
+                || buffer.isReadOnly() || buffer.position() != 0 || buffer.limit() < 524352 || buffer.limit() > 33554432) return false;
+        try { return nativeRenderIsometricTile(buffer, buffer.limit()) == 0; }
+        catch (UnsatisfiedLinkError e) { isometricSymbolUnavailable = true; return false; }
+    }
+    private static native int nativeRenderIsometricTile(ByteBuffer buffer, int length);
+
     static native int nativeAbiVersion();
 }

@@ -4,3 +4,5 @@ pub mod shade;
 pub mod viewport;
 
 pub mod heightmap_image;
+
+pub mod isometric;

@@ -99,6 +99,16 @@ public class Tile3DRenderer {
             return TILE_NOT_RENDERABLE;
         }
         final BufferedImage img = GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice().getDefaultConfiguration().createCompatibleImage(imgWidth, imgHeight, Transparency.TRANSLUCENT);
+        if (IsometricRenderAccess.isEnabled()) {
+            if (isometricRenderAccess == null) isometricRenderAccess = new IsometricRenderAccess();
+            try {
+                if (isometricRenderAccess.render(dimension, tile, colourScheme, platform, tileImgBuffer, img, rotation,
+                        hideFrost, hideFluids, minHeight, maxZ, stoneColour, waterColour, lavaColour, iceColour)) return img;
+            } catch (MissingCustomTerrainException | NullPointerException e) {
+                logger.error("Could not render tile {},{} due to {}", tile.getX(), tile.getY(), e.getClass().getSimpleName(), e);
+                return TILE_NOT_RENDERABLE;
+            }
+        }
         final Graphics2D g2 = img.createGraphics();
         try {
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -149,11 +159,14 @@ public class Tile3DRenderer {
                     // First draw the sub surface part of the world in a single solid colour
                     int subsurfaceHeight = Math.max(terrainHeight - minHeight - dimension.getTopLayerDepth(blockX, blockY, terrainHeight), 0);
                     if (coverSteepTerrain) {
-                        subsurfaceHeight = Math.min(subsurfaceHeight,
+                        final int neighbourHeight =
                             Math.min(Math.min(dimension.getIntHeightAt(blockX - 1, blockY, Integer.MAX_VALUE),
                             dimension.getIntHeightAt(blockX + 1, blockY, Integer.MAX_VALUE)),
                             Math.min(dimension.getIntHeightAt(blockX, blockY - 1, Integer.MAX_VALUE),
-                            dimension.getIntHeightAt(blockX, blockY + 1, Integer.MAX_VALUE))) - minHeight);
+                            dimension.getIntHeightAt(blockX, blockY + 1, Integer.MAX_VALUE)));
+                        // A queued tile may have been removed. Subtracting a negative minimum from the missing-height
+                        // sentinel overflows and would make the top-layer loop draw billions of nonexistent blocks.
+                        if (neighbourHeight != Integer.MAX_VALUE) subsurfaceHeight = Math.min(subsurfaceHeight, neighbourHeight - minHeight);
                     }
                     int colour = stoneColour; // TODO use the actual (average? most representative?) colour
                     if (colour != currentColour) {
@@ -268,6 +281,7 @@ public class Tile3DRenderer {
     private final int minHeight, rotation, stoneColour, waterColour, lavaColour, iceColour;
     private final Platform platform;
     private final boolean hideFrost, hideFluids;
+    private IsometricRenderAccess isometricRenderAccess;
 
     private final BufferedImage tileImgBuffer = new BufferedImage(TILE_SIZE, TILE_SIZE, BufferedImage.TYPE_INT_RGB);
 
