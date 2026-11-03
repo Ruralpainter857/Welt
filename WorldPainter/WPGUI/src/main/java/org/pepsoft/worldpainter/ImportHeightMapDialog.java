@@ -181,17 +181,23 @@ public class ImportHeightMapDialog extends WorldPainterDialog implements Documen
         if (importer == null) {
             return null;
         }
-        World2 world = ProgressDialog.executeTask(this, new ProgressTask<World2>() {
-            @Override
-            public String getName() {
-                return "Importing height map";
-            }
+        final World2 world;
+        try {
+            world = ProgressDialog.executeTask(this, new ProgressTask<World2>() {
+                @Override
+                public String getName() {
+                    return "Importing height map";
+                }
 
-            @Override
-            public World2 execute(ProgressReceiver progressReceiver) throws OperationCancelled {
-                return importer.importToNewWorld((checkBoxMasterDimension.isSelected()) ? NORMAL_MASTER : NORMAL_DETAIL, progressReceiver);
-            }
-        }, NOT_CANCELABLE);
+                @Override
+                public World2 execute(ProgressReceiver progressReceiver) throws OperationCancelled {
+                    return importer.importToNewWorld((checkBoxMasterDimension.isSelected()) ? NORMAL_MASTER : NORMAL_DETAIL, progressReceiver);
+                }
+            }, NOT_CANCELABLE);
+        } finally {
+            // The import is the last consumer of the captured image
+            releaseCachedHeightMap();
+        }
         Configuration.getInstance().setHeightMapsDirectory(selectedFile.getParentFile());
         return world;
     }
@@ -232,14 +238,15 @@ public class ImportHeightMapDialog extends WorldPainterDialog implements Documen
                 beepAndShowError(this, "Please select an image file to import.", "No File Selected");
             }
             return null;
-        } else if (image == null) {
+        } else if (! hasImage()) {
             if (interactive) {
                 beepAndShowError(this, "Please select a valid image file to import.", "No Valid Image Selected");
             }
             return null;
         }
         final float scale = (float) spinnerScale.getValue();
-        HeightMap heightMap = BitmapHeightMap.build()
+        // The bounded capture of the image samples identically to a bitmap of it
+        HeightMap heightMap = (cachedHeightMap != null) ? cachedHeightMap : BitmapHeightMap.build()
                 .withName(selectedFile.getName())
                 .withImage(image)
                 .withFile(selectedFile)
@@ -322,8 +329,23 @@ public class ImportHeightMapDialog extends WorldPainterDialog implements Documen
     private void loadImage() {
         try {
             image = null; // Set image to null first to make more memory available for loading the new image
+            releaseCachedHeightMap();
+            if (CachedImageHeightMap.isEnabled()) {
+                try {
+                    cachedHeightMap = CachedImageHeightMap.capture(selectedFile, selectedFile.getName());
+                } catch (IOException | RuntimeException e) {
+                    // The usual load below reports the problem, if it persists
+                    logger.warn("Could not capture image " + selectedFile.getName() + " with bounded memory; loading it completely", e);
+                    cachedHeightMap = null;
+                }
+            }
+            if (cachedHeightMap != null) {
+                imageLoaded(cachedHeightMap.getWidth(), cachedHeightMap.getHeight(), cachedHeightMap.getBitDepth(),
+                        cachedHeightMap.getMinHeight(), cachedHeightMap.getMaxHeight(), cachedHeightMap.getRange(), cachedHeightMap.isFloatingPoint());
+                return;
+            }
             image = ImageIO.read(selectedFile);
-            if (image == null) {
+            if (! hasImage()) {
                 labelImageDimensions.setForeground(Color.RED);
                 labelImageDimensions.setIcon(ICON_WARNING);
                 labelImageDimensions.setText("Not an image file of a supported type, or damaged file!");
@@ -340,20 +362,40 @@ public class ImportHeightMapDialog extends WorldPainterDialog implements Documen
                 selectedFile = null;
             } else {
                 final BitmapHeightMap heightMap = BitmapHeightMap.build().withImage(image).now();
-                final int width = heightMap.getWidth(), height = heightMap.getHeight();
+                imageLoaded(heightMap.getWidth(), heightMap.getHeight(), heightMap.getBitDepth(), heightMap.getMinHeight(),
+                        heightMap.getMaxHeight(), heightMap.getRange(), heightMap.isFloatingPoint());
+            }
+        } catch (IOException e) {
+            logger.error("I/O error loading image " + selectedFile, e);
+            labelImageDimensions.setForeground(Color.RED);
+            labelImageDimensions.setText(String.format("I/O error loading image (message: %s)!", e.getMessage()));
+            selectedFile = null;
+        } catch (IllegalArgumentException e) {
+            logger.error("IllegalArgumentException loading image " + selectedFile, e);
+            labelImageDimensions.setForeground(Color.RED);
+            if (e.getMessage().equals("Invalid scanline stride")) {
+                labelImageDimensions.setText("Image data too large to load; try reducing dimensions or bit depth");
+            } else {
+                labelImageDimensions.setText("Error in image data: " + e.getMessage());
+            }
+            selectedFile = null;
+        }
+    }
+
+    /** Show the properties of a newly loaded image, in memory or captured, and update the levels and preview. */
+    private void imageLoaded(int width, int height, int bitDepth, double minHeight, double maxHeight, double[] range, boolean floatingPoint) {
                 programmaticChange = true;
                 try {
                     labelImageDimensions.setForeground(null);
                     labelImageDimensions.setIcon(null);
-                    bitDepth = heightMap.getBitDepth();
-                    imageMinHeight = heightMap.getMinHeight();
-                    imageMaxHeight = heightMap.getMaxHeight();
+                    this.bitDepth = bitDepth;
+                    imageMinHeight = minHeight;
+                    imageMaxHeight = maxHeight;
                     final boolean invert = checkBoxInvert.isSelected();
-                    final double[] range = heightMap.getRange();
                     imageLowValue = invert ? (imageMaxHeight - range[1]) : range[0];
                     imageHighValue = invert ? (imageMaxHeight - range[0]) : range[1];
                     final double stepSize;
-                    if (heightMap.isFloatingPoint()) {
+                    if (floatingPoint) {
                         final double delta = imageHighValue - imageLowValue;
                         if (delta <= 1.0) {
                             stepSize = 0.001;
@@ -380,7 +422,7 @@ public class ImportHeightMapDialog extends WorldPainterDialog implements Documen
                 } finally {
                     programmaticChange = false;
                 }
-                if (heightMap.isFloatingPoint()) {
+                if (floatingPoint) {
                     labelImageLowestLevel.setText(FLOAT_NUMBER_FORMAT.format(imageLowValue));
                     labelImageHighestLevel.setText(FLOAT_NUMBER_FORMAT.format(imageHighValue));
                 } else {
@@ -391,33 +433,40 @@ public class ImportHeightMapDialog extends WorldPainterDialog implements Documen
                 // Set levels to reasonable defaults
                 selectDefaultVerticalScaling(false);
 
-                if (heightMap.isFloatingPoint()) {
+                if (floatingPoint) {
                     labelImageDimensions.setText(String.format("Image size: %,d x %,d, %d bits, lowest value: %,f, highest value: %,f", width, height, bitDepth, imageLowValue, imageHighValue));
                 } else {
                     labelImageDimensions.setText(String.format("Image size: %,d x %,d, %d bits, lowest value: %,d, highest value: %,d", width, height, bitDepth, Math.round(imageLowValue), Math.round(imageHighValue)));
                 }
                 updateWorldDimensions();
                 updatePreview(true);
-            }
-        } catch (IOException e) {
-            logger.error("I/O error loading image " + selectedFile, e);
-            labelImageDimensions.setForeground(Color.RED);
-            labelImageDimensions.setText(String.format("I/O error loading image (message: %s)!", e.getMessage()));
-            selectedFile = null;
-        } catch (IllegalArgumentException e) {
-            logger.error("IllegalArgumentException loading image " + selectedFile, e);
-            labelImageDimensions.setForeground(Color.RED);
-            if (e.getMessage().equals("Invalid scanline stride")) {
-                labelImageDimensions.setText("Image data too large to load; try reducing dimensions or bit depth");
-            } else {
-                labelImageDimensions.setText("Error in image data: " + e.getMessage());
-            }
-            selectedFile = null;
+    }
+
+    private boolean hasImage() {
+        return (image != null) || (cachedHeightMap != null);
+    }
+
+    private int imageWidth() {
+        final CachedImageHeightMap cached = cachedHeightMap;
+        return (cached != null) ? cached.getWidth() : image.getWidth();
+    }
+
+    private int imageHeight() {
+        final CachedImageHeightMap cached = cachedHeightMap;
+        return (cached != null) ? cached.getHeight() : image.getHeight();
+    }
+
+    /** Close the captured image, deleting its cache file; previews still drawing from it see the lowest value. */
+    private void releaseCachedHeightMap() {
+        final CachedImageHeightMap cached = cachedHeightMap;
+        cachedHeightMap = null;
+        if (cached != null) {
+            cached.close();
         }
     }
 
     private void selectDefaultVerticalScaling(boolean preserveCurrent) {
-        if (image == null) {
+        if (! hasImage()) {
             return;
         }
         final ImportPreset currentPreset = preserveCurrent ? (ImportPreset) comboBoxPreset.getSelectedItem() : null;
@@ -442,12 +491,12 @@ public class ImportHeightMapDialog extends WorldPainterDialog implements Documen
     private void updateWorldDimensions() {
         final float dimensionScale = checkBoxMasterDimension.isSelected() ? 16.0f : 1.0f;
         labelExportedOffset.setText(INT_NUMBER_FORMAT.format(Math.round((int) spinnerOffsetX.getValue() * dimensionScale)) + ", " + INT_NUMBER_FORMAT.format(Math.round((int) spinnerOffsetY.getValue() * dimensionScale)));
-        if (image == null) {
+        if (! hasImage()) {
             return;
         }
         final float importScale = (float) spinnerScale.getValue();
-        final int scaledWidth = Math.round(image.getWidth() * (importScale / 100));
-        final int scaledHeight = Math.round(image.getHeight() * (importScale / 100));
+        final int scaledWidth = Math.round(imageWidth() * (importScale / 100));
+        final int scaledHeight = Math.round(imageHeight() * (importScale / 100));
         labelWorldDimensions.setText("Scaled size: " + INT_NUMBER_FORMAT.format(scaledWidth) + " x " + INT_NUMBER_FORMAT.format(scaledHeight) + " blocks");
         final int exportedWidth = Math.round(scaledWidth * dimensionScale);
         final int exportedHeight = Math.round(scaledHeight * dimensionScale);
@@ -567,21 +616,35 @@ public class ImportHeightMapDialog extends WorldPainterDialog implements Documen
             return;
         }
         importer.setOnlyRaise(checkBoxOnlyRaise.isSelected());
-        ProgressDialog.executeTask(this, new ProgressTask<Void>() {
-            @Override
-            public String getName() {
-                return "Importing height map";
-            }
+        try {
+            ProgressDialog.executeTask(this, new ProgressTask<Void>() {
+                @Override
+                public String getName() {
+                    return "Importing height map";
+                }
 
-            @Override
-            public Void execute(ProgressReceiver progressReceiver) throws OperationCancelled {
-                importer.importToDimension(currentDimension, checkBoxCreateTiles.isSelected(), progressReceiver);
-                return null;
-            }
-        }, NOT_CANCELABLE);
+                @Override
+                public Void execute(ProgressReceiver progressReceiver) throws OperationCancelled {
+                    importer.importToDimension(currentDimension, checkBoxCreateTiles.isSelected(), progressReceiver);
+                    return null;
+                }
+            }, NOT_CANCELABLE);
+        } finally {
+            releaseCachedHeightMap();
+        }
         Configuration.getInstance().setHeightMapsDirectory(selectedFile.getParentFile());
         currentDimension.clearUndo();
         currentDimension.armSavePoint();
+    }
+
+    @Override
+    public void dispose() {
+        super.dispose();
+        // Cancelled in any way, including closing the window: nothing will import the captured image. After ok() the
+        // import releases it
+        if (isCancelled()) {
+            releaseCachedHeightMap();
+        }
     }
 
     @Override
@@ -693,7 +756,7 @@ public class ImportHeightMapDialog extends WorldPainterDialog implements Documen
 
     private void updatePreview(boolean recentre) {
         doLaterOnEventThread(UPDATE_HEIGHT_MAP_PREVIEW, 250, () -> {
-            if (image != null) {
+            if (hasImage()) {
                 final HeightMapImporter importer = createImporter(false);
                 // No idea how this could ever be null, but it has been observed in the wild:
                 if (importer != null) {
@@ -701,7 +764,7 @@ public class ImportHeightMapDialog extends WorldPainterDialog implements Documen
                     if (previewProvider != null) {
                         tiledImageViewer2.setTileProvider(LAYER_HEIGHT_MAP, previewProvider);
                         if (recentre) {
-                            tiledImageViewer2.moveTo(image.getWidth() / 2, image.getHeight() / 2);
+                            tiledImageViewer2.moveTo(imageWidth() / 2, imageHeight() / 2);
                         }
                     }
                 }
@@ -1591,7 +1654,7 @@ public class ImportHeightMapDialog extends WorldPainterDialog implements Documen
     }//GEN-LAST:event_buttonSelectFileActionPerformed
 
     private void spinnerScaleStateChanged(javax.swing.event.ChangeEvent evt) {//GEN-FIRST:event_spinnerScaleStateChanged
-        if (image != null) {
+        if (hasImage()) {
             updateWorldDimensions();
             updatePreview(false);
         }
@@ -1636,14 +1699,14 @@ public class ImportHeightMapDialog extends WorldPainterDialog implements Documen
 
     private void spinnerOffsetXStateChanged(javax.swing.event.ChangeEvent evt) {//GEN-FIRST:event_spinnerOffsetXStateChanged
         updateWorldDimensions();
-        if (image != null) {
+        if (hasImage()) {
             updatePreview(false);
         }
     }//GEN-LAST:event_spinnerOffsetXStateChanged
 
     private void spinnerOffsetYStateChanged(javax.swing.event.ChangeEvent evt) {//GEN-FIRST:event_spinnerOffsetYStateChanged
         updateWorldDimensions();
-        if (image != null) {
+        if (hasImage()) {
             updatePreview(false);
         }
     }//GEN-LAST:event_spinnerOffsetYStateChanged
@@ -1811,6 +1874,8 @@ public class ImportHeightMapDialog extends WorldPainterDialog implements Documen
     private final CustomBiomeManager customBiomeManager;
     private File selectedFile, heightMapDir;
     private volatile BufferedImage image;
+    /** The bounded capture of the image instead of {@link #image}, when enabled and supported. Owned by this dialog. */
+    private volatile CachedImageHeightMap cachedHeightMap;
     private int bitDepth = 8;
     private double imageLowValue, imageHighValue = 255.0, imageMinHeight, imageMaxHeight = 255.0;
     private boolean programmaticChange = true;

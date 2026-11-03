@@ -15,6 +15,7 @@ import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.*;
 import org.pepsoft.worldpainter.heightMaps.BicubicHeightMap;
 import org.pepsoft.worldpainter.heightMaps.BitmapHeightMap;
+import org.pepsoft.worldpainter.heightMaps.CachedImageHeightMap;
 import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
 import org.pepsoft.worldpainter.history.HistoryEntry;
 import org.pepsoft.worldpainter.layers.Void;
@@ -191,13 +192,8 @@ public class HeightMapImporter {
                 final int xOffset = tileX << TILE_SIZE_BITS;
                 final int yOffset = tileY << TILE_SIZE_BITS;
                 final boolean imageLevelsAvailable = (bitmapSampler != null)
-                        && (bitmapSampler.repeat
-                        ? bitmapSampler.bitmap.fillRepeatedSamples(
-                                xOffset - bitmapSampler.offsetX, yOffset - bitmapSampler.offsetY,
-                                TILE_SIZE, TILE_SIZE, tileImageLevels, bitmapRowSamples)
-                        : bitmapSampler.bitmap.fillSamples(
-                                xOffset - bitmapSampler.offsetX, yOffset - bitmapSampler.offsetY,
-                                TILE_SIZE, TILE_SIZE, tileImageLevels, bitmapRowSamples));
+                        && bitmapSampler.fillSamples(xOffset - bitmapSampler.offsetX, yOffset - bitmapSampler.offsetY,
+                                TILE_SIZE, TILE_SIZE, tileImageLevels, bitmapRowSamples);
                 final boolean tileFullyCovered = (xOffset >= x1)
                         && (xOffset + TILE_SIZE - 1 <= x2)
                         && (yOffset >= y1)
@@ -462,11 +458,12 @@ public class HeightMapImporter {
         // If the height map is a bitmap height map, or a transforming height map with a scale of 100% and based on a
         // bitmap height map, then it is definitely unscaled, meaning we can apply a delta to the bitmap values to make
         // each block height 1/8 higher, in order to make smooth snow work less surprisingly
-        mayBeScaled = ! ((heightMap instanceof BitmapHeightMap)
+        mayBeScaled = ! ((heightMap instanceof BitmapHeightMap) || (heightMap instanceof CachedImageHeightMap)
                 || ((heightMap instanceof TransformingHeightMap)
                     && (((TransformingHeightMap) heightMap).getScaleX() == 1.0f)
                     && (((TransformingHeightMap) heightMap).getScaleY() == 1.0f)
-                    && (((TransformingHeightMap) heightMap).getBaseHeightMap() instanceof BitmapHeightMap)));
+                    && ((((TransformingHeightMap) heightMap).getBaseHeightMap() instanceof BitmapHeightMap)
+                        || (((TransformingHeightMap) heightMap).getBaseHeightMap() instanceof CachedImageHeightMap))));
         oneOnOne = (worldLowLevel == imageLowLevel) && (worldHighLevel == imageHighLevel);
         highRes = (imageHighLevel >= maxHeight) && (worldHighLevel < maxHeight);
         levelScale = (worldHighLevel - worldLowLevel) / (imageHighLevel - imageLowLevel);
@@ -482,13 +479,13 @@ public class HeightMapImporter {
 
     /** Returns a raster source for image maps whose integer sampling is a pure bitmap lookup. */
     private static BitmapSampler getBitmapSampler(HeightMap heightMap) {
-        if (heightMap.getClass() == BitmapHeightMap.class) {
-            return new BitmapSampler((BitmapHeightMap) heightMap, 0, 0, false);
+        if (isBitmap(heightMap)) {
+            return new BitmapSampler(heightMap, 0, 0, false);
         }
         if (heightMap.getClass() == BicubicHeightMap.class) {
             final BicubicHeightMap bicubic = (BicubicHeightMap) heightMap;
-            if (bicubic.getHeightMap(0).getClass() == BitmapHeightMap.class) {
-                return new BitmapSampler((BitmapHeightMap) bicubic.getHeightMap(0),
+            if (isBitmap(bicubic.getHeightMap(0))) {
+                return new BitmapSampler(bicubic.getHeightMap(0),
                         0, 0, bicubic.isRepeat());
             }
             return null;
@@ -500,14 +497,14 @@ public class HeightMapImporter {
                 return null;
             }
             final HeightMap base = transforming.getBaseHeightMap();
-            if (base.getClass() == BitmapHeightMap.class) {
-                return new BitmapSampler((BitmapHeightMap) base,
+            if (isBitmap(base)) {
+                return new BitmapSampler(base,
                         transforming.getOffsetX(), transforming.getOffsetY(), false);
             }
             if (base.getClass() == BicubicHeightMap.class) {
                 final BicubicHeightMap bicubic = (BicubicHeightMap) base;
-                if (bicubic.getHeightMap(0).getClass() == BitmapHeightMap.class) {
-                    return new BitmapSampler((BitmapHeightMap) bicubic.getHeightMap(0),
+                if (isBitmap(bicubic.getHeightMap(0))) {
+                    return new BitmapSampler(bicubic.getHeightMap(0),
                             transforming.getOffsetX(), transforming.getOffsetY(), bicubic.isRepeat());
                 }
             }
@@ -515,15 +512,40 @@ public class HeightMapImporter {
         return null;
     }
 
+    /** A bitmap in memory, or the bounded cache of one, which sample identically. */
+    private static boolean isBitmap(HeightMap heightMap) {
+        return (heightMap.getClass() == BitmapHeightMap.class) || (heightMap.getClass() == CachedImageHeightMap.class);
+    }
+
     private static final class BitmapSampler {
-        private BitmapSampler(BitmapHeightMap bitmap, int offsetX, int offsetY, boolean repeat) {
+        private BitmapSampler(HeightMap bitmap, int offsetX, int offsetY, boolean repeat) {
             this.bitmap = bitmap;
             this.offsetX = offsetX;
             this.offsetY = offsetY;
             this.repeat = repeat;
         }
 
-        private final BitmapHeightMap bitmap;
+        /** Fill {@code heights} with the heights {@code getHeight()} would return, not the raw raster samples. */
+        boolean fillSamples(int x, int y, int width, int height, double[] heights, double[] rowSamples) {
+            if (bitmap instanceof CachedImageHeightMap cached) {
+                return repeat ? cached.fillRepeatedHeights(x, y, width, height, heights, rowSamples)
+                        : cached.fillHeights(x, y, width, height, heights, rowSamples);
+            }
+            final BitmapHeightMap image = (BitmapHeightMap) bitmap;
+            final boolean filled = repeat ? image.fillRepeatedSamples(x, y, width, height, heights, rowSamples)
+                    : image.fillSamples(x, y, width, height, heights, rowSamples);
+            if (filled && (! image.isFloatingPoint()) && (! image.isSigned()) && (image.getBitDepth() == 32)) {
+                // The raw samples of unsigned 32 bit images are signed; getHeight() returns them unsigned
+                for (int i = 0; i < heights.length; i++) {
+                    if (heights[i] < 0) {
+                        heights[i] += 4294967296.0;
+                    }
+                }
+            }
+            return filled;
+        }
+
+        private final HeightMap bitmap;
         private final int offsetX, offsetY;
         private final boolean repeat;
     }

@@ -54,9 +54,10 @@ public final class HeightMapImportAccess {
         h.putInt(0,0x4d494857).putInt(4,1).putInt(8,size).putInt(12,n)
                 .putInt(16,importer.getMinHeight()).putInt(20,importer.getMaxHeight());
         HeightMap map = importer.getHeightMap();
-        boolean unscaled = map instanceof BitmapHeightMap || map instanceof TransformingHeightMap
+        boolean unscaled = map instanceof BitmapHeightMap || map instanceof CachedImageHeightMap || map instanceof TransformingHeightMap
                 && ((TransformingHeightMap)map).getScaleX()==1f && ((TransformingHeightMap)map).getScaleY()==1f
-                && ((TransformingHeightMap)map).getBaseHeightMap() instanceof BitmapHeightMap;
+                && (((TransformingHeightMap)map).getBaseHeightMap() instanceof BitmapHeightMap
+                    || ((TransformingHeightMap)map).getBaseHeightMap() instanceof CachedImageHeightMap);
         int flags = (importer.isOnlyRaise()?2:0) | (importer.isVoidBelow()?4:0)
                 | (importer.getImageHighLevel()>=importer.getMaxHeight() && importer.getWorldHighLevel()<importer.getMaxHeight()?8:0)
                 | (importer.getWorldLowLevel()==importer.getImageLowLevel() && importer.getWorldHighLevel()==importer.getImageHighLevel()?16:0)
@@ -100,7 +101,7 @@ public final class HeightMapImportAccess {
 
     private static boolean pure(HeightMap map) {
         Class<?> type=map.getClass();
-        if(type==BitmapHeightMap.class || type==ConstantHeightMap.class || type==NoiseHeightMap.class
+        if(type==BitmapHeightMap.class || type==CachedImageHeightMap.class || type==ConstantHeightMap.class || type==NoiseHeightMap.class
                 || type==MandelbrotHeightMap.class || type==NinePatchHeightMap.class) return true;
         if(type==BicubicHeightMap.class) return pure(((BicubicHeightMap)map).getHeightMap(0));
         if(type==TransformingHeightMap.class) return pure(((TransformingHeightMap)map).getBaseHeightMap());

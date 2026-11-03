@@ -415,6 +415,15 @@ public class HeightMapTileFactory extends AbstractTileFactory {
                                 TILE_SIZE, TILE_SIZE, output, buffers.bitmapRowSamples)
                         : bitmapHeightMap.fillSamples(worldTileX, worldTileY,
                                 TILE_SIZE, TILE_SIZE, output, buffers.bitmapRowSamples);
+                if (filled && (! bitmapHeightMap.isFloatingPoint()) && (! bitmapHeightMap.isSigned())
+                        && (bitmapHeightMap.getBitDepth() == 32)) {
+                    // The raw samples of unsigned 32 bit images are signed; getHeight() returns them unsigned
+                    for (int i = 0; i < output.length; i++) {
+                        if (output[i] < 0) {
+                            output[i] += 4294967296.0;
+                        }
+                    }
+                }
                 if (filled) {
                     nativeHeights = output;
                     completeHeightMapValuesAvailable = true;

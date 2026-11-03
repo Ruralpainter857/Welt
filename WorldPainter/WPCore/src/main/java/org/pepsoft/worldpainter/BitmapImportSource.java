@@ -4,20 +4,30 @@ import java.awt.image.DataBuffer;
 import java.nio.ByteBuffer;
 import org.pepsoft.worldpainter.heightMaps.BitmapHeightMap;
 import org.pepsoft.worldpainter.heightMaps.BicubicHeightMap;
+import org.pepsoft.worldpainter.heightMaps.CachedImageHeightMap;
 import org.pepsoft.worldpainter.heightMaps.TransformingHeightMap;
 
-/** Bounded raster windows for sampling inside the existing import JNI transaction. */
+/**
+ * Bounded raster windows for sampling inside the existing import JNI transaction, from a bitmap in memory or from the
+ * bounded cache of a captured image ({@link CachedImageHeightMap}), which hold identical samples.
+ */
 final class BitmapImportSource {
     private static final int MAX_CELLS = 262144;
     private static final ThreadLocal<double[]> SAMPLES = new ThreadLocal<>();
     private final BitmapHeightMap bitmap;
+    private final CachedImageHeightMap cached;
+    private final int imageWidth, imageHeight;
+    private final double imageMinHeight;
     private final boolean integer, cubic, repeat;
     private final int offsetX, offsetY;
     private final double factorX, factorY, translateX, translateY, crossX, crossY;
 
-    private BitmapImportSource(BitmapHeightMap bitmap, boolean integer, boolean cubic, boolean repeat,
+    private BitmapImportSource(BitmapHeightMap bitmap, CachedImageHeightMap cached, boolean integer, boolean cubic, boolean repeat,
                                int offsetX, int offsetY, float scaleX, float scaleY, float rotation) {
-        this.bitmap = bitmap; this.integer = integer; this.cubic = cubic; this.repeat = repeat;
+        this.bitmap = bitmap; this.cached = cached; this.integer = integer; this.cubic = cubic; this.repeat = repeat;
+        imageWidth = (bitmap != null) ? bitmap.getWidth() : cached.getWidth();
+        imageHeight = (bitmap != null) ? bitmap.getHeight() : cached.getHeight();
+        imageMinHeight = (bitmap != null) ? bitmap.getMinHeight() : cached.getMinHeight();
         this.offsetX = offsetX; this.offsetY = offsetY;
         // AffineTransform receives the result of the original float division.
         java.awt.geom.AffineTransform transform = new java.awt.geom.AffineTransform();
@@ -44,6 +54,13 @@ final class BitmapImportSource {
             java.awt.Rectangle extent = b.getExtent();
             if (extent != null && map.getClass() == BitmapHeightMap.class
                     && (extent.width != ((BitmapHeightMap) map).getWidth() || extent.height != ((BitmapHeightMap) map).getHeight())) return null;
+            if (extent != null && map.getClass() == CachedImageHeightMap.class
+                    && (extent.width != ((CachedImageHeightMap) map).getWidth() || extent.height != ((CachedImageHeightMap) map).getHeight())) return null;
+        }
+        if (map.getClass() == CachedImageHeightMap.class) {
+            CachedImageHeightMap image = (CachedImageHeightMap) map;
+            if (image.isClosed() || image.getWidth() > 4194304 || image.getHeight() > 4194304) return null;
+            return new BitmapImportSource(null, image, sx == 1 && sy == 1 && rotation == 0, cubic, repeat, ox, oy, sx, sy, rotation);
         }
         if (map.getClass() != BitmapHeightMap.class) return null;
         BitmapHeightMap bitmap = (BitmapHeightMap) map;
@@ -52,7 +69,7 @@ final class BitmapImportSource {
         if (!raster.getClass().getName().startsWith("sun.awt.image.")
                 || !raster.getSampleModel().getClass().getName().startsWith("java.awt.image.")
                 || bitmap.getWidth() > 4194304 || bitmap.getHeight() > 4194304) return null;
-        return new BitmapImportSource(bitmap, sx == 1 && sy == 1 && rotation == 0, cubic, repeat || bitmap.isRepeat(), ox, oy, sx, sy, rotation);
+        return new BitmapImportSource(bitmap, null, sx == 1 && sy == 1 && rotation == 0, cubic, repeat || bitmap.isRepeat(), ox, oy, sx, sy, rotation);
     }
 
     record Window(int x, int y, int width, int height) {
@@ -63,8 +80,8 @@ final class BitmapImportSource {
         int[] xb = bounds(x, y, true), yb = bounds(x, y, false);
         if (xb == null || yb == null) return null;
         if (!repeat) {
-            xb[0] = clamp(xb[0], bitmap.getWidth()); xb[1] = clamp(xb[1], bitmap.getWidth());
-            yb[0] = clamp(yb[0], bitmap.getHeight()); yb[1] = clamp(yb[1], bitmap.getHeight());
+            xb[0] = clamp(xb[0], imageWidth); xb[1] = clamp(xb[1], imageWidth);
+            yb[0] = clamp(yb[0], imageHeight); yb[1] = clamp(yb[1], imageHeight);
         }
         int width = xb[1] - xb[0] + 1, height = yb[1] - yb[0] + 1;
         if (width <= 0 || height <= 0 || (long) width * height > MAX_CELLS) return null;
@@ -106,6 +123,36 @@ final class BitmapImportSource {
         int area = w.width * w.height;
         double[] samples = SAMPLES.get();
         if (samples == null || samples.length < area) { samples = new double[area]; SAMPLES.set(samples); }
+        if (cached != null) writeCachedSamples(samples, w);
+        else writeBitmapSamples(samples, w);
+        for (int i = 0; i < 112; i += 8) d.putLong(base + i, 0);
+        d.putInt(base, 0x4d534257).putInt(base + 4, 1).putInt(base + 8, w.bytes())
+                .putInt(base + 12, (integer ? 1 : 0) | (cubic ? 2 : 0) | (repeat ? 4 : 0))
+                .putInt(base + 16, w.x).putInt(base + 20, w.y).putInt(base + 24, w.width).putInt(base + 28, w.height)
+                .putInt(base + 32, imageWidth).putInt(base + 36, imageHeight)
+                .putInt(base + 40, offsetX).putInt(base + 44, offsetY).putDouble(base + 48, factorX).putDouble(base + 56, factorY)
+                .putDouble(base + 64, translateX).putDouble(base + 72, translateY).putDouble(base + 80, imageMinHeight).putDouble(base + 88, crossX).putDouble(base + 96, crossY);
+        d.position(base + 112); d.slice().order(d.order()).asDoubleBuffer().put(samples, 0, area); d.position(0);
+    }
+
+    /** The samples of a window from the captured image, already exact (unsigned 32 bit values included). */
+    private void writeCachedSamples(double[] samples, Window w) {
+        if (!repeat) cached.readRegion(w.x, w.y, w.width, w.height, samples, 0, w.width);
+        else {
+            for (int row = 0; row < w.height; row++) {
+                int sy = Math.floorMod(w.y + row, imageHeight), column = 0;
+                while (column < w.width) {
+                    int sx = Math.floorMod(w.x + column, imageWidth);
+                    int count = Math.min(w.width - column, imageWidth - sx);
+                    cached.readRegion(sx, sy, count, 1, samples, row * w.width + column, count);
+                    column += count;
+                }
+            }
+        }
+    }
+
+    private void writeBitmapSamples(double[] samples, Window w) {
+        int area = w.width * w.height;
         var raster = bitmap.getImage().getRaster();
         if (!repeat) raster.getSamples(w.x, w.y, w.width, w.height, bitmap.getChannel(), samples);
         else {
@@ -124,14 +171,6 @@ final class BitmapImportSource {
         }
         if (raster.getTransferType() == DataBuffer.TYPE_INT && !bitmap.isSigned())
             for (int i = 0; i < area; i++) if (samples[i] < 0) samples[i] += 4294967296.0;
-        for (int i = 0; i < 112; i += 8) d.putLong(base + i, 0);
-        d.putInt(base, 0x4d534257).putInt(base + 4, 1).putInt(base + 8, w.bytes())
-                .putInt(base + 12, (integer ? 1 : 0) | (cubic ? 2 : 0) | (repeat ? 4 : 0))
-                .putInt(base + 16, w.x).putInt(base + 20, w.y).putInt(base + 24, w.width).putInt(base + 28, w.height)
-                .putInt(base + 32, bitmap.getWidth()).putInt(base + 36, bitmap.getHeight())
-                .putInt(base + 40, offsetX).putInt(base + 44, offsetY).putDouble(base + 48, factorX).putDouble(base + 56, factorY)
-                .putDouble(base + 64, translateX).putDouble(base + 72, translateY).putDouble(base + 80, bitmap.getMinHeight()).putDouble(base + 88, crossX).putDouble(base + 96, crossY);
-        d.position(base + 112); d.slice().order(d.order()).asDoubleBuffer().put(samples, 0, area); d.position(0);
     }
     private static final ThreadLocal<double[]> ROW = new ThreadLocal<>();
 }
