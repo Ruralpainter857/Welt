@@ -5,9 +5,8 @@ import org.pepsoft.worldpainter.nativeapi.NativeSlices;
 import static org.pepsoft.worldpainter.Constants.*;
 
 /**
- * Lissage sans thème ni filtre dépendant des mutations, avec un instantané de la bordure de cinq cellules.
- * Le demandeur sérialise les éditions de la dimension. Un appel JNI traite toute la zone ; les écritures
- * groupées par tuile respectent l'annulation. L'entrée reste intacte pendant tous les calculs de voisinage.
+ * Unthemed smoothing over an immutable snapshot with a five-cell border. The caller serialises edits.
+ * One JNI call handles the complete footprint; grouped tile updates retain undo and notifications.
  */
 public final class SmoothHeightAccess {
     // Activation explicite tant que les mesures de bout en bout ne montrent pas un gain reproductible.
@@ -15,16 +14,22 @@ public final class SmoothHeightAccess {
     public static boolean isEnabled() { return Boolean.parseBoolean(System.getProperty(ENABLE_KEY, "false")); }
     private SmoothHeightAccess() { }
     private static final ThreadLocal<Scratch> BUFFER = new ThreadLocal<>();
+    private static final java.util.concurrent.atomic.AtomicLong COMPLETED = new java.util.concurrent.atomic.AtomicLong();
+    public static long completedCalls() { return COMPLETED.get(); }
 
     public static boolean tryApply(Dimension dimension, int ox, int oy, int width, int height, float[] strengths) {
-        if (width <= 0 || height <= 0 || width > 246 || height > 246 || strengths.length != width * height
+        final boolean large = width > 246 || height > 246;
+        final int maximumSide = large && Boolean.getBoolean("welt.native.largeHeightBrush") ? 1014 : 246;
+        if (width <= 0 || height <= 0 || width > maximumSide || height > maximumSide || strengths.length != width * height
+                || (long) ox - 5 < Integer.MIN_VALUE || (long) oy - 5 < Integer.MIN_VALUE
+                || (long) ox + width + 4 > Integer.MAX_VALUE || (long) oy + height + 4 > Integer.MAX_VALUE
                 || !TileRegionAccess.canBatch(dimension, ox - 5, oy - 5, width + 10, height + 10)) return false;
         int iw = width + 10, ih = height + 10, area = width * height;
         int forces = 48 + iw * ih * 4, output = forces + area * 4, mask = output + area * 4, length = mask + area;
         Scratch scratch = BUFFER.get();
         if (scratch == null || scratch.buffer.capacity() < length) { scratch = new Scratch(length); BUFFER.set(scratch); }
         ByteBuffer buffer = scratch.buffer; buffer.clear().limit(length);
-        buffer.putInt(0, 0x4d534c57).putInt(4, 1).putInt(8, iw).putInt(12, ih).putInt(16, dimension.getMinHeight())
+        buffer.putInt(0, 0x4d534c57).putInt(4, large ? 2 : 1).putInt(8, iw).putInt(12, ih).putInt(16, dimension.getMinHeight())
                 .putInt(20, 48).putInt(24, forces).putInt(28, output).putInt(32, mask).putInt(36, 0).putInt(40, 0).putInt(44, 0);
         scratch.input.clear().limit(iw * ih);
         for (int x = 0; x < iw;) {
@@ -39,7 +44,10 @@ public final class SmoothHeightAccess {
             x += rw;
         }
         scratch.forces.clear().position(forces / 4).limit(forces / 4 + area); scratch.forces.put(strengths);
-        if (!NativeSlices.smoothCompactRegion(buffer)) smoothJava(buffer, width, height, ih, forces, output, mask);
+        if (!NativeSlices.smoothCompactRegion(buffer)) {
+            if (large) return false;
+            smoothJava(buffer, width, height, ih, forces, output, mask);
+        } else COMPLETED.incrementAndGet();
         for (int x = 0; x < width;) {
             int wx = ox + x, lx = wx & TILE_SIZE_MASK, rw = Math.min(width - x, TILE_SIZE - lx);
             for (int y = 0; y < height;) {

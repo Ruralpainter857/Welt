@@ -6,6 +6,8 @@
 package org.pepsoft.worldpainter.operations;
 
 import org.pepsoft.worldpainter.Dimension;
+import org.pepsoft.worldpainter.brushes.BitmapBrush;
+import org.pepsoft.worldpainter.brushes.SymmetricBrush;
 import org.pepsoft.worldpainter.TerrainHeightAccess;
 import org.pepsoft.worldpainter.SmoothHeightAccess;
 import org.pepsoft.worldpainter.HeightBrushAccess;
@@ -61,10 +63,15 @@ public class Smooth extends AbstractBrushOperation {
         long inputSideLong = diameterLong + 10L;
         long inputAreaLong = inputSideLong * inputSideLong;
         long outputAreaLong = diameterLong * diameterLong;
-        if (radius < 0 || inputSideLong > 256L
-                || inputAreaLong > MAX_NATIVE_CELLS || outputAreaLong > MAX_NATIVE_CELLS) {
+        final boolean large = inputSideLong > 256L;
+        final int maximumSide = getFilter() == null && Boolean.getBoolean("welt.native.largeHeightBrush") ? 1024 : 256;
+        if (radius < 0 || inputSideLong > maximumSide
+                || inputAreaLong > (large ? 1024 * 1024 : MAX_NATIVE_CELLS)
+                || outputAreaLong > (large ? 1024 * 1024 : MAX_NATIVE_CELLS)) {
             return false;
         }
+        // Unknown callbacks must observe Java's original interleaving with height and theme mutations.
+        if (large && !(getBrush() instanceof SymmetricBrush) && getBrush().getClass() != BitmapBrush.class) return false;
         int diameter = (int) diameterLong;
         int inputSide = (int) inputSideLong;
         int inputArea = (int) inputAreaLong;
@@ -89,8 +96,9 @@ public class Smooth extends AbstractBrushOperation {
         if (applyTheme && HeightBrushAccess.tryApplyThemed(dimension, centreX - radius, centreY - radius,
                 diameter, diameter, nativeStrengths, HeightBrushAccess.SMOOTH, 0,
                 dimension.getMinHeight(), dimension.getMaxHeight() - 1)) return true;
-        if (!applyTheme && SmoothHeightAccess.isEnabled() && SmoothHeightAccess.tryApply(dimension, centreX - radius, centreY - radius,
+        if (!applyTheme && (large || SmoothHeightAccess.isEnabled()) && SmoothHeightAccess.tryApply(dimension, centreX - radius, centreY - radius,
                 diameter, diameter, nativeStrengths)) return true;
+        if (large) return false;
         ensureNativeBuffers(inputSide, inputArea, outputArea);
         TerrainHeightAccess.copy(dimension, centreX - radius - 5, centreY - radius - 5, inputSide, inputSide, nativeHeights);
         if (!NativeSlices.smoothHeightRegion(inputSide, inputSide, nativeHeights,

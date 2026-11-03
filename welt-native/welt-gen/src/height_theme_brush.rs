@@ -67,6 +67,7 @@ pub struct BrushScratch {
     theme: Theme,
     tiles: Vec<TileWork>,
     input: Vec<f32>,
+    smooth_columns: welt_core::smooth_height::SmoothColumns,
     mountain: Option<PerlinNoise>,
     mountain_x: Vec<PerlinAxis2D>,
     mountain_y: Vec<PerlinAxis2D>,
@@ -77,9 +78,10 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     if d.len() < 128
         || d.len() > MAX_BYTES
         || word(d, 0) != 0x42544857
-        || !matches!(word(d, 4), 1..=7)
+        || !matches!(word(d, 4), 1..=8)
         || word(d, 4) < 7 && d.len() > 4 * 1024 * 1024
         || word(d, 4) == 7 && (word(d, 28) > 4 || d[88..128].iter().any(|&v| v != 0))
+        || word(d, 4) == 8 && (word(d, 28) != 5 || d[96..128].iter().any(|&v| v != 0))
         || word(d, 8) as usize != d.len()
         || word(d, 4) < 5
             && d[if word(d, 4) >= 3 && word(d, 28) == 5 {
@@ -93,7 +95,8 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
         return Err(bad);
     }
     let filtered = word(d, 4) == 5;
-    let large = word(d, 4) == 7;
+    let large = word(d, 4) >= 7;
+    let maximum_smooth_side = if word(d, 4) == 8 { 1014 } else { 246 };
     let header = if filtered { 256 } else { 128 };
     if d.len() < header {
         return Err(bad);
@@ -117,10 +120,11 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     let beach = word(d, 76) as i32;
     let cell_ordered = word(d, 4) >= 4;
     let smooth = word(d, 4) >= 3 && mode == 5;
+    let wide_smooth = word(d, 4) == 8;
     let mountain = word(d, 4) == 6;
     let factor = f32::from_bits(word(d, 88));
     let scale = f32::from_bits(word(d, 92));
-    let halo_count = if smooth && w <= 246 && h <= 246 {
+    let halo_count = if smooth && w <= maximum_smooth_side && h <= maximum_smooth_side {
         10 * (w + h + 10)
     } else {
         0
@@ -154,8 +158,8 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
         || forces + w * h * 4 + halo_count * 4 > d.len()
         || smooth
             && (mode != 5
-                || w > 246
-                || h > 246
+                || w > maximum_smooth_side
+                || h > maximum_smooth_side
                 || i64::from(ox) - 5 < i64::from(i32::MIN)
                 || i64::from(oy) - 5 < i64::from(i32::MIN)
                 || i64::from(ox) + w as i64 + 4 > i64::from(i32::MAX)
@@ -339,7 +343,14 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
         );
     }
     // Height decisions use exactly the scalar float expression before quantization.
+    if wide_smooth {
+        s.smooth_columns.reset(w, h);
+    }
     for x in 0..w {
+        if wide_smooth {
+            s.smooth_columns
+                .prepare_column(x, |sx, sy| s.input[sx * (h + 10) + sy]);
+        }
         for y in 0..h {
             let wx = ox + x as i32;
             let wy = oy + y as i32;
@@ -362,6 +373,7 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
             let target = match mode {
                 0 => java_min(current + value, high),
                 1 => java_max(current - value, low),
+                5 if wide_smooth => s.smooth_columns.mean(x, y),
                 5 => {
                     let mut total = 0.0f32;
                     let mut count = 0;
@@ -916,6 +928,93 @@ mod tests {
         apply(&mut repeated, &mut scratch).unwrap();
         assert_eq!(expected, repeated);
         assert_eq!(capacity, scratch.input.capacity());
+    }
+    #[test]
+    fn wide_smoothing_keeps_the_legacy_snapshot_semantics_and_atomic_rejection() {
+        let original = smooth_frame();
+        let mut legacy = original.clone();
+        let mut ordered = original.clone();
+        put(&mut ordered, 4, 8);
+        apply(&mut legacy, &mut BrushScratch::default()).unwrap();
+        apply(&mut ordered, &mut BrushScratch::default()).unwrap();
+        put(&mut ordered, 4, 3);
+        assert_eq!(legacy, ordered);
+
+        let forces = word(&original, 60) as usize;
+        let old_theme = word(&original, 64) as usize;
+        let old_start = word(&original, 68) as usize;
+        let step = word(&original, 72) as usize;
+        let width = 511;
+        let height = 513;
+        let halo = forces + width * height * 4;
+        let halo_count = 10 * (width + height + 10);
+        let theme = halo + halo_count * 4;
+        let start = theme + old_start - old_theme;
+        let mut wide = vec![0; start + 25 * step];
+        wide[..forces].copy_from_slice(&original[..forces]);
+        wide[theme..start].copy_from_slice(&original[old_theme..old_start]);
+        for (at, value) in [
+            (4, 8),
+            (8, wide.len() as u32),
+            (16, 25),
+            (52, width as u32),
+            (56, height as u32),
+            (64, theme as u32),
+            (68, start as u32),
+            (88, halo as u32),
+            (92, halo_count as u32),
+        ] {
+            put(&mut wide, at, value);
+        }
+        for i in 0..halo_count {
+            put(&mut wide, halo + i * 4, 61f32.to_bits());
+        }
+        for tile in 0..25 {
+            let at = start + tile * step;
+            wide[at..at + step].copy_from_slice(&original[old_start..old_start + step]);
+            put(&mut wide, at + 256, (tile / 5) as u32);
+            put(&mut wide, at + 260, (tile % 5) as u32);
+        }
+        let before = wide.clone();
+        let mut scratch = BrushScratch::default();
+        apply(&mut wide, &mut scratch).unwrap();
+        assert_eq!(
+            wide[..start]
+                .iter()
+                .zip(&before[..start])
+                .position(|(a, b)| a != b),
+            None
+        );
+        for tile in 0..25 {
+            let at = start + tile * step;
+            // Unused event-order slots are normalised by the output protocol even without writes.
+            assert_eq!(word(&wide, at + 204), 0);
+            assert_eq!(long(&wide, at + 272), 0);
+            assert_eq!(wide[at + 256..at + 264], before[at + 256..at + 264]);
+            assert_eq!(
+                wide[at + 288..at + step]
+                    .iter()
+                    .zip(&before[at + 288..at + step])
+                    .position(|(a, b)| a != b),
+                None
+            );
+        }
+        assert_eq!(scratch.input.len(), (width + 10) * (height + 10));
+        for (at, value) in [
+            (4, 3),
+            (4, 7),
+            (28, 2),
+            (52, 1015),
+            (16, 82),
+            (88, 0),
+            (96, 1),
+        ] {
+            let mut rejected = before.clone();
+            put(&mut rejected, at, value);
+            let unchanged = rejected.clone();
+            assert!(apply(&mut rejected, &mut scratch).is_err());
+            assert_eq!(rejected, unchanged);
+        }
     }
     #[test]
     fn malformed_smoothing_border_is_atomic() {
