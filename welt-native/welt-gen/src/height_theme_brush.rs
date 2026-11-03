@@ -78,10 +78,12 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     if d.len() < 128
         || d.len() > MAX_BYTES
         || word(d, 0) != 0x42544857
-        || !matches!(word(d, 4), 1..=8)
+        || !matches!(word(d, 4), 1..=9)
         || word(d, 4) < 7 && d.len() > 4 * 1024 * 1024
         || word(d, 4) == 7 && (word(d, 28) > 4 || d[88..128].iter().any(|&v| v != 0))
         || word(d, 4) == 8 && (word(d, 28) != 5 || d[96..128].iter().any(|&v| v != 0))
+        || word(d, 4) == 9
+            && (!(6..=7).contains(&word(d, 28)) || d[96..128].iter().any(|&v| v != 0))
         || word(d, 8) as usize != d.len()
         || word(d, 4) < 5
             && d[if word(d, 4) >= 3 && word(d, 28) == 5 {
@@ -121,7 +123,7 @@ pub fn apply(d: &mut [u8], s: &mut BrushScratch) -> Result<(), WeltError> {
     let cell_ordered = word(d, 4) >= 4;
     let smooth = word(d, 4) >= 3 && mode == 5;
     let wide_smooth = word(d, 4) == 8;
-    let mountain = word(d, 4) == 6;
+    let mountain = word(d, 4) == 6 || word(d, 4) == 9;
     let factor = f32::from_bits(word(d, 88));
     let scale = f32::from_bits(word(d, 92));
     let halo_count = if smooth && w <= maximum_smooth_side && h <= maximum_smooth_side {
@@ -866,6 +868,65 @@ mod tests {
             }
             assert_eq!(long(&data, 80), rng.lcg_state());
             assert!(scratch.tiles.iter().all(|t| t.heights.capacity() == 0));
+        }
+    }
+    #[test]
+    fn large_mountain_frames_match_legacy_noise_and_ordered_theme_edits() {
+        for inverse in [false, true] {
+            let mut legacy = mountain_frame(inverse);
+            let mut large = large_frame();
+            for (at, value) in [
+                (4, 9),
+                (28, word(&legacy, 28)),
+                (32, word(&legacy, 32)),
+                (88, word(&legacy, 88)),
+                (92, word(&legacy, 92)),
+            ] {
+                put(&mut large, at, value);
+            }
+            let forces = word(&large, 60) as usize;
+            for x in 0..2 {
+                for y in 0..2 {
+                    put(&mut large, forces + (x * 511 + y) * 4, 0.73f32.to_bits());
+                }
+            }
+            let original = large.clone();
+            apply(&mut legacy, &mut BrushScratch::default()).unwrap();
+            apply(&mut large, &mut BrushScratch::default()).unwrap();
+            assert_eq!(long(&legacy, 80), long(&large, 80));
+            let old_start = word(&legacy, 68) as usize;
+            let start = word(&large, 68) as usize;
+            let step = word(&large, 72) as usize;
+            for x in 0..2 {
+                for y in 0..2 {
+                    let a = old_start + (x * 2 + y) * step;
+                    let b = start + (x * 5 + y) * step;
+                    assert_eq!(
+                        legacy[a..a + step]
+                            .iter()
+                            .zip(&large[b..b + step])
+                            .position(|(a, b)| a != b),
+                        None
+                    );
+                }
+            }
+            for (at, value) in [
+                (4, 6),
+                (4, 7),
+                (4, 8),
+                (28, 5),
+                (52, 1025),
+                (16, 82),
+                (88, f32::NAN.to_bits()),
+                (92, 0),
+                (96, 1),
+            ] {
+                let mut rejected = original.clone();
+                put(&mut rejected, at, value);
+                let before = rejected.clone();
+                assert!(apply(&mut rejected, &mut BrushScratch::default()).is_err());
+                assert_eq!(rejected.iter().zip(&before).position(|(a, b)| a != b), None);
+            }
         }
     }
     #[test]

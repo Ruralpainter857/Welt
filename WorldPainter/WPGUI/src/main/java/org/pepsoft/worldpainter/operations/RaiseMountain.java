@@ -10,6 +10,9 @@ import org.pepsoft.worldpainter.Dimension;
 import org.pepsoft.worldpainter.MountainAccess;
 import org.pepsoft.worldpainter.WorldPainter;
 import org.pepsoft.worldpainter.brushes.Brush;
+import org.pepsoft.worldpainter.brushes.BitmapBrush;
+import org.pepsoft.worldpainter.brushes.RotatedBrush;
+import org.pepsoft.worldpainter.brushes.SymmetricBrush;
 import org.pepsoft.worldpainter.nativeapi.Native;
 import org.pepsoft.worldpainter.nativeapi.NativeLoader;
 import org.pepsoft.worldpainter.nativeapi.NativeSlices;
@@ -79,6 +82,23 @@ public class RaiseMountain extends AbstractBrushOperation {
     private boolean applyNativeMountain(Dimension dimension, int centreX, int centreY,
                                         int radius, boolean inverse, int minZ, int maxRange,
                                         float peakHeight, boolean applyTheme) {
+        if (radius > 127 && Boolean.getBoolean("welt.native.largeHeightBrush")
+                && Native.isGenEnabled() && NativeLoader.areSlicesAvailable()) {
+            long sideLong = 2L * radius + 1L;
+            Brush brush = getBrush();
+            if (sideLong > 1024 || getFilter() != null || !(brush instanceof SymmetricBrush || brush instanceof RotatedBrush
+                    || brush.getClass() == BitmapBrush.class)) return false;
+            int side = (int) sideLong, area = side * side;
+            if (nativeStrengths == null || nativeStrengths.length != area) nativeStrengths = new float[area];
+            for (int x = 0; x < side; x++) for (int y = 0; y < side; y++)
+                nativeStrengths[x * side + y] = brush.getFullStrength(x - radius, y - radius);
+            // Refused large frames retain the complete Java traversal, including custom tile callbacks.
+            return applyTheme
+                    ? MountainAccess.tryApplyThemed(dimension, centreX - radius, centreY - radius, side,
+                            nativeStrengths, peakHeight, peakFactor, inverse)
+                    : MountainAccess.tryApply(dimension, centreX - radius, centreY - radius, side,
+                            nativeStrengths, peakHeight, peakFactor, inverse);
+        }
         // Unsupported themes retain the original ordered Java application.
         if (applyTheme && Boolean.getBoolean("welt.native.themedMountain") && radius >= 64 && radius <= 127
                 && Native.isGenEnabled() && NativeLoader.areSlicesAvailable()) {

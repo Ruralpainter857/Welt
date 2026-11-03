@@ -9,10 +9,14 @@ import static org.pepsoft.worldpainter.Constants.*;
 public final class MountainAccess {
     private MountainAccess() { }
     private static final ThreadLocal<Scratch> BUFFERS = ThreadLocal.withInitial(Scratch::new);
+    private static final java.util.concurrent.atomic.AtomicLong COMPACT_CALLS = new java.util.concurrent.atomic.AtomicLong();
+    public static long completedCompactCalls() { return COMPACT_CALLS.get(); }
 
     public static boolean tryApply(Dimension dimension, int ox, int oy, int side, float[] forces,
                                    float peak, float factor, boolean inverse) {
-        if (side < 1 || side > 511 || (long) side * side != forces.length
+        if (side < 1 || side > (Boolean.getBoolean("welt.native.largeHeightBrush") ? 1024 : 511)
+                || (long) side * side != forces.length
+                || (long) ox + side - 1 > Integer.MAX_VALUE || (long) oy + side - 1 > Integer.MAX_VALUE
                 || !TileRegionAccess.canBatch(dimension, ox, oy, side, side)) return false;
         for (int x = 0; x < side;) {
             int wx = ox + x, lx = wx & TILE_SIZE_MASK, rw = Math.min(side - x, TILE_SIZE - lx);
@@ -48,7 +52,9 @@ public final class MountainAccess {
         else { scratch.shorts.clear(); scratch.shorts.put(shorts); }
         scratch.forces.clear().position(strengthOffset / 4);
         for (int dx = 0; dx < width; dx++) scratch.forces.put(forces, offset + dx * stride, height);
-        return NativeSlices.editHeightPlane(buffer) ? scratch : null;
+        if (!NativeSlices.editHeightPlane(buffer)) return null;
+        COMPACT_CALLS.incrementAndGet();
+        return scratch;
     }
     static float target(int x, int y, float strength, int min, int range, float peak, float factor, boolean inverse) {
         float variation = (0.5f - Math.abs(strength - 0.5f)) / 5;

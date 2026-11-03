@@ -57,7 +57,7 @@ final class ThemedHeightBrushAccess {
     private static boolean apply(Dimension dimension,int ox,int oy,int width,int height,float[] forces,int mode,float value,
                                  float low,float high,EditorFilterPlan filter,float dynamic,float mountainFactor) {
         final boolean large = width > 256 || height > 256 || mode == 5 && (width > 246 || height > 246);
-        if (large && (!Boolean.getBoolean("welt.native.largeHeightBrush") || filter != null || mode > 5)) return false;
+        if (large && (!Boolean.getBoolean("welt.native.largeHeightBrush") || filter != null || mode > 7)) return false;
         final int maximumSide = large ? (mode == 5 ? 1014 : 1024) : 256;
         if(width<=0||height<=0||width>maximumSide||height>maximumSide||forces==null||(long)width*height!=forces.length||mode<0||mode>7
                 ||(long)ox+width-1>Integer.MAX_VALUE||(long)oy+height-1>Integer.MAX_VALUE
@@ -113,7 +113,7 @@ final class ThemedHeightBrushAccess {
         long sizeLong=(long)start+(long)step*count;if(sizeLong>(large ? LARGE_MAX_BYTES : MAX_BYTES))return false;int size=(int)sizeLong;
         ByteBuffer d=scratch.data;if(d==null||d.capacity()<size){d=ByteBuffer.allocateDirect(size).order(ByteOrder.LITTLE_ENDIAN);scratch.data=d;}
         d.clear().limit(size);for(int i=0;i<header;i+=8)d.putLong(i,0);
-        d.putInt(0,0x42544857).putInt(4,large?(mode==5?8:7):mode>=6?6:filter!=null?5:Boolean.getBoolean("welt.native.interleavedTheme")?4:mode==5?3:mode<2?1:2).putInt(8,size).putInt(12,n).putInt(16,count)
+        d.putInt(0,0x42544857).putInt(4,large?(mode>=6?9:mode==5?8:7):mode>=6?6:filter!=null?5:Boolean.getBoolean("welt.native.interleavedTheme")?4:mode==5?3:mode<2?1:2).putInt(8,size).putInt(12,n).putInt(16,count)
                 .putInt(20,dimension.getMinHeight()).putInt(24,dimension.getMaxHeight()).putInt(28,mode).putFloat(32,value)
                 .putFloat(36,low).putFloat(40,high).putInt(44,ox).putInt(48,oy).putInt(52,width).putInt(56,height)
                 .putInt(60,forceBase).putInt(64,themeBase).putInt(68,start).putInt(72,step).putInt(76,Terrain.BEACHES.ordinal());
